@@ -385,6 +385,33 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# Bloco 1 — Edge Functions. verify_jwt = false declarado explicitamente para
+# todas: com a checagem de JWT do gateway habilitada, ele retornou 401
+# UNAUTHORIZED_ASYMMETRIC_JWT para JWTs assimétricos válidos, bloqueando a
+# requisição antes mesmo de a função executar. A checagem de autenticação
+# não depende do gateway — todas as 11 rotas já exigem autenticação
+# obrigatória via resolveOperator() (_shared/authContext.ts), que valida o
+# JWT contra o Supabase Auth via auth.getUser() e resolve o operador em
+# public.users, rejeitando com 401/403 conforme o caso. Desabilitar essa
+# checagem no gateway não abre nenhuma rota anônima.
+[functions.products]
+verify_jwt = false
+
+[functions.orders]
+verify_jwt = false
+
+[functions.order-items]
+verify_jwt = false
+
+[functions.order-status]
+verify_jwt = false
+
+[functions.order-approvals]
+verify_jwt = false
+
+[functions.payments]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

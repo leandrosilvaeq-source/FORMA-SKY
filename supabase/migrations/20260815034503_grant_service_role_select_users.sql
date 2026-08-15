@@ -1,0 +1,18 @@
+-- Correção: service_role bypassa RLS, mas ainda precisa de privilégio de
+-- tabela do Postgres para executar SELECT — a migration original
+-- (20260813025937_create_users_table.sql) concedeu SELECT a `authenticated`
+-- e revogou de `anon`, mas nunca concedeu SELECT a `service_role`.
+--
+-- Isso quebrava resolveOperator() (supabase/functions/_shared/authContext.ts),
+-- que usa o admin client (service_role) para resolver public.users.id a
+-- partir do auth_user_id do JWT — toda escrita via Edge Function (Bloco 1)
+-- dependia disso e falhava com 403 / SQLSTATE 42501 "permission denied for
+-- table users", confirmado via:
+--   select has_table_privilege('service_role', 'public.users', 'SELECT');
+--   -- retornava false antes desta migration.
+--
+-- Escopo mínimo, deliberadamente: apenas SELECT, apenas para service_role.
+-- Nenhum INSERT, UPDATE ou DELETE é necessário — resolveOperator() só faz
+-- leitura (ver authContext.ts:49-53). Não altera RLS, nem os grants de
+-- anon/authenticated definidos na migration original.
+grant select on public.users to service_role;
