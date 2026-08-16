@@ -1015,7 +1015,12 @@ Fluxos principais:
 
 # 17. Ordem de implementação do MVP
 
-## Bloco 0 — Fundação
+A implementação é organizada por **Módulos Funcionais**, cada um dividido em **7 Fases
+Técnicas** (Definição funcional, Modelo e regras, Backend, Frontend, Integração E2E, Piloto
+real, Estabilização/release). Detalhamento completo de escopo em
+`04_PLANO_IMPLEMENTACAO.md`; estado atual de progresso em `05_ROADMAP_MODULOS.md`.
+
+## Módulo 0 — Fundação e Segurança
 
 - Git;
 - estrutura de pastas;
@@ -1025,7 +1030,7 @@ Fluxos principais:
 - variáveis de ambiente;
 - autenticação básica.
 
-## Bloco 1 — Clientes e Pedidos
+## Módulo 1 — Clientes, Produtos e Pedidos
 
 - clientes;
 - empresas;
@@ -1037,7 +1042,7 @@ Fluxos principais:
 - status;
 - pagamento.
 
-## Bloco 2 — Produção
+## Módulo 2 — Produção
 
 - impressora;
 - plates;
@@ -1047,7 +1052,7 @@ Fluxos principais:
 - falhas;
 - perdas.
 
-## Bloco 3 — Estoque
+## Módulo 3 — Estoque e Inventário
 
 - filamentos;
 - rolos;
@@ -1058,7 +1063,7 @@ Fluxos principais:
 - reservas;
 - inventário.
 
-## Bloco 4 — Precificação
+## Módulo 4 — Precificação e Rentabilidade
 
 - parâmetros;
 - custos;
@@ -1067,15 +1072,24 @@ Fluxos principais:
 - histórico;
 - rentabilidade.
 
-## Bloco 5 — Onboarding e Alertas
+## Módulo 5 — Manutenção e Equipamentos
+
+- manutenções realizadas;
+- regras de manutenção preventiva;
+- lubrificação de eixos X/Y/Z;
+- próxima manutenção;
+- alertas.
+
+## Módulo 6 — Onboarding, Alertas e Gestão
 
 - checklist;
+- escala;
 - pendências;
 - revisões;
 - alertas;
 - resumo diário.
 
-## Bloco 6 — Sky em texto
+## Módulo 7 — Sky Assistente em Texto
 
 - OpenAI;
 - ferramentas;
@@ -1084,14 +1098,14 @@ Fluxos principais:
 - consultas;
 - cadastros.
 
-## Bloco 7 — Voz
+## Módulo 8 — Sky Assistente por Voz
 
 - speech-to-text;
 - text-to-speech;
 - sessão contínua;
 - prova técnica iOS.
 
-## Bloco 8 — Marketing
+## Módulo 9 — Divulgação e Marketing
 
 - planejamento;
 - calendário;
@@ -1100,7 +1114,7 @@ Fluxos principais:
 - mídia;
 - Instagram.
 
-## Bloco 9 — Integrações adicionais
+## Módulo 10 — Integrações Externas
 
 - Smart Life;
 - Bambu;
@@ -1114,16 +1128,20 @@ Fluxos principais:
 
 O Claude Code não deverá tentar implementar todo o projeto de uma única vez.
 
-Para cada bloco:
+Para cada módulo:
 
-1. revisar documentos;
-2. definir escopo;
+1. revisar documentos (incluindo `05_ROADMAP_MODULOS.md`);
+2. definir escopo da fase corrente;
 3. implementar;
 4. testar;
 5. corrigir;
 6. demonstrar resultado;
 7. fazer commit;
-8. somente então avançar.
+8. atualizar `05_ROADMAP_MODULOS.md`;
+9. somente então avançar.
+
+Um módulo só recebe status **OPERACIONAL** quando puder ser usado normalmente pelo frontend,
+sem depender de PowerShell ou chamadas manuais de API (ver `04_PLANO_IMPLEMENTACAO.md` §3.3).
 
 ---
 

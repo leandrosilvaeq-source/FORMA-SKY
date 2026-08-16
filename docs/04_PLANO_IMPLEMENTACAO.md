@@ -1,204 +1,204 @@
-# Plano de Implementação v0.1
+# Plano de Implementação v0.2
 ## Forma 3D Studio + Assistente Virtual Sky
 
-**Status:** Plano inicial de execução  
+**Status:** Plano reorganizado por Módulos Funcionais × Fases Técnicas
 **Documentos de referência:**
 - `01_ESPECIFICACAO_FUNCIONAL.md`
 - `02_ESPECIFICACAO_TECNICA.md`
 - `03_MODELO_BANCO_DADOS.md`
+- `05_ROADMAP_MODULOS.md` — estado vivo de progresso (atualizado a cada sessão)
+
+> Este documento define **o que** cada módulo precisa entregar (escopo, tarefas, critérios de
+> aceite). O estado atual de progresso — o que já foi feito, percentuais e próximos marcos —
+> vive em `05_ROADMAP_MODULOS.md`, para não exigir reescrever este plano a cada sessão.
 
 ---
 
 # 1. Objetivo
 
-Este documento transforma a especificação funcional, técnica e o modelo de banco de dados em uma sequência prática de implementação.
+Este documento transforma a especificação funcional, técnica e o modelo de banco de dados em
+uma sequência prática de implementação, organizada por **Módulos Funcionais**, cada um dividido
+em **7 Fases Técnicas**.
 
 O desenvolvimento deverá ser incremental.
 
 O Claude Code **não deverá tentar implementar todo o sistema de uma única vez**.
 
-Cada bloco deverá ser:
-
-1. revisado;
-2. implementado;
-3. testado;
-4. demonstrado;
-5. corrigido;
-6. validado;
-7. versionado em Git;
-8. somente então seguido pelo próximo bloco.
-
 ---
 
 # 2. Regras gerais para o Claude Code
 
-Antes de iniciar qualquer bloco:
+Antes de iniciar qualquer módulo:
 
 1. Ler `01_ESPECIFICACAO_FUNCIONAL.md`.
 2. Ler `02_ESPECIFICACAO_TECNICA.md`.
 3. Ler `03_MODELO_BANCO_DADOS.md`.
-4. Verificar se existem decisões pendentes que impactam o bloco.
-5. Não alterar regras de negócio aprovadas sem sinalizar impacto.
-6. Não criar funcionalidades fora do escopo do bloco sem necessidade.
-7. Sempre preservar a possibilidade de evolução futura.
-8. Não expor segredos no frontend.
-9. Criar testes mínimos antes de considerar o bloco concluído.
-10. Fazer commit ao final de cada bloco aprovado.
+4. Consultar `05_ROADMAP_MODULOS.md` para saber o estado atual e o próximo marco.
+5. Verificar se existem decisões pendentes que impactam o módulo.
+6. Não alterar regras de negócio aprovadas sem sinalizar impacto.
+7. Não criar funcionalidades fora do escopo do módulo/fase sem necessidade.
+8. Sempre preservar a possibilidade de evolução futura.
+9. Não expor segredos no frontend.
+10. Criar testes mínimos antes de considerar uma fase concluída.
+11. Fazer commit ao final de cada fase aprovada.
+12. Atualizar `05_ROADMAP_MODULOS.md` ao final da sessão.
 
 ---
 
-# 3. Estratégia de branches
+# 3. Padrão de organização: Módulos × Fases × Status OPERACIONAL
 
-Recomendação inicial:
+## 3.1 Módulos Funcionais
+
+| Nº | Módulo |
+| --- | --- |
+| 0 | Fundação e Segurança |
+| 1 | Clientes, Produtos e Pedidos |
+| 2 | Produção |
+| 3 | Estoque e Inventário |
+| 4 | Precificação e Rentabilidade |
+| 5 | Manutenção e Equipamentos |
+| 6 | Onboarding, Alertas e Gestão |
+| 7 | Sky Assistente em Texto |
+| 8 | Sky Assistente por Voz |
+| 9 | Divulgação e Marketing |
+| 10 | Integrações Externas |
+
+## 3.2 Fases Técnicas (aplicadas a cada módulo)
+
+1. Definição funcional
+2. Modelo e regras (banco de dados)
+3. Backend (Edge Functions / regras de negócio)
+4. Frontend
+5. Integração E2E
+6. Piloto real
+7. Estabilização / release
+
+## 3.3 Definição de status OPERACIONAL
+
+> Um módulo só pode ser considerado **OPERACIONAL** quando puder ser usado normalmente pelo
+> frontend, **sem depender de PowerShell ou chamadas manuais de API**.
+
+Backend completo e testado via API não é suficiente para OPERACIONAL — é necessário que a Fase 4
+(Frontend) e a Fase 5 (Integração E2E) estejam concluídas e utilizáveis por uma pessoa comum.
+
+## 3.4 Estratégia de execução
+
+Terminar um módulo, colocá-lo em uso real (Fase 6 — Piloto) e **só então** desenvolver
+pesadamente o próximo módulo, mantendo os módulos anteriores em operação. Evitar avançar
+backend de vários módulos em paralelo sem fechar o frontend/E2E do módulo corrente.
+
+---
+
+# 4. Estratégia de branches
 
 - `main` — versão estável
 - `develop` — integração
 
-Branches por bloco:
+Branches por módulo:
 
-- `feature/foundation`
-- `feature/customers-orders`
-- `feature/production`
-- `feature/inventory`
-- `feature/pricing`
-- `feature/onboarding-alerts`
-- `feature/sky-text`
-- `feature/sky-voice`
-- `feature/marketing`
-- `feature/integrations`
+| Branch | Módulo |
+| --- | --- |
+| `feature/foundation` | 0 — Fundação e Segurança |
+| `feature/customers-orders` | 1 — Clientes, Produtos e Pedidos |
+| `feature/production` | 2 — Produção |
+| `feature/inventory` | 3 — Estoque e Inventário |
+| `feature/pricing` | 4 — Precificação e Rentabilidade |
+| `feature/maintenance` | 5 — Manutenção e Equipamentos |
+| `feature/onboarding-alerts` | 6 — Onboarding, Alertas e Gestão |
+| `feature/sky-text` | 7 — Sky Assistente em Texto |
+| `feature/sky-voice` | 8 — Sky Assistente por Voz |
+| `feature/marketing` | 9 — Divulgação e Marketing |
+| `feature/integrations` | 10 — Integrações Externas |
 
 ---
 
-# 4. Bloco 0 — Fundação
+# 5. Módulo 0 — Fundação e Segurança
 
 ## Objetivo
 
-Criar a base técnica mínima para permitir desenvolvimento seguro.
+Criar a base técnica mínima para permitir desenvolvimento seguro (autenticação, estrutura de
+projeto, ambiente).
 
-## Tarefas
+## Escopo por fase
 
-- Inicializar Git.
-- Criar repositório GitHub.
-- Criar branch `develop`.
-- Configurar React + Vite.
-- Configurar TypeScript.
-- Configurar ESLint.
-- Configurar estrutura de pastas.
-- Criar `.gitignore`.
-- Criar `.env.example`.
-- Criar README principal.
-- Criar projeto Supabase.
-- Configurar conexão com Supabase.
-- Configurar Supabase Auth básico.
-- Criar primeira migration.
-- Configurar ambiente local.
-- Configurar biblioteca de componentes base.
-- Criar layout inicial responsivo.
-- Criar página simples de login.
-- Criar página inicial vazia autenticada.
-- Validar execução local.
+1. **Definição funcional** — concluída: usuário único inicial, necessidade de login seguro,
+   estrutura de pastas do projeto.
+2. **Modelo e regras** — concluída: tabela `users`, triggers de sincronização com Supabase Auth
+   (`handle_new_auth_user`, `handle_auth_user_deleted`), função `is_active_user()`.
+3. **Backend** — concluída: Supabase Auth configurado (e-mail/senha), políticas mínimas de
+   acesso.
+4. **Frontend** — concluída para autenticação: página de login, contexto de autenticação, rota
+   protegida, layout inicial.
+5. **Integração E2E** — funcional: login real end-to-end validado (usuário autenticado acessa a
+   tela inicial pelo navegador).
+6. **Piloto real** — parcial.
+7. **Estabilização / release** — parcial: falta validação formal de segurança/RLS em condições
+   de uso contínuo.
+
+## Tarefas originais (referência histórica)
+
+- Inicializar Git; criar repositório GitHub; criar branch `develop`.
+- Configurar React + Vite + TypeScript + ESLint.
+- Configurar estrutura de pastas, `.gitignore`, `.env.example`, README.
+- Criar projeto Supabase; configurar conexão e Auth básico.
+- Criar primeira migration (`users`).
+- Configurar biblioteca de componentes base (shadcn/ui).
+- Criar layout inicial responsivo, página de login, página inicial autenticada.
 
 ## Critérios de aceite
 
-- Projeto abre no VS Code.
-- `npm install` funciona.
-- `npm run dev` funciona.
-- Login funciona.
-- Usuário autenticado acessa tela inicial.
-- Chaves não aparecem no código.
-- Projeto está versionado em Git.
-- Primeiro commit existe.
+- Projeto abre no VS Code; `npm install` e `npm run dev` funcionam.
+- Login funciona; usuário autenticado acessa tela inicial.
+- Chaves não aparecem no código; projeto versionado em Git.
 
 ## Testes mínimos
 
-- build sem erro;
-- lint sem erro crítico;
-- autenticação;
-- conexão com Supabase.
+- build sem erro; lint sem erro crítico; autenticação; conexão com Supabase.
 
-## Commit sugerido
+## Commit já realizado
 
 `feat: initialize Forma Sky project foundation`
 
+## Status geral
+
+**Quase operacional / validar formalmente** — falta apenas fechar Fases 6 e 7 (piloto e
+estabilização/segurança) para marcar como OPERACIONAL.
+
 ---
 
-# 5. Bloco 1 — Clientes e Pedidos
+# 6. Módulo 1 — Clientes, Produtos e Pedidos
 
 ## Objetivo
 
 Permitir registrar a operação comercial básica da Forma.
 
-## Escopo
+## Escopo por fase
 
-- clientes;
-- empresas;
-- origem;
-- pedidos;
-- itens;
-- Personalizado;
-- Spot;
-- Catálogo;
-- status;
-- pagamentos;
-- meios de pagamento.
-
-## Tarefas de banco
-
-Criar migrations para:
-
-- `companies`
-- `customers`
-- `lead_sources`
-- `orders`
-- `order_items`
-- `custom_item_details`
-- `custom_versions`
-- `approvals`
-- `model_sources`
-- `spot_item_details`
-- `products`
-- `product_price_history`
-- `payments`
+1. **Definição funcional** — 100% (docs `01` §5–11, §68): clientes, empresas, origem, pedidos,
+   itens, Personalizado, Spot, Catálogo, status, pagamentos.
+2. **Modelo e regras** — 100%: migrations para `companies`, `customers`, `lead_sources`,
+   `orders`, `order_items`, `custom_item_details`, `custom_versions`, `approvals`,
+   `model_sources`, `spot_item_details`, `products`, `product_price_history`, `payments`,
+   `order_status_history`, `payment_status_history`, além das funções de negócio
+   (`create_order`, `update_order`, `add_order_item`, `change_order_status`,
+   `register_approval`, `register_payment`, `register_custom_version`, `create_product`,
+   `update_product_price`, `recalculate_order_financials`, `try_auto_approve_order`) e views de
+   resumo de pedido.
+3. **Backend** — 100%: 6 Edge Functions deployadas e validadas em runtime (`products`, `orders`,
+   `order-items`, `order-status`, `payments`, `order-approvals`).
+4. **Frontend** — 0%. Nenhuma tela de clientes/produtos/pedidos existe ainda.
+5. **Integração E2E** — 0% (depende da Fase 4).
+6. **Piloto real** — 0%.
+7. **Estabilização / release** — 0%.
 
 ## Seeds
 
-Criar:
+- origens; status; meios de pagamento; tipos de pedido; fontes iniciais de modelo.
 
-- origens;
-- status;
-- meios de pagamento;
-- tipos de pedido;
-- fontes iniciais de modelo.
+## Frontend a construir (Fase 4)
 
-## Backend
-
-Criar funções:
-
-- criar cliente;
-- editar cliente;
-- buscar cliente;
-- criar empresa;
-- criar pedido;
-- editar pedido;
-- criar item;
-- alterar status;
-- registrar aprovação;
-- registrar pagamento;
-- cancelar pedido;
-- listar pedidos;
-- buscar pedido por número.
-
-## Frontend
-
-Criar telas:
-
-- Clientes;
-- Empresas;
-- Pedidos;
-- Novo Pedido;
-- Detalhe do Pedido;
-- Novo Produto de Catálogo;
-- Lista de Produtos.
+- Clientes; Empresas; Pedidos; Novo Pedido; Detalhe do Pedido; Novo Produto de Catálogo; Lista
+  de Produtos.
 
 ## Regras importantes
 
@@ -211,647 +211,492 @@ Criar telas:
 
 ## Critérios de aceite
 
-O usuário deve conseguir:
+O usuário deve conseguir, **pelo frontend**:
 
-1. cadastrar cliente;
-2. criar pedido;
-3. adicionar múltiplos itens;
-4. classificar tipos;
-5. alterar status;
-6. registrar pagamento;
-7. registrar prazo;
-8. registrar entrega;
+1. cadastrar cliente; 2. criar pedido; 3. adicionar múltiplos itens; 4. classificar tipos;
+5. alterar status; 6. registrar pagamento; 7. registrar prazo; 8. registrar entrega;
 9. consultar pedido salvo após recarregar o sistema.
 
 ## Testes
 
-- pedido com item Personalizado;
-- pedido com item Spot;
-- pedido com item Catálogo;
-- pedido misto;
-- status independentes;
-- cancelamento antes da produção.
+- pedido com item Personalizado; pedido com item Spot; pedido com item Catálogo; pedido misto;
+  status independentes; cancelamento antes da produção.
 
-## Commit sugerido
+## Commit já realizado
 
-`feat: implement customers and orders core`
+`feat: implement customers and orders core`, `feat: add Bloco 1 edge functions and auth fixes`
+
+## Status geral
+
+**NÃO OPERACIONAL** — backend 100% pronto e validado via API, mas sem frontend/E2E não pode ser
+usado normalmente. Próximo marco em `05_ROADMAP_MODULOS.md`.
 
 ---
 
-# 6. Bloco 2 — Produção
+# 7. Módulo 2 — Produção
 
 ## Objetivo
 
 Transformar pedidos aprovados em produção executável.
 
-## Banco
+## Escopo por fase
 
-Criar:
+1. **Definição funcional** — concluída (doc `01` §12–14).
+2. **Modelo e regras** — especificada em doc `03` (§10–11: `printers`, `production_orders`,
+   `plates`, `plate_items`, `failure_reasons`, `production_failures`); **migrations não
+   criadas**.
+3. **Backend** — não iniciado.
+4. **Frontend** — não iniciado.
+5. **Integração E2E** — não iniciada.
+6. **Piloto real** — não iniciado.
+7. **Estabilização / release** — não iniciada.
 
-- `printers`
-- `production_orders`
-- `plates`
-- `plate_items`
-- `failure_reasons`
-- `production_failures`
+## Seeds planejados
 
-## Seeds
+Impressora inicial: Nome "A1 Principal", Fabricante "Bambu Lab", Modelo "A1".
 
-Criar impressora inicial:
+## Backend planejado
 
-- Nome: A1 Principal
-- Fabricante: Bambu Lab
-- Modelo: A1
+- criar ordem de produção; criar plate; adicionar/remover item do plate; iniciar/concluir plate;
+  registrar falha; cancelar plate; gerar reimpressão; listar fila; calcular prioridade.
 
-## Backend
+## Motor de prioridade v1 (regras determinísticas)
 
-Funções:
+1. prazo; 2. tempo de impressão; 3. quantidade; 4. urgência; 5. prioridade manual.
 
-- criar ordem de produção;
-- criar plate;
-- adicionar item ao plate;
-- remover item do plate;
-- iniciar plate;
-- concluir plate;
-- registrar falha;
-- cancelar plate;
-- gerar reimpressão;
-- listar fila;
-- calcular prioridade.
+Considerar também disponibilidade do operador, escala, material e redução de trocas.
 
-## Motor de prioridade v1
+## Frontend planejado
 
-Usar regras determinísticas.
+Impressoras; Fila de produção; Detalhe do Plate; Nova ordem de produção; Falhas.
 
-Critérios:
-
-1. prazo;
-2. tempo;
-3. quantidade;
-4. urgência;
-5. prioridade manual.
-
-Considerar também:
-
-- disponibilidade do operador;
-- escala;
-- material;
-- possibilidade de reduzir trocas.
-
-## Frontend
-
-Telas:
-
-- Impressoras;
-- Fila de produção;
-- Detalhe do Plate;
-- Nova ordem de produção;
-- Falhas.
-
-## Critérios de aceite
+## Critérios de aceite (quando implementado)
 
 - Pedido aprovado gera produção.
-- Produção pode gerar vários plates.
-- Plate pode conter itens de pedidos diferentes.
-- Falha pode gerar reimpressão.
-- Reimpressão volta ao topo da fila.
+- Produção pode gerar vários plates; plate pode conter itens de pedidos diferentes.
+- Falha pode gerar reimpressão; reimpressão volta ao topo da fila.
 - Sky ainda não é obrigatória nesta fase.
 
-## Testes
+## Testes planejados
 
-- um pedido / um plate;
-- um pedido / vários plates;
-- vários pedidos / um plate;
-- falha parcial;
-- reimpressão;
-- prioridade manual.
+um pedido/um plate; um pedido/vários plates; vários pedidos/um plate; falha parcial;
+reimpressão; prioridade manual.
 
-## Commit sugerido
+## Commit sugerido (quando iniciado)
 
 `feat: implement production queue and plates`
 
+## Status geral
+
+**NÃO INICIADO.**
+
 ---
 
-# 7. Bloco 3 — Estoque e Inventário
+# 8. Módulo 3 — Estoque e Inventário
 
 ## Objetivo
 
 Controlar materiais, reservas, perdas e inventário.
 
-## Banco
+## Escopo por fase
 
-Criar:
+1. **Definição funcional** — concluída (doc `01` §15–21).
+2. **Modelo e regras** — especificada em doc `03` (§12–16: `filament_types`, `spool_tares`,
+   `filament_spools`, `accessories`, `packaging`, `suppliers`, `stock_movements`,
+   `stock_reservations`, `inventories`, `inventory_items`); **migrations não criadas**.
+3. **Backend** — não iniciado.
+4. **Frontend** — não iniciado.
+5. **Integração E2E** — não iniciada.
+6. **Piloto real** — não iniciado.
+7. **Estabilização / release** — não iniciada.
 
-- `suppliers`
-- `filament_types`
-- `spool_tares`
-- `filament_spools`
-- `accessories`
-- `packaging`
-- `stock_movements`
-- `stock_reservations`
-- `inventories`
-- `inventory_items`
+## Backend planejado
 
-## Backend
-
-Funções:
-
-- cadastrar filamento;
-- cadastrar rolo;
-- registrar entrada;
-- cadastrar tara;
-- cadastrar acessório;
-- cadastrar embalagem;
-- reservar material;
-- liberar reserva;
-- registrar consumo;
-- registrar perda;
-- abrir inventário;
-- registrar pesagem;
-- registrar contagem;
-- fechar inventário;
-- aplicar ajuste.
+- cadastrar filamento/rolo/tara/acessório/embalagem; registrar entrada; reservar/liberar
+  material; registrar consumo/perda; abrir inventário; registrar pesagem/contagem; fechar
+  inventário; aplicar ajuste.
 
 ## Regras
 
 - Reserva ocorre quando produção entra em fila.
-- Estoque disponível = físico - reservado.
-- Inventário não apaga histórico.
-- Pesagem deve descontar tara.
-- Ajuste de inventário gera movimentação.
+- Estoque disponível = físico − reservado.
+- Inventário não apaga histórico; pesagem deve descontar tara; ajuste gera movimentação.
 
-## Frontend
+## Frontend planejado
 
-Telas:
+Filamentos; Rolos; Taras; Acessórios; Embalagens; Entradas; Movimentações; Inventário; Alertas
+de estoque.
 
-- Filamentos;
-- Rolos;
-- Taras;
-- Acessórios;
-- Embalagens;
-- Entradas;
-- Movimentações;
-- Inventário;
-- Alertas de estoque.
+## Critérios de aceite (quando implementado)
 
-## Critérios de aceite
+cadastrar rolo; registrar entrada; reservar filamento; consumir material; registrar perda; pesar
+rolo descontando tara; ajustar estoque; preservar histórico.
 
-- cadastrar rolo;
-- registrar entrada;
-- reservar filamento;
-- consumir material;
-- registrar perda;
-- pesar rolo;
-- descontar tara;
-- ajustar estoque;
-- preservar histórico.
+## Testes planejados
 
-## Testes
+rolo com tara conhecida; rolo com tara ausente; reserva; consumo; falha; inventário com/sem
+diferença.
 
-- rolo com tara conhecida;
-- rolo com tara ausente;
-- reserva;
-- consumo;
-- falha;
-- inventário com diferença;
-- inventário sem diferença.
-
-## Commit sugerido
+## Commit sugerido (quando iniciado)
 
 `feat: implement stock and inventory management`
 
+## Status geral
+
+**NÃO INICIADO.**
+
 ---
 
-# 8. Bloco 4 — Precificação e Rentabilidade
+# 9. Módulo 4 — Precificação e Rentabilidade
 
 ## Objetivo
 
 Calcular custos e preços com histórico.
 
-## Banco
+## Escopo por fase
 
-Criar:
-
-- `work_logs`
-- `pricing_calculations`
-- `parameters`
-- `parameter_history`
-
-## Backend
-
-Funções:
-
-- registrar MDO;
-- iniciar apontamento;
-- encerrar apontamento;
-- calcular custo;
-- calcular preço;
-- sugerir preço;
-- registrar preço final;
-- recalcular margem;
-- consultar rentabilidade;
-- revisar parâmetros.
+1. **Definição funcional** — concluída (doc `01` §22–30).
+2. **Modelo e regras** — especificada em doc `03` (§17–18: `work_logs`, `pricing_calculations`,
+   `parameters`, `parameter_history`); **migrations não criadas**.
+3. **Backend** — não iniciado.
+4. **Frontend** — não iniciado.
+5. **Integração E2E** — não iniciada.
+6. **Piloto real** — não iniciado.
+7. **Estabilização / release** — não iniciada.
 
 ## Parâmetros iniciais
 
-- MDO: R$ 5,90/h
-- energia: R$ 0,12/h
-- depreciação: R$ 0,25/h
-- manutenção: R$ 0,00/h
-- margem mínima: 40%
-- margem máxima: 80%
+MDO: R$ 5,90/h; energia: R$ 0,12/h; depreciação: R$ 0,25/h; manutenção: R$ 0,00/h; margem
+mínima 40%; margem máxima 80%.
+
+## Backend planejado
+
+- registrar MDO; iniciar/encerrar apontamento; calcular custo; calcular/sugerir preço; registrar
+  preço final; recalcular margem; consultar rentabilidade; revisar parâmetros.
 
 ## Regras
 
 - Preservar parâmetros usados no cálculo.
-- Catálogo mantém preço se custo cair.
-- Se custo subir, gerar alerta.
-- Spot pode registrar referência de mercado.
-- Perda histórica configurável.
-- Arredondamento em R$ 0,50.
+- Catálogo mantém preço se custo cair; se custo subir, gerar alerta.
+- Spot pode registrar referência de mercado; perda histórica configurável; arredondamento em
+  R$ 0,50.
 
-## Frontend
+## Frontend planejado
 
-Telas:
+Calculadora de preço; Histórico de cálculos; Parâmetros; Rentabilidade; MDO.
 
-- Calculadora de preço;
-- Histórico de cálculos;
-- Parâmetros;
-- Rentabilidade;
-- MDO.
+## Critérios de aceite (quando implementado)
 
-## Critérios de aceite
+calcular item simples/Spot/Personalizado/Catálogo; preservar parâmetros históricos; mostrar
+custo unitário/total; mostrar preço sugerido; aceitar preço final manual.
 
-- calcular item simples;
-- calcular Spot;
-- calcular Personalizado;
-- calcular Catálogo;
-- preservar parâmetros históricos;
-- mostrar custo unitário;
-- mostrar custo total;
-- mostrar preço sugerido;
-- aceitar preço final manual.
+## Testes planejados
 
-## Testes
+mudança de MDO; mudança de energia; custo de catálogo maior/menor; margem 40%/80%;
+arredondamento.
 
-- mudança de MDO;
-- mudança de energia;
-- custo de catálogo maior;
-- custo menor;
-- margem 40%;
-- margem 80%;
-- arredondamento.
-
-## Commit sugerido
+## Commit sugerido (quando iniciado)
 
 `feat: implement pricing and profitability`
 
+## Status geral
+
+**NÃO INICIADO.**
+
 ---
 
-# 9. Bloco 5 — Onboarding, Alertas e Parâmetros
+# 10. Módulo 5 — Manutenção e Equipamentos
 
 ## Objetivo
 
-Evitar que o sistema fique complexo para uso diário.
+Registrar manutenções realizadas e gerar lembretes preventivos para os equipamentos de
+impressão.
 
-## Banco
+## Escopo por fase
 
-Criar:
+1. **Definição funcional** — concluída (doc `01` §65: manutenção, lubrificação de eixos X/Y/Z,
+   próxima manutenção, lembretes preventivos).
+2. **Modelo e regras** — especificada em doc `03` (§24: `maintenance_records`,
+   `maintenance_rules`); **migrations não criadas**.
+3. **Backend** — não iniciado.
+4. **Frontend** — não iniciado.
+5. **Integração E2E** — não iniciada.
+6. **Piloto real** — não iniciado.
+7. **Estabilização / release** — não iniciada.
 
-- `alerts`
-- `notifications`
+## Itens iniciais de manutenção
 
-Aproveitar:
+- lubrificação eixo X; lubrificação eixo Y; lubrificação eixo Z; limpeza; troca de componente;
+  outro.
 
-- `parameters`
-- `parameter_history`
+## Backend planejado
 
-## Backend
+- registrar manutenção realizada (impressora, data, tipo, componente, horas de uso, observação);
+  cadastrar regra de manutenção preventiva (intervalo em dias ou horas de uso); calcular próxima
+  manutenção; gerar alerta preventivo.
 
-Funções:
+## Frontend planejado
 
-- verificar configuração;
-- calcular progresso;
-- identificar pendências;
-- criar alerta;
-- reconhecer alerta;
-- resolver alerta;
-- calcular próxima revisão;
-- gerar resumo diário.
+Manutenções; Nova manutenção; Regras de manutenção; Alertas de manutenção.
 
-## Onboarding
+## Critérios de aceite (quando implementado)
 
-Etapas iniciais:
+registrar manutenção realizada; calcular e exibir próxima manutenção prevista; gerar alerta
+quando a manutenção estiver vencida ou próxima.
 
-1. usuário;
-2. impressora;
-3. escala;
-4. parâmetros;
-5. meios de pagamento;
-6. filamentos;
-7. taras;
-8. estoque;
-9. produtos;
-10. integrações opcionais.
+## Status geral
+
+**NÃO INICIADO.** Este módulo não possuía um Bloco próprio no plano anterior (v0.1); passa a
+existir como módulo independente nesta reorganização, aproveitando a especificação já existente
+nos docs `01` e `03`.
+
+---
+
+# 11. Módulo 6 — Onboarding, Alertas e Gestão
+
+## Objetivo
+
+Evitar que o sistema fique complexo para uso diário; guiar a configuração inicial e manter o
+usuário informado sobre pendências.
+
+## Escopo por fase
+
+1. **Definição funcional** — concluída (doc `01` §3, §59–64, §66).
+2. **Modelo e regras** — parcialmente especificada em doc `03`: `alerts`, `notifications`
+   (§22), reaproveita `parameters`/`parameter_history` (§23, criados no Módulo 4); a escala de
+   trabalho (`work_shift_cycles`, `work_schedule` — doc `03` §25) também está especificada e
+   pertence ao onboarding, mas ainda não possui migrations.
+3. **Backend** — não iniciado.
+4. **Frontend** — não iniciado.
+5. **Integração E2E** — não iniciada.
+6. **Piloto real** — não iniciado.
+7. **Estabilização / release** — não iniciada.
+
+## Onboarding — etapas iniciais
+
+1. usuário; 2. impressora; 3. escala; 4. parâmetros; 5. meios de pagamento; 6. filamentos;
+7. taras; 8. estoque; 9. produtos; 10. integrações opcionais.
+
+## Backend planejado
+
+- verificar configuração; calcular progresso; identificar pendências; criar/reconhecer/resolver
+  alerta; calcular próxima revisão; gerar resumo diário.
 
 ## Regras
 
-Pendências:
+- Pendências: bloqueante, importante, informativa.
+- Alertas importantes persistem até reconhecimento.
 
-- bloqueante;
-- importante;
-- informativa.
+## Frontend planejado
 
-Alertas importantes persistem até reconhecimento.
+Boas-vindas; Configuração inicial; Progresso; Pendências; Alertas; Parâmetros; Resumo do dia.
 
-## Frontend
+## Critérios de aceite (quando implementado)
 
-Telas:
+usuário novo recebe onboarding; progresso é calculado; pendência faltante aparece; bloqueante
+impede ação correta; informativa não bloqueia; alerta pode ser resolvido.
 
-- Boas-vindas;
-- Configuração inicial;
-- Progresso;
-- Pendências;
-- Alertas;
-- Parâmetros;
-- Resumo do dia.
-
-## Critérios de aceite
-
-- usuário novo recebe onboarding;
-- progresso é calculado;
-- pendência faltante aparece;
-- bloqueante impede ação correta;
-- informativa não bloqueia;
-- alerta pode ser resolvido.
-
-## Commit sugerido
+## Commit sugerido (quando iniciado)
 
 `feat: implement onboarding alerts and parameter reviews`
 
+## Status geral
+
+**NÃO INICIADO.**
+
 ---
 
-# 10. Bloco 6 — Sky em Texto
+# 12. Módulo 7 — Sky Assistente em Texto
 
 ## Objetivo
 
-Permitir operar o sistema por linguagem natural antes de implementar voz.
+Permitir operar o sistema por linguagem natural, em texto, antes de implementar voz.
+
+## Escopo por fase
+
+1. **Definição funcional** — concluída (doc `01` §52–60, §73).
+2. **Modelo e regras** — não especifica tabelas próprias; depende dos módulos já modelados
+   (chamará funções de negócio existentes via ferramentas autorizadas).
+3. **Backend** — não iniciado (integração OpenAI, camada de ferramentas autorizadas).
+4. **Frontend** — não iniciado (tela de chat).
+5. **Integração E2E** — não iniciada.
+6. **Piloto real** — não iniciado.
+7. **Estabilização / release** — não iniciada.
 
 ## Integração
 
-OpenAI API via backend.
-
-## Segurança
-
-A Sky só pode chamar ferramentas autorizadas.
+OpenAI API via backend. A Sky só pode chamar ferramentas autorizadas (nunca SQL livre).
 
 ## Ferramentas iniciais
 
-- criar cliente;
-- buscar cliente;
-- criar pedido;
-- atualizar pedido;
-- registrar pagamento;
-- consultar pedidos;
-- criar produção;
-- consultar fila;
-- consultar estoque;
-- registrar MDO;
-- calcular preço;
-- consultar parâmetros;
-- consultar alertas;
-- gerar resumo diário.
+criar cliente; buscar cliente; criar pedido; atualizar pedido; registrar pagamento; consultar
+pedidos; criar produção; consultar fila; consultar estoque; registrar MDO; calcular preço;
+consultar parâmetros; consultar alertas; gerar resumo diário.
 
 ## Regras de conversa
 
-- respostas curtas;
-- perguntar o que falta;
-- não inventar;
-- contexto durante a sessão;
-- usar “nós”;
-- tom amigável;
-- humor moderado;
-- precisão acima de velocidade.
+respostas curtas; perguntar o que falta; não inventar; contexto durante a sessão; usar "nós";
+tom amigável; humor moderado; precisão acima de velocidade.
 
-## Frontend
+## Frontend planejado
 
-Tela:
+Chat Sky.
 
-- Chat Sky.
+## Critérios de aceite (quando implementado)
 
-## Critérios de aceite
+Exemplos que devem funcionar: "Sky, registra um pedido para o João.", "Sky, quais pedidos estão
+atrasados?", "Sky, o que produzimos agora?", "Sky, quanto devemos cobrar?", "Sky, estamos com
+PLA preto suficiente?"
 
-Exemplos que devem funcionar:
+## Testes planejados
 
-> Sky, registra um pedido para o João.
+dados completos; dados faltantes; correção contextual; referência ao pedido anterior; tentativa
+de ação não autorizada.
 
-> Sky, quais pedidos estão atrasados?
-
-> Sky, o que produzimos agora?
-
-> Sky, quanto devemos cobrar?
-
-> Sky, estamos com PLA preto suficiente?
-
-## Testes
-
-- dados completos;
-- dados faltantes;
-- correção contextual;
-- referência ao pedido anterior;
-- tentativa de ação não autorizada.
-
-## Commit sugerido
+## Commit sugerido (quando iniciado)
 
 `feat: integrate Sky text assistant`
 
+## Status geral
+
+**NÃO INICIADO.** Depende dos Módulos 1–6 estarem operacionais para ter ferramentas reais a
+chamar.
+
 ---
 
-# 11. Bloco 7 — Sky por Voz
+# 13. Módulo 8 — Sky Assistente por Voz
 
 ## Objetivo
 
 Adicionar voz sem alterar o núcleo do sistema.
 
-## Etapa 7.1 — Voz dentro do app
+## Escopo por fase
 
-Implementar:
+1. **Definição funcional** — concluída (doc `01` §54–55, §69).
+2. **Modelo e regras** — não aplicável (reaproveita módulo 7).
+3. **Backend** — não iniciado.
+4. **Frontend** — não iniciado.
+5. **Integração E2E** — não iniciada.
+6. **Piloto real** — não iniciado.
+7. **Estabilização / release** — não iniciada.
 
-- speech-to-text;
-- text-to-speech;
-- sessão de 3 minutos;
-- botão para falar;
-- interrupção;
-- retomada.
+## Etapa 8.1 — Voz dentro do app
 
-## Etapa 7.2 — Prova técnica iOS
+speech-to-text; text-to-speech; sessão de 3 minutos; botão para falar; interrupção; retomada.
 
-Validar:
+## Etapa 8.2 — Prova técnica iOS
 
-- Siri;
-- App Intents;
-- Shortcuts;
-- botão de Ação;
-- limitações de wake word;
-- background.
+Siri; App Intents; Shortcuts; botão de Ação; limitações de wake word; background.
 
 ## Regra
 
-Não impedir o MVP caso “Hey Sky” independente não seja possível.
+Não impedir o MVP caso "Hey Sky" independente não seja possível no iOS.
 
-## Critérios de aceite
+## Critérios de aceite (quando implementado)
 
-- usuário fala;
-- Sky entende;
-- ação é executada;
-- resposta volta em voz;
-- conversa continua por 3 minutos.
+usuário fala; Sky entende; ação é executada; resposta volta em voz; conversa continua por
+3 minutos.
 
-## Commit sugerido
+## Commit sugerido (quando iniciado)
 
 `feat: add Sky voice interaction`
 
+## Status geral
+
+**NÃO INICIADO.** Depende do Módulo 7 estar operacional.
+
 ---
 
-# 12. Bloco 8 — Divulgação e Marketing
+# 14. Módulo 9 — Divulgação e Marketing
 
 ## Objetivo
 
 Transformar a Sky em assistente de marketing didático.
 
-## Banco
+## Escopo por fase
 
-Criar:
+1. **Definição funcional** — concluída (doc `01` §31–43).
+2. **Modelo e regras** — especificada em doc `03` (§21: `marketing_events`, `marketing_plans`,
+   `publications`, `publication_metrics`); **migrations não criadas**.
+3. **Backend** — não iniciado.
+4. **Frontend** — não iniciado.
+5. **Integração E2E** — não iniciada.
+6. **Piloto real** — não iniciado.
+7. **Estabilização / release** — não iniciada.
 
-- `marketing_events`
-- `marketing_plans`
-- `publications`
-- `publication_metrics`
+## Backend planejado
 
-## Backend
+- criar evento; sugerir oportunidade; criar planejamento; gerar conteúdo; solicitar/aprovar
+  conteúdo; registrar publicação/métricas; gerar análise 24h/semanal/mensal; sugerir candidato a
+  Catálogo.
 
-Funções:
+## Frontend planejado
 
-- criar evento;
-- sugerir oportunidade;
-- criar planejamento;
-- gerar conteúdo;
-- solicitar aprovação;
-- aprovar conteúdo;
-- registrar publicação;
-- registrar métricas;
-- gerar análise 24h;
-- gerar análise semanal;
-- gerar análise mensal;
-- sugerir candidato a Catálogo.
-
-## Frontend
-
-Telas:
-
-- Calendário;
-- Planejamento;
-- Conteúdo;
-- Aprovação;
-- Publicações;
-- Métricas;
-- Análises.
+Calendário; Planejamento; Conteúdo; Aprovação; Publicações; Métricas; Análises.
 
 ## Regras
 
-- 2 posts por semana inicialmente.
-- Nenhuma publicação sem aprovação.
-- Datas principais automáticas.
-- Datas locais/esportivas manuais.
-- Antecedência 45 dias.
-- Explicar sempre estratégia.
+- 2 posts por semana inicialmente; nenhuma publicação sem aprovação; datas principais
+  automáticas; datas locais/esportivas manuais; antecedência 45 dias; explicar sempre a
+  estratégia.
 
-## Critérios de aceite
+## Critérios de aceite (quando implementado)
 
-Sky deve conseguir explicar:
+Sky deve conseguir explicar o que publicar, por que publicar, objetivo e conteúdo necessário.
 
-- o que publicar;
-- por que publicar;
-- objetivo;
-- conteúdo necessário.
-
-## Commit sugerido
+## Commit sugerido (quando iniciado)
 
 `feat: implement marketing planning and approval`
 
+## Status geral
+
+**NÃO INICIADO.**
+
 ---
 
-# 13. Bloco 9 — Integrações Externas
+# 15. Módulo 10 — Integrações Externas
 
 Cada integração deve possuir prova técnica própria.
 
----
+## Escopo por fase (aplicado a cada subintegração)
 
-## 13.1 Instagram
+1. **Definição funcional** — concluída (doc `01` §44–51, §69).
+2. **Modelo e regras** — não especificada em detalhe por integração; dependerá da prova técnica.
+3–7. **Backend / Frontend / E2E / Piloto / Estabilização** — não iniciados.
 
-Objetivos:
+## 15.1 Instagram
 
-- publicação;
-- agendamento;
-- métricas.
+Objetivos: publicação; agendamento; métricas. Critério: nenhuma publicação sem aprovação.
 
-Critério:
+## 15.2 Smart Life / JWCOM
 
-nenhuma publicação sem aprovação.
+Objetivo: validar leitura de energia. Se não funcionar: manter cálculo estimado.
 
----
+## 15.3 Bambu
 
-## 13.2 Smart Life / JWCOM
+Objetivo inicial: validar leitura de status e dados. Comandos somente após confirmação.
 
-Objetivo:
+## 15.4 WhatsApp
 
-validar leitura de energia.
+Prioridade posterior. Avaliar notificações, leitura, criação de clientes, pedidos.
 
-Se não funcionar:
-
-manter cálculo estimado.
-
----
-
-## 13.3 Bambu
-
-Objetivo inicial:
-
-validar leitura de status e dados.
-
-Comandos somente após confirmação.
-
----
-
-## 13.4 WhatsApp
-
-Prioridade posterior.
-
-Avaliar:
-
-- notificações;
-- leitura;
-- criação de clientes;
-- pedidos.
-
----
-
-## 13.5 Facebook
+## 15.5 Facebook
 
 Adicionar após Instagram estar estável.
 
----
-
-## 13.6 TikTok
+## 15.6 TikTok
 
 Adicionar após Instagram estar estável.
 
+## Status geral
+
+**NÃO INICIADO.**
+
 ---
 
-# 14. Revisão técnica após cada bloco
+# 16. Revisão técnica após cada módulo
 
-Antes de avançar:
+Antes de avançar para o próximo módulo:
 
 - executar testes;
 - corrigir erros;
@@ -859,18 +704,17 @@ Antes de avançar:
 - revisar banco;
 - verificar logs;
 - verificar segurança;
-- atualizar documentação;
+- atualizar documentação (incluindo `05_ROADMAP_MODULOS.md`);
 - realizar commit.
 
 ---
 
-# 15. Definição de pronto por bloco
+# 17. Definição de pronto por módulo
 
-Um bloco não está pronto apenas porque “funciona na máquina do desenvolvedor”.
+Um módulo não está pronto apenas porque "funciona na máquina do desenvolvedor", nem apenas
+porque o backend responde via API/PowerShell. Deve:
 
-Deve:
-
-- funcionar localmente;
+- funcionar localmente pelo **frontend**, sem chamadas manuais de API;
 - passar testes;
 - preservar dados;
 - não gerar erro no console relevante;
@@ -879,11 +723,14 @@ Deve:
 - estar commitado;
 - ser demonstrável.
 
+Somente quando essas condições forem atendidas o módulo recebe status **OPERACIONAL** (ver
+§3.3).
+
 ---
 
-# 16. Revisão do MVP
+# 18. Revisão do MVP
 
-Após concluir os blocos necessários ao MVP:
+Após concluir os módulos necessários ao MVP:
 
 ## Teste técnico
 
@@ -893,91 +740,65 @@ Validar fluxos completos.
 
 Operar por aproximadamente **2 semanas**.
 
-Registrar:
-
-- campos desnecessários;
-- campos faltantes;
-- cliques excessivos;
-- alertas ruins;
-- falhas de lógica;
-- dificuldades de uso.
+Registrar: campos desnecessários; campos faltantes; cliques excessivos; alertas ruins; falhas de
+lógica; dificuldades de uso.
 
 ## Primeira revisão
 
-Classificar:
-
-- Corrigir imediatamente;
-- Melhorar;
-- Futuro.
+Classificar: Corrigir imediatamente; Melhorar; Futuro.
 
 ## Revisão de 30 dias
 
-Usar dados reais para avaliar:
-
-- pedidos;
-- produção;
-- estoque;
-- perdas;
-- rentabilidade;
-- Sky;
-- marketing.
+Usar dados reais para avaliar: pedidos; produção; estoque; perdas; rentabilidade; Sky;
+marketing.
 
 ---
 
-# 17. Funcionalidades que não devem atrasar o MVP
+# 19. Funcionalidades que não devem atrasar o MVP
 
-Não bloquear lançamento por:
-
-- machine learning;
-- Facebook;
-- TikTok;
-- leitura automática do WhatsApp;
-- integração bancária;
-- wake word totalmente independente no iPhone;
-- controle completo da Bambu;
-- telemetria perfeita da tomada.
+Não bloquear lançamento por: machine learning; Facebook; TikTok; leitura automática do
+WhatsApp; integração bancária; wake word totalmente independente no iPhone; controle completo da
+Bambu; telemetria perfeita da tomada.
 
 Sempre preferir alternativa manual funcional.
 
 ---
 
-# 18. Checkpoint recomendado antes do Claude começar
+# 20. Checkpoint recomendado antes do Claude começar um módulo
 
 Antes de pedir implementação:
 
-- confirmar Supabase criado;
-- confirmar GitHub criado;
-- confirmar Node.js;
-- confirmar VS Code;
-- confirmar Claude Code;
-- confirmar Git;
-- confirmar documentos em `docs`;
+- confirmar Supabase criado; confirmar GitHub criado; confirmar Node.js; confirmar VS Code;
+  confirmar Claude Code; confirmar Git;
+- confirmar documentos em `docs`, incluindo `05_ROADMAP_MODULOS.md` atualizado;
 - confirmar estrutura de pastas.
 
 ---
 
-# 19. Primeiro comando recomendado ao Claude Code
+# 21. Primeiro comando recomendado ao Claude Code (por módulo)
 
 Quando o ambiente estiver pronto, não pedir:
 
-> “Construa todo o sistema.”
+> "Construa todo o sistema."
 
 Pedir algo equivalente a:
 
-> Leia os arquivos `docs/01_ESPECIFICACAO_FUNCIONAL.md`, `docs/02_ESPECIFICACAO_TECNICA.md`, `docs/03_MODELO_BANCO_DADOS.md` e `docs/04_PLANO_IMPLEMENTACAO.md`. Não implemente ainda. Faça uma análise do Bloco 0 — Fundação, liste as tarefas que pretende executar, dependências necessárias, riscos e arquivos que serão criados ou alterados. Aguarde minha aprovação antes de modificar qualquer arquivo.
+> Leia os arquivos `docs/01_ESPECIFICACAO_FUNCIONAL.md`, `docs/02_ESPECIFICACAO_TECNICA.md`,
+> `docs/03_MODELO_BANCO_DADOS.md`, `docs/04_PLANO_IMPLEMENTACAO.md` e
+> `docs/05_ROADMAP_MODULOS.md`. Não implemente ainda. Faça uma análise do Módulo [N] — [nome],
+> Fase [X], liste as tarefas que pretende executar, dependências necessárias, riscos e arquivos
+> que serão criados ou alterados. Aguarde minha aprovação antes de modificar qualquer arquivo.
 
 ---
 
-# 20. Filosofia de execução
+# 22. Filosofia de execução
 
 O objetivo não é construir rápido a qualquer custo.
 
-O objetivo é construir de forma que cada etapa possa ser:
-
-- entendida;
-- testada;
-- corrigida;
-- revertida;
-- evoluída.
+O objetivo é construir de forma que cada etapa possa ser: entendida; testada; corrigida;
+revertida; evoluída.
 
 > **Uma funcionalidade pequena e confiável vale mais do que cinco funcionalidades incompletas.**
+
+> **Terminar um módulo e colocá-lo em uso real vale mais do que iniciar o próximo módulo com o
+> anterior pela metade.**
