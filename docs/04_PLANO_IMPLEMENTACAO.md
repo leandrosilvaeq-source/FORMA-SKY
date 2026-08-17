@@ -185,8 +185,13 @@ Permitir registrar a operação comercial básica da Forma.
    `update_product_price`, `recalculate_order_financials`, `try_auto_approve_order`) e views de
    resumo de pedido.
 3. **Backend** — 100%: 6 Edge Functions deployadas e validadas em runtime (`products`, `orders`,
-   `order-items`, `order-status`, `payments`, `order-approvals`).
-4. **Frontend** — 0%. Nenhuma tela de clientes/produtos/pedidos existe ainda.
+   `order-items`, `order-status`, `payments`, `order-approvals`). Migrations 18–19 (2026-08-16)
+   adicionam `accessories`/`packaging` (cadastro mestre completo, antecipado do Módulo 3 — ver
+   nota no Módulo 3 abaixo) e `product_accessories`/`product_packaging` (composição padrão de um
+   produto de Catálogo), com escrita via `PATCH /products/:id/composition` ->
+   `set_product_composition`. Nenhuma automação de estoque foi implementada junto.
+4. **Frontend** — parcial: telas de Clientes e Produtos (listar/criar/alterar preço/composição
+   padrão) implementadas; Pedidos ainda não tem tela.
 5. **Integração E2E** — 0% (depende da Fase 4).
 6. **Piloto real** — 0%.
 7. **Estabilização / release** — 0%.
@@ -197,8 +202,11 @@ Permitir registrar a operação comercial básica da Forma.
 
 ## Frontend a construir (Fase 4)
 
-- Clientes; Empresas; Pedidos; Novo Pedido; Detalhe do Pedido; Novo Produto de Catálogo; Lista
-  de Produtos.
+- Clientes — feito.
+- Produtos: listar, criar, alterar preço, composição padrão (acessórios/embalagens + quantidade)
+  — feito. Cadastro/edição de acessórios e embalagens pela UI — pendente (subetapa futura
+  separada; nesta etapa a leitura do frontend é só listagem).
+- Empresas; Pedidos; Novo Pedido; Detalhe do Pedido — pendente.
 
 ## Regras importantes
 
@@ -228,8 +236,10 @@ O usuário deve conseguir, **pelo frontend**:
 
 ## Status geral
 
-**NÃO OPERACIONAL** — backend 100% pronto e validado via API, mas sem frontend/E2E não pode ser
-usado normalmente. Próximo marco em `05_ROADMAP_MODULOS.md`.
+**NÃO OPERACIONAL** — backend 100% pronto e validado via API; frontend de Clientes e Produtos
+(incluindo composição padrão) já funciona, mas Empresas e Pedidos ainda não têm tela, então o
+módulo como um todo ainda não pode ser usado normalmente ponta a ponta. Próximo marco em
+`05_ROADMAP_MODULOS.md`.
 
 ---
 
@@ -301,18 +311,28 @@ Controlar materiais, reservas, perdas e inventário.
 ## Escopo por fase
 
 1. **Definição funcional** — concluída (doc `01` §15–21).
-2. **Modelo e regras** — especificada em doc `03` (§12–16: `filament_types`, `spool_tares`,
-   `filament_spools`, `accessories`, `packaging`, `suppliers`, `stock_movements`,
-   `stock_reservations`, `inventories`, `inventory_items`); **migrations não criadas**.
-3. **Backend** — não iniciado.
-4. **Frontend** — não iniciado.
+2. **Modelo e regras** — parcialmente implementada. `accessories`/`packaging` (cadastro mestre
+   completo, doc `03` §13) e `product_accessories`/`product_packaging` (composição padrão,
+   doc `03` §9.3) já existem no banco — antecipadas pelo Módulo 1 (`04` §6, Migrations 18–19,
+   2026-08-16) para permitir cadastrar a composição de um produto de Catálogo. **Nenhuma regra de
+   negócio de estoque foi implementada junto**: `filament_types`, `spool_tares`,
+   `filament_spools`, `suppliers`, `stock_movements`, `stock_reservations`, `inventories`,
+   `inventory_items` continuam apenas especificados (doc `03` §12, §14–16), sem migration. Por
+   isso esta fase permanece **parcial**, não 100% — falta o modelo de estoque propriamente dito
+   (saldo, reserva, consumo) e a validação das regras de negócio associadas (ver critério da
+   Fase 2 em `05_ROADMAP_MODULOS.md` §1).
+3. **Backend** — não iniciado (nenhuma Edge Function/RPC de estoque; `set_product_composition` é
+   do Módulo 1, não movimenta estoque).
+4. **Frontend** — não iniciado (nenhuma tela de administração de `accessories`/`packaging`; a
+   tela de Produtos do Módulo 1 só lista esses cadastros para montar a composição).
 5. **Integração E2E** — não iniciada.
 6. **Piloto real** — não iniciado.
 7. **Estabilização / release** — não iniciada.
 
 ## Backend planejado
 
-- cadastrar filamento/rolo/tara/acessório/embalagem; registrar entrada; reservar/liberar
+- cadastrar filamento/rolo/tara (`accessory`/`packaging` já cadastráveis via grant direto,
+  migration do Módulo 1 — falta só a tela de administração); registrar entrada; reservar/liberar
   material; registrar consumo/perda; abrir inventário; registrar pesagem/contagem; fechar
   inventário; aplicar ajuste.
 

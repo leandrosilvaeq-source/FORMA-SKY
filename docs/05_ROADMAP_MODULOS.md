@@ -53,7 +53,7 @@ progresso — só como intenção registrada em `04_PLANO_IMPLEMENTACAO.md`.
 | Nº | Módulo | Fases com peso (100% / parcial) | % macro | Status OPERACIONAL |
 | --- | --- | --- | --- | --- |
 | 0 | Fundação e Segurança | 5×100% (F1–F5) + 2×50% (F6–F7) | ~86% | 🟡 Quase operacional — validar formalmente (Fases 6–7 pendentes) |
-| 1 | Clientes, Produtos e Pedidos | 3×100% (F1–F3) + 4×0% (F4–F7) | ~43% | ❌ Não operacional |
+| 1 | Clientes, Produtos e Pedidos | 3×100% (F1–F3) + 1×50% (F4) + 3×0% (F5–F7) | ~50% | ❌ Não operacional |
 | 2 | Produção | 1×100% (F1) + 1×50% (F2) + 5×0% | ~21% | ❌ Não iniciado |
 | 3 | Estoque e Inventário | 1×100% (F1) + 1×50% (F2) + 5×0% | ~21% | ❌ Não iniciado |
 | 4 | Precificação e Rentabilidade | 1×100% (F1) + 1×50% (F2) + 5×0% | ~21% | ❌ Não iniciado |
@@ -64,7 +64,7 @@ progresso — só como intenção registrada em `04_PLANO_IMPLEMENTACAO.md`.
 | 9 | Divulgação e Marketing | 1×100% (F1) + 1×50% (F2) + 5×0% | ~21% | ❌ Não iniciado |
 | 10 | Integrações Externas | 1×100% (F1) + 6×0% (F2 sem modelo definido por integração) | ~14% | ❌ Não iniciado |
 
-> Cálculo exato do Módulo 1: 3 fases 100% + 4 fases 0% = 3/7 = 42,86% ≈ **43%**.
+> Cálculo exato do Módulo 1: 3 fases 100% + 1 fase 50% + 3 fases 0% = 3,5/7 = 50%.
 > A referência confiável continua sendo o detalhamento por fase (seção 3, para o módulo em
 > desenvolvimento; seção 5, macro para os demais) — a tabela acima é só leitura rápida.
 
@@ -75,22 +75,26 @@ progresso — só como intenção registrada em `04_PLANO_IMPLEMENTACAO.md`.
 | Fase | Status | Peso | Observação |
 | --- | --- | --- | --- |
 | 1. Definição funcional | ✅ 100% | 14,29% | Doc `01` §5–11, §68 |
-| 2. Modelo e regras | ✅ 100% | 14,29% | 17 migrations **aplicadas**: `companies`, `customers`, `lead_sources`, `orders`, `order_items`, `custom_item_details`, `custom_versions`, `approvals`, `model_sources`, `spot_item_details`, `products`, `product_price_history`, `payments`, `order_status_history`, `payment_status_history` + funções de negócio + views |
-| 3. Backend | ✅ 100% | 14,29% | 6 Edge Functions **deployadas e validadas em runtime**: `products`, `orders`, `order-items`, `order-status`, `payments`, `order-approvals` |
-| 4. Frontend | ❌ 0% | 0% | Nenhuma tela de clientes/produtos/pedidos criada |
-| 5. Integração E2E | ❌ 0% | 0% | Depende da Fase 4 |
+| 2. Modelo e regras | ✅ 100% | 14,29% | 19 migrations **aplicadas**: `companies`, `customers`, `lead_sources`, `orders`, `order_items`, `custom_item_details`, `custom_versions`, `approvals`, `model_sources`, `spot_item_details`, `products`, `product_price_history`, `payments`, `order_status_history`, `payment_status_history`, `accessories`, `packaging`, `product_accessories`, `product_packaging` + funções de negócio (incl. `set_product_composition`) + views |
+| 3. Backend | ✅ 100% | 14,29% | 6 Edge Functions **deployadas e validadas em runtime**: `products`, `orders`, `order-items`, `order-status`, `payments`, `order-approvals`. Nova rota `PATCH /products/:id/composition` **deployada e validada em runtime** — smoke test real ponta a ponta (frontend → Edge Function → RPC `set_product_composition` → banco → leitura de volta) concluído com sucesso em 2026-08-16 |
+| 4. Frontend | 🟡 ~50% | 7,14% | Clientes e Produtos (listar/criar/alterar preço/composição padrão) implementados; Empresas e Pedidos ainda sem tela |
+| 5. Integração E2E | ❌ 0% | 0% | Depende da Fase 4 completa |
 | 6. Piloto real | ❌ 0% | 0% | Depende da Fase 5 |
 | 7. Estabilização / release | ❌ 0% | 0% | Depende da Fase 6 |
 
-**Percentual macro: (100+100+100+0+0+0+0) / 7 = 300/7 = 42,86% ≈ 43%.**
+**Percentual macro: (100+100+100+50+0+0+0) / 7 = 350/7 = 50%.**
 
-**Status OPERACIONAL: NÃO** — backend pronto e testado via API, mas o usuário ainda não
-consegue operar clientes/produtos/pedidos pelo frontend.
+**Status OPERACIONAL: NÃO** — backend pronto e testado via API, incluindo a composição padrão de
+produtos (Migrations 18–19 aplicadas no remoto, Edge Function `products` deployada, rota
+`PATCH /products/:id/composition` validada por smoke test real ponta a ponta), frontend de
+Clientes/Produtos já funciona, mas o usuário ainda não consegue operar Empresas/Pedidos pelo
+frontend.
 
 ## Próximo marco
 
-Construir a Fase 4 (Frontend) do Módulo 1: client de API consumindo as 6 Edge Functions já
-deployadas + telas de Clientes, Pedidos (lista/novo/detalhe) e Produtos, conforme escopo em
+Migrations 18–19 e o deploy da Edge Function `products` (rota de composição) já foram aplicados
+e validados por smoke test real. Próximo passo: completar a Fase 4 (Frontend) do Módulo 1 com as
+telas de Empresas e Pedidos (lista/novo/detalhe), conforme escopo em
 `04_PLANO_IMPLEMENTACAO.md` §6. Ao concluir, seguir para Fase 5 (integração E2E manual) antes de
 iniciar Fase 6 (piloto real).
 
@@ -117,14 +121,15 @@ iniciar Fase 6 (piloto real).
 # 5. Módulos 2–10 — visão macro (não iniciados na prática; parte já especificada)
 
 Todos têm a Fase 1 concluída (documentada nos docs `01`/`03`) e parte da Fase 2 já especificada
-no modelo de banco de dados (`03`), mas **nenhuma migration, Edge Function ou tela foi criada**
-para estes módulos. A especificação conta como progresso real (ver §1), mas não deve ser lida
-como implementação.
+no modelo de banco de dados (`03`), mas nenhuma Edge Function ou tela **destes módulos** foi
+criada. A especificação conta como progresso real (ver §1), mas não deve ser lida como
+implementação. Exceção pontual: o Módulo 1 antecipou 2 das tabelas do Módulo 3
+(`accessories`/`packaging`, cadastro mestre sem estoque) — ver nota na linha do Módulo 3.
 
 | Módulo | Fase 1 — Definição funcional | Fase 2 — Modelo e regras | Fases 3–7 |
 | --- | --- | --- | --- |
 | 2 — Produção | ✅ 100% (doc 01 §12–14) | 🟡 50% — especificado (doc 03 §10–11), sem migrations | ❌ 0% |
-| 3 — Estoque e Inventário | ✅ 100% (doc 01 §15–21) | 🟡 50% — especificado (doc 03 §12–16), sem migrations | ❌ 0% |
+| 3 — Estoque e Inventário | ✅ 100% (doc 01 §15–21) | 🟡 50% — `accessories`/`packaging` (doc 03 §13) **implementados** (Migration 18, antecipados pelo Módulo 1 só como cadastro mestre); `filament_types`, `spool_tares`, `filament_spools`, `suppliers`, `stock_movements`, `stock_reservations`, `inventories`, `inventory_items` (doc 03 §12, §14–16) continuam apenas especificados, sem migration; nenhuma regra de negócio de estoque (saldo/reserva/consumo) implementada | ❌ 0% |
 | 4 — Precificação e Rentabilidade | ✅ 100% (doc 01 §22–30) | 🟡 50% — especificado (doc 03 §17–18), sem migrations | ❌ 0% |
 | 5 — Manutenção e Equipamentos | ✅ 100% (doc 01 §65) | 🟡 50% — especificado (doc 03 §24), sem migrations | ❌ 0% |
 | 6 — Onboarding, Alertas e Gestão | ✅ 100% (doc 01 §3, §59–66) | 🟡 50% — `alerts`/`notifications` especificados (doc 03 §22); escala (§25) especificada; reaproveita `parameters` do Módulo 4 (também não implementado) | ❌ 0% |
@@ -140,3 +145,4 @@ como implementação.
 | Data | Alteração |
 | --- | --- |
 | 2026-08-16 | Criação do roadmap. Auditoria confirma Módulo 0 quase operacional (~86%) e Módulo 1 com backend 100% pronto porém não operacional (~43%, frontend 0%). Módulos 2–10 recalculados distinguindo "especificado" de "implementado" (Fase 2 parcial = 50% quando só há especificação em doc `03` sem migrations); nenhum está operacional. |
+| 2026-08-16 | Módulo 1 Fase 4: telas de Clientes e Produtos (listar/criar/alterar preço) implementadas. Composição padrão de produtos adicionada: Migrations 18–19 antecipam `accessories`/`packaging` (cadastro mestre completo, sem automação de estoque) e criam `product_accessories`/`product_packaging` + `set_product_composition`; `PATCH /products/:id/composition` implementado em `products`, **deployado e validado por smoke test real** (frontend → Edge Function → RPC → banco → leitura de volta). Módulo 1 macro sobe para ~50% (Fase 4 parcial). Módulo 3 Fase 2 ganha nota: 2 de suas tabelas já existem, mas nenhuma regra de estoque foi implementada. |

@@ -225,6 +225,51 @@ export interface SpotItemDetails {
   updated_at: string
 }
 
+// supabase/migrations/20260816150000_create_accessories_packaging_and_composition_tables.sql
+export interface Accessory {
+  id: string
+  name: string
+  material: string | null
+  size: string | null
+  variant: string | null
+  unit_cost: number | null
+  minimum_stock: number | null
+  current_stock: number
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface Packaging {
+  id: string
+  name: string
+  material: string | null
+  size: string | null
+  variant: string | null
+  unit_cost: number | null
+  minimum_stock: number | null
+  current_stock: number
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ProductAccessory {
+  id: string
+  product_id: string
+  accessory_id: string
+  quantity: number
+  created_at: string
+}
+
+export interface ProductPackaging {
+  id: string
+  product_id: string
+  packaging_id: string
+  quantity: number
+  created_at: string
+}
+
 // supabase/migrations/20260814021751_create_payments_table.sql
 export interface Payment {
   id: string

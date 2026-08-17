@@ -409,7 +409,6 @@ Produtos permanentes do Catálogo.
 - `default_weight_grams`
 - `units_per_plate`
 - `default_file_id`
-- `default_packaging_id` opcional
 - `allows_personalization`
 - `is_active`
 - `created_at`
@@ -420,6 +419,11 @@ Produtos permanentes do Catálogo.
 O preço não deve ser recalculado automaticamente a cada pedido.
 
 Custos devem ser monitorados separadamente.
+
+`default_packaging_id` (1 embalagem, sem quantidade), citado em versões anteriores deste
+documento, **nunca foi criado** em nenhuma migration e foi superado por `product_packaging`
+(§9.3) — composição padrão permite N embalagens, cada uma com quantidade, o que cobre e amplia o
+caso de uso original.
 
 ---
 
@@ -436,6 +440,48 @@ Histórico de preços de Catálogo.
 - `effective_to`
 - `reason`
 - `created_at`
+
+---
+
+## 9.3 `product_accessories` e `product_packaging` — composição padrão
+
+Implementado em `supabase/migrations/20260816150000_create_accessories_packaging_and_composition_tables.sql`
+e `20260816150500_create_product_composition_function.sql` (Bloco 1, Migrations 18–19).
+
+Registra a **composição padrão** de um produto de Catálogo: quais acessórios e embalagens
+acompanham o produto, e em que quantidade (ex.: 2 ímãs, 4 parafusos, 1 caixa, 1 saco plástico).
+Estrutura nova — sem equivalente em versão anterior deste documento; substitui e amplia o antigo
+`products.default_packaging_id` (§9.1).
+
+### `product_accessories` — Campos
+
+- `id`
+- `product_id`
+- `accessory_id`
+- `quantity` — inteiro, sempre > 0
+- `created_at`
+
+`unique(product_id, accessory_id)`: no máximo 1 linha por combinação produto+acessório —
+quantidade maior é a mesma linha com um número maior, nunca duas linhas.
+
+### `product_packaging` — Campos
+
+Mesma forma de `product_accessories`, trocando `accessory_id` por `packaging_id`.
+
+### Escrita
+
+Só através da função `set_product_composition(product_id, accessories, packaging, changed_by)` —
+substitui **atomicamente** o conjunto inteiro da composição (apaga as linhas atuais das duas
+tabelas e insere o novo conjunto na mesma transação). Não existe edição incremental linha a
+linha; salvar a composição sempre envia a lista completa desejada.
+
+### Relação com estoque (Módulo 3)
+
+`product_accessories`/`product_packaging` são puramente definicionais — "o que acompanha esse
+produto por padrão" — e **nunca** um ledger de estoque. Quando o Módulo 3 implementar
+reserva/consumo, ele vai **ler** esta composição como template para gerar `stock_movements`
+(multiplicando quantidade da composição × quantidade do pedido), sem duplicar o cadastro.
+Nenhuma automação de estoque é implementada nesta etapa (ver §13).
 
 ---
 
@@ -681,6 +727,11 @@ Representa cada rolo físico.
 
 # 13. Grupo: Acessórios e embalagens
 
+**Implementado (Bloco 1, Migration 18)**: cadastro mestre completo — todos os campos abaixo
+existem no banco, com `created_at`/`updated_at` adicionais (não listados nas versões anteriores
+deste documento). Controle de estoque real (movimentação/reserva/consumo/baixa,
+`stock_movements`/`inventory_items`) **não** está implementado — ver ressalva em cada tabela.
+
 ## 13.1 `accessories`
 
 ### Campos
@@ -690,10 +741,14 @@ Representa cada rolo físico.
 - `material`
 - `size`
 - `variant`
-- `unit_cost`
-- `minimum_stock`
-- `current_stock`
+- `unit_cost` — opcional
+- `minimum_stock` — opcional
+- `current_stock` — `not null default 0`; sem nenhuma automação (nenhuma function/trigger
+  incrementa/decrementa); `UPDATE` direto desta coluna não é concedido a `authenticated` — fica
+  reservada para a função controlada que o Módulo 3 criará
 - `is_active`
+- `created_at`
+- `updated_at`
 
 Exemplos:
 
@@ -704,6 +759,10 @@ Exemplos:
 - chaveiro de corrente;
 - LED;
 - cola.
+
+Referenciado pela composição padrão de produtos (§9.3). Cadastro/edição pela interface fica para
+uma subetapa futura — nesta etapa a leitura via frontend é só listagem (para montar a
+composição); fixtures de teste são criadas via SQL controlado.
 
 ---
 
@@ -716,10 +775,12 @@ Exemplos:
 - `material`
 - `size`
 - `variant`
-- `unit_cost`
-- `minimum_stock`
-- `current_stock`
+- `unit_cost` — opcional
+- `minimum_stock` — opcional
+- `current_stock` — mesmas ressalvas de `accessories.current_stock`
 - `is_active`
+- `created_at`
+- `updated_at`
 
 Exemplos:
 

@@ -1663,7 +1663,8 @@ declare
     'register_payment(uuid,text,numeric,text,timestamptz,uuid,text)',
     'register_custom_version(uuid,text,uuid,text,text,uuid)',
     'create_product(text,text,text,numeric,integer,numeric,integer,uuid,boolean,uuid)',
-    'update_product_price(uuid,numeric,uuid,text,timestamptz)'
+    'update_product_price(uuid,numeric,uuid,text,timestamptz)',
+    'set_product_composition(uuid,jsonb,jsonb,uuid)'
   ];
   v_sig text;
   v_auth_ok boolean;
@@ -1963,6 +1964,483 @@ exception when others then
   reset "request.jwt.claims";
   insert into zz_test_results(section, test_name, status, details)
     values ('9', '9.5b [SET ROLE + JWT falso] vw_order_summary vazia para sub inexistente (confirma security_invoker propagando RLS)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- =============================================================================
+-- SEÇÃO 10 — accessories/packaging/composição padrão de produtos
+-- Migrations 18 (create_accessories_packaging_and_composition_tables) e 19
+-- (create_product_composition_function).
+-- =============================================================================
+
+-- 10.0 Setup: fixtures de accessories/packaging (via role de dono da
+-- transação, não authenticated — mesmo padrão da Seção 0).
+do $$
+declare
+  v_accessory_id_1 uuid;
+  v_accessory_id_2 uuid;
+  v_accessory_id_inactive uuid;
+  v_packaging_id_1 uuid;
+begin
+  begin
+    insert into public.accessories (name, material, size, variant)
+      values ('Ímã de teste 6x2', 'neodímio', '6x2mm', null)
+      returning id into v_accessory_id_1;
+
+    insert into public.accessories (name, material, size, variant)
+      values ('Parafuso de teste M3', 'aço', 'M3', null)
+      returning id into v_accessory_id_2;
+
+    insert into public.accessories (name, is_active)
+      values ('Acessório de teste descontinuado', false)
+      returning id into v_accessory_id_inactive;
+
+    insert into public.packaging (name, material, size, variant)
+      values ('Caixa de teste M', 'papelão', 'M', null)
+      returning id into v_packaging_id_1;
+
+    insert into zz_fixtures(key, value) values ('accessory_id_1', v_accessory_id_1::text)
+      on conflict (key) do update set value = excluded.value;
+    insert into zz_fixtures(key, value) values ('accessory_id_2', v_accessory_id_2::text)
+      on conflict (key) do update set value = excluded.value;
+    insert into zz_fixtures(key, value) values ('accessory_id_inactive', v_accessory_id_inactive::text)
+      on conflict (key) do update set value = excluded.value;
+    insert into zz_fixtures(key, value) values ('packaging_id_1', v_packaging_id_1::text)
+      on conflict (key) do update set value = excluded.value;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('10', '10.0 setup: accessories/packaging de teste criados', 'PASS',
+              'accessory_id_1=' || v_accessory_id_1 || ' accessory_id_2=' || v_accessory_id_2);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('10', '10.0 setup: accessories/packaging de teste criados', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 10.1 [SET ROLE real] authenticated consegue INSERT direto em accessories
+-- (grant liberado — cadastro mestre é CRUD simples, sem escrita atômica
+-- acoplada, ao contrário de products).
+do $$
+declare
+  v_auth_user_id_text text;
+  v_status text;
+  v_details text;
+begin
+  select value into v_auth_user_id_text from zz_fixtures where key = 'auth_user_id';
+
+  begin
+    if v_auth_user_id_text is null or v_auth_user_id_text = '' then
+      raise exception 'fixture ausente: auth_user_id';
+    end if;
+
+    set local role authenticated;
+    perform set_config(
+      'request.jwt.claims',
+      json_build_object('sub', v_auth_user_id_text, 'role', 'authenticated')::text,
+      true
+    );
+
+    insert into public.accessories (name) values ('Acessório inserido por authenticated');
+    v_status := 'PASS';
+    v_details := 'INSERT direto em accessories permitido a authenticated, como esperado';
+  exception when others then
+    v_status := 'FAIL';
+    v_details := 'INSERT deveria ter sido permitido: ' || sqlerrm;
+  end;
+
+  reset role;
+  reset "request.jwt.claims";
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.1 [SET ROLE real] authenticated consegue INSERT direto em accessories', v_status, v_details);
+exception when others then
+  reset role;
+  reset "request.jwt.claims";
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.1 [SET ROLE real] authenticated consegue INSERT direto em accessories', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.2 [SET ROLE real] authenticated NÃO consegue UPDATE de current_stock
+-- direto (coluna reservada para função controlada futura do Módulo 3).
+do $$
+declare
+  v_auth_user_id_text text;
+  v_accessory_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value into v_auth_user_id_text from zz_fixtures where key = 'auth_user_id';
+  select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_id_1';
+
+  begin
+    if v_auth_user_id_text is null or v_accessory_id is null then
+      raise exception 'fixture ausente: auth_user_id/accessory_id_1';
+    end if;
+
+    set local role authenticated;
+    perform set_config(
+      'request.jwt.claims',
+      json_build_object('sub', v_auth_user_id_text, 'role', 'authenticated')::text,
+      true
+    );
+
+    update public.accessories set current_stock = 10 where id = v_accessory_id;
+    v_status := 'FAIL';
+    v_details := 'UPDATE de current_stock como authenticated foi permitido (não deveria)';
+  exception when insufficient_privilege then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+  reset "request.jwt.claims";
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.2 [SET ROLE real] authenticated não consegue UPDATE direto de accessories.current_stock', v_status, v_details);
+exception when others then
+  reset role;
+  reset "request.jwt.claims";
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.2 [SET ROLE real] authenticated não consegue UPDATE direto de accessories.current_stock', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.3 set_product_composition: caminho feliz (2 acessórios + 1 embalagem).
+do $$
+declare
+  v_user_id uuid;
+  v_product_id uuid;
+  v_accessory_id_1 uuid;
+  v_accessory_id_2 uuid;
+  v_packaging_id_1 uuid;
+  v_accessory_count integer;
+  v_packaging_count integer;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+    select value::uuid into v_accessory_id_1 from zz_fixtures where key = 'accessory_id_1';
+    select value::uuid into v_accessory_id_2 from zz_fixtures where key = 'accessory_id_2';
+    select value::uuid into v_packaging_id_1 from zz_fixtures where key = 'packaging_id_1';
+
+    perform public.set_product_composition(
+      v_product_id,
+      jsonb_build_array(
+        jsonb_build_object('id', v_accessory_id_1, 'quantity', 2),
+        jsonb_build_object('id', v_accessory_id_2, 'quantity', 4)
+      ),
+      jsonb_build_array(
+        jsonb_build_object('id', v_packaging_id_1, 'quantity', 1)
+      ),
+      v_user_id
+    );
+
+    select count(*) into v_accessory_count from public.product_accessories where product_id = v_product_id;
+    select count(*) into v_packaging_count from public.product_packaging where product_id = v_product_id;
+
+    if v_accessory_count <> 2 then
+      raise exception 'esperado 2 linhas em product_accessories, encontrado %', v_accessory_count;
+    end if;
+    if v_packaging_count <> 1 then
+      raise exception 'esperado 1 linha em product_packaging, encontrado %', v_packaging_count;
+    end if;
+    if not exists (
+      select 1 from public.product_accessories
+      where product_id = v_product_id and accessory_id = v_accessory_id_1 and quantity = 2
+    ) then
+      raise exception 'quantidade do acessório 1 deveria ser 2';
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('10', '10.3 set_product_composition cria composição (2 acessórios + 1 embalagem)', 'PASS',
+              'accessory_count=' || v_accessory_count || ' packaging_count=' || v_packaging_count);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('10', '10.3 set_product_composition cria composição (2 acessórios + 1 embalagem)', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 10.4 set_product_composition: segunda chamada substitui o conjunto
+-- inteiro (1 acessório, nenhuma embalagem).
+do $$
+declare
+  v_user_id uuid;
+  v_product_id uuid;
+  v_accessory_id_1 uuid;
+  v_accessory_count integer;
+  v_packaging_count integer;
+  v_quantity integer;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+    select value::uuid into v_accessory_id_1 from zz_fixtures where key = 'accessory_id_1';
+
+    perform public.set_product_composition(
+      v_product_id,
+      jsonb_build_array(jsonb_build_object('id', v_accessory_id_1, 'quantity', 5)),
+      '[]'::jsonb,
+      v_user_id
+    );
+
+    select count(*) into v_accessory_count from public.product_accessories where product_id = v_product_id;
+    select count(*) into v_packaging_count from public.product_packaging where product_id = v_product_id;
+    select quantity into v_quantity from public.product_accessories
+      where product_id = v_product_id and accessory_id = v_accessory_id_1;
+
+    if v_accessory_count <> 1 then
+      raise exception 'esperado 1 linha em product_accessories após substituição, encontrado %', v_accessory_count;
+    end if;
+    if v_packaging_count <> 0 then
+      raise exception 'esperado 0 linhas em product_packaging após substituição, encontrado %', v_packaging_count;
+    end if;
+    if v_quantity <> 5 then
+      raise exception 'quantidade deveria ser 5, veio %', v_quantity;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('10', '10.4 set_product_composition substitui atomicamente o conjunto inteiro', 'PASS',
+              'accessory_count=' || v_accessory_count || ' packaging_count=' || v_packaging_count);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('10', '10.4 set_product_composition substitui atomicamente o conjunto inteiro', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 10.5 set_product_composition: quantity <= 0 é rejeitado (CHECK) e a
+-- composição permanece INALTERADA (rollback atômico da função inteira).
+do $$
+declare
+  v_user_id uuid;
+  v_product_id uuid;
+  v_accessory_id_1 uuid;
+  v_accessory_count integer;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+  select value::uuid into v_accessory_id_1 from zz_fixtures where key = 'accessory_id_1';
+
+  begin
+    perform public.set_product_composition(
+      v_product_id,
+      jsonb_build_array(jsonb_build_object('id', v_accessory_id_1, 'quantity', 0)),
+      '[]'::jsonb,
+      v_user_id
+    );
+    v_status := 'FAIL';
+    v_details := 'quantity=0 deveria ter sido rejeitado pela CHECK (quantity > 0)';
+  exception when check_violation then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  select count(*) into v_accessory_count from public.product_accessories where product_id = v_product_id;
+  if v_status = 'PASS' and v_accessory_count <> 1 then
+    v_status := 'FAIL';
+    v_details := 'composição deveria continuar com 1 linha (estado da 10.4) após falha, encontrado ' || v_accessory_count;
+  end if;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.5 set_product_composition rejeita quantity<=0 e não altera a composição existente', v_status, v_details);
+exception when others then
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.5 set_product_composition rejeita quantity<=0 e não altera a composição existente', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.6 set_product_composition: accessory_id inexistente/inativo é
+-- rejeitado, composição permanece inalterada.
+do $$
+declare
+  v_user_id uuid;
+  v_product_id uuid;
+  v_accessory_id_inactive uuid;
+  v_accessory_count integer;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+  select value::uuid into v_accessory_id_inactive from zz_fixtures where key = 'accessory_id_inactive';
+
+  begin
+    perform public.set_product_composition(
+      v_product_id,
+      jsonb_build_array(jsonb_build_object('id', v_accessory_id_inactive, 'quantity', 1)),
+      '[]'::jsonb,
+      v_user_id
+    );
+    v_status := 'FAIL';
+    v_details := 'accessory inativo deveria ter sido rejeitado';
+  exception when others then
+    if sqlerrm like '%não encontrado ou inativo%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'exceção inesperada: ' || sqlerrm;
+    end if;
+  end;
+
+  select count(*) into v_accessory_count from public.product_accessories where product_id = v_product_id;
+  if v_status = 'PASS' and v_accessory_count <> 1 then
+    v_status := 'FAIL';
+    v_details := 'composição deveria continuar com 1 linha (estado da 10.4) após falha, encontrado ' || v_accessory_count;
+  end if;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.6 set_product_composition rejeita accessory_id inativo/inexistente e não altera a composição', v_status, v_details);
+exception when others then
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.6 set_product_composition rejeita accessory_id inativo/inexistente e não altera a composição', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.7 set_product_composition: id duplicado no mesmo array é rejeitado
+-- (UNIQUE product_id+accessory_id), composição permanece inalterada.
+do $$
+declare
+  v_user_id uuid;
+  v_product_id uuid;
+  v_accessory_id_2 uuid;
+  v_accessory_count integer;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+  select value::uuid into v_accessory_id_2 from zz_fixtures where key = 'accessory_id_2';
+
+  begin
+    perform public.set_product_composition(
+      v_product_id,
+      jsonb_build_array(
+        jsonb_build_object('id', v_accessory_id_2, 'quantity', 1),
+        jsonb_build_object('id', v_accessory_id_2, 'quantity', 2)
+      ),
+      '[]'::jsonb,
+      v_user_id
+    );
+    v_status := 'FAIL';
+    v_details := 'id duplicado no mesmo array deveria ter sido rejeitado (unique_violation)';
+  exception when unique_violation then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  select count(*) into v_accessory_count from public.product_accessories where product_id = v_product_id;
+  if v_status = 'PASS' and v_accessory_count <> 1 then
+    v_status := 'FAIL';
+    v_details := 'composição deveria continuar com 1 linha (estado da 10.4) após falha, encontrado ' || v_accessory_count;
+  end if;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.7 set_product_composition rejeita id duplicado no mesmo array e não altera a composição', v_status, v_details);
+exception when others then
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.7 set_product_composition rejeita id duplicado no mesmo array e não altera a composição', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.8 [SET ROLE real] authenticated + RLS: usuário ativo real enxerga
+-- product_accessories (leitura permitida).
+do $$
+declare
+  v_auth_user_id_text text;
+  v_status text;
+  v_details text;
+  v_count integer;
+begin
+  select value into v_auth_user_id_text from zz_fixtures where key = 'auth_user_id';
+
+  begin
+    if v_auth_user_id_text is null or v_auth_user_id_text = '' then
+      raise exception 'fixture ausente: auth_user_id';
+    end if;
+
+    set local role authenticated;
+    perform set_config(
+      'request.jwt.claims',
+      json_build_object('sub', v_auth_user_id_text, 'role', 'authenticated')::text,
+      true
+    );
+
+    select count(*) into v_count from public.product_accessories;
+
+    if v_count > 0 then
+      v_status := 'PASS';
+      v_details := 'product_accessories visível para usuário real: ' || v_count;
+    else
+      v_status := 'FAIL';
+      v_details := 'esperado count > 0, veio 0';
+    end if;
+  exception when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+  reset "request.jwt.claims";
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.8 [SET ROLE real] authenticated + RLS enxerga product_accessories', v_status, v_details);
+exception when others then
+  reset role;
+  reset "request.jwt.claims";
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.8 [SET ROLE real] authenticated + RLS enxerga product_accessories', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.9 Grants: authenticated só tem SELECT em product_accessories/
+-- product_packaging (sem INSERT/UPDATE/DELETE — escrita só via
+-- set_product_composition).
+do $$
+begin
+  begin
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.9a authenticated TEM SELECT em product_accessories',
+      case when has_table_privilege('authenticated', 'public.product_accessories', 'SELECT') then 'PASS' else 'FAIL' end,
+      'SELECT=' || has_table_privilege('authenticated', 'public.product_accessories', 'SELECT'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.9b authenticated não tem INSERT em product_accessories',
+      case when has_table_privilege('authenticated', 'public.product_accessories', 'INSERT') then 'FAIL' else 'PASS' end,
+      'INSERT=' || has_table_privilege('authenticated', 'public.product_accessories', 'INSERT'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.9c authenticated não tem UPDATE em product_packaging',
+      case when has_table_privilege('authenticated', 'public.product_packaging', 'UPDATE') then 'FAIL' else 'PASS' end,
+      'UPDATE=' || has_table_privilege('authenticated', 'public.product_packaging', 'UPDATE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.9d authenticated não tem DELETE em product_packaging',
+      case when has_table_privilege('authenticated', 'public.product_packaging', 'DELETE') then 'FAIL' else 'PASS' end,
+      'DELETE=' || has_table_privilege('authenticated', 'public.product_packaging', 'DELETE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.9e authenticated TEM UPDATE em accessories.name (coluna não reservada)',
+      case when has_column_privilege('authenticated', 'public.accessories', 'name', 'UPDATE') then 'PASS' else 'FAIL' end,
+      'UPDATE(name)=' || has_column_privilege('authenticated', 'public.accessories', 'name', 'UPDATE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.9f authenticated não tem UPDATE em accessories.current_stock (coluna reservada)',
+      case when has_column_privilege('authenticated', 'public.accessories', 'current_stock', 'UPDATE') then 'FAIL' else 'PASS' end,
+      'UPDATE(current_stock)=' || has_column_privilege('authenticated', 'public.accessories', 'current_stock', 'UPDATE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.9g authenticated não tem UPDATE em packaging.current_stock (coluna reservada)',
+      case when has_column_privilege('authenticated', 'public.packaging', 'current_stock', 'UPDATE') then 'FAIL' else 'PASS' end,
+      'UPDATE(current_stock)=' || has_column_privilege('authenticated', 'public.packaging', 'current_stock', 'UPDATE'));
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('10', '10.9 checagens de privilégio em accessories/packaging/product_accessories/product_packaging', 'FAIL', sqlerrm);
+  end;
 end $$;
 
 -- =============================================================================

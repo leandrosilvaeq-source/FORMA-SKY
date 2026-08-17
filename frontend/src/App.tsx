@@ -5,6 +5,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { LoginPage } from '@/pages/LoginPage'
 import { HomePage } from '@/pages/HomePage'
 import { CustomersPage } from '@/pages/customers/CustomersPage'
+import { ProductsPage } from '@/pages/products/ProductsPage'
 
 function App() {
   return (
@@ -25,6 +26,14 @@ function App() {
           element={
             <ProtectedRoute>
               <CustomersPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/produtos"
+          element={
+            <ProtectedRoute>
+              <ProductsPage />
             </ProtectedRoute>
           }
         />

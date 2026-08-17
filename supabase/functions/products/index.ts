@@ -1,13 +1,21 @@
 // Edge Function: products
 //
 // Rotas:
-//   POST   /products             -> RPC create_product
-//   PATCH  /products/:id/price   -> RPC update_product_price
+//   POST   /products                   -> RPC create_product
+//   PATCH  /products/:id/price         -> RPC update_product_price
+//   PATCH  /products/:id/composition   -> RPC set_product_composition
 //
-// Ambas as RPCs são security definer com EXECUTE concedido só a
-// service_role (supabase/migrations/20260814030351_create_order_business_functions.sql)
-// — só alcançáveis a partir desta Edge Function, nunca diretamente do
-// frontend.
+// As três RPCs são security definer com EXECUTE concedido só a service_role
+// (supabase/migrations/20260814030351_create_order_business_functions.sql,
+// 20260816150500_create_product_composition_function.sql) — só alcançáveis a
+// partir desta Edge Function, nunca diretamente do frontend.
+//
+// composition usa PATCH, não PUT: _shared/cors.ts só libera
+// "GET, POST, PATCH, DELETE, OPTIONS" em Access-Control-Allow-Methods para
+// todas as Edge Functions do Bloco 1 — adicionar PUT exigiria alterar um
+// arquivo compartilhado fora do escopo desta subetapa. PATCH é semanticamente
+// aceitável aqui (já é o verbo usado por .../price) mesmo a operação sendo
+// uma substituição completa, não incremental.
 
 import { handlePreflight } from "../_shared/cors.ts";
 import { jsonResponse, errorResponse } from "../_shared/http.ts";
@@ -44,6 +52,10 @@ Deno.serve(async (req: Request) => {
 
     if (req.method === "PATCH" && route.length === 2 && route[1] === "price") {
       return await handleUpdateProductPrice(req, route[0]);
+    }
+
+    if (req.method === "PATCH" && route.length === 2 && route[1] === "composition") {
+      return await handleUpdateProductComposition(req, route[0]);
     }
 
     throw new NotFoundError("Rota não encontrada.");
@@ -156,4 +168,81 @@ async function handleUpdateProductPrice(req: Request, productId: string): Promis
   if (error) throw mapPgError(error);
 
   return jsonResponse(req, { price_history_id: data }, 200);
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /products/:id/composition -> set_product_composition(p_product_id,
+//   p_accessories, p_packaging, p_changed_by)
+//
+// Substituição completa: accessories/packaging ausentes ou null no corpo
+// equivalem a "nenhum item desse lado" (composição vazia daquele tipo),
+// nunca a "manter o que já existia" — não há PATCH incremental nesta rota,
+// mesmo o verbo HTTP sendo PATCH (ver nota no topo do arquivo).
+// ---------------------------------------------------------------------------
+async function handleUpdateProductComposition(req: Request, productId: string): Promise<Response> {
+  const operator = await resolveOperator(req);
+
+  if (!isUuid(productId)) {
+    throw new ValidationError("Identificador de produto inválido na rota.");
+  }
+
+  const rawBody = await req.text();
+  rejectIdentityFields(rawBody);
+  const body = parseJsonBody(rawBody);
+
+  const accessories = validateCompositionItems(body.accessories, "accessories");
+  const packaging = validateCompositionItems(body.packaging, "packaging");
+
+  const admin = getAdminClient();
+  const { error } = await admin.rpc("set_product_composition", {
+    p_product_id: productId,
+    p_accessories: accessories,
+    p_packaging: packaging,
+    p_changed_by: operator.userId,
+  });
+
+  if (error) throw mapPgError(error);
+
+  return jsonResponse(req, { success: true }, 200);
+}
+
+// ---------------------------------------------------------------------------
+// Validador local de um array de itens de composição (accessories/packaging)
+// — {id: uuid, quantity: inteiro > 0}, sem id repetido no mesmo array. Não
+// promovido a _shared/validate.ts nesta etapa: mesmo critério já usado em
+// orders/index.ts para validadores específicos de uma única rota.
+// ---------------------------------------------------------------------------
+function validateCompositionItems(
+  raw: unknown,
+  field: string,
+): Array<{ id: string; quantity: number }> {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw new ValidationError(`Campo inválido: ${field} deve ser um array.`);
+  }
+
+  const seen = new Set<string>();
+  return raw.map((entry, index) => {
+    const prefix = `${field}[${index}]`;
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new ValidationError(`Campo inválido: ${prefix} deve ser um objeto.`);
+    }
+    const record = entry as Record<string, unknown>;
+
+    if (!isUuid(record.id)) {
+      throw new ValidationError(`Campo inválido: ${prefix}.id deve ser um UUID.`);
+    }
+    const id = record.id as string;
+    if (seen.has(id)) {
+      throw new ValidationError(`Campo inválido: ${field} não pode repetir o mesmo id (${id}).`);
+    }
+    seen.add(id);
+
+    const quantity = requireNumber(record.quantity, `${prefix}.quantity`, { min: 1 });
+    if (!Number.isInteger(quantity)) {
+      throw new ValidationError(`Campo inválido: ${prefix}.quantity deve ser um número inteiro.`);
+    }
+
+    return { id, quantity };
+  });
 }
