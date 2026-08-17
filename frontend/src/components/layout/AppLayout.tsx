@@ -18,6 +18,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <Link to="/produtos" className="text-muted-foreground hover:text-foreground text-sm">
               Produtos
             </Link>
+            <Link to="/empresas" className="text-muted-foreground hover:text-foreground text-sm">
+              Empresas
+            </Link>
           </nav>
         </div>
         <div className="flex items-center gap-3">

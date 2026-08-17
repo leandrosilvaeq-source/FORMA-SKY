@@ -6,6 +6,7 @@ import { LoginPage } from '@/pages/LoginPage'
 import { HomePage } from '@/pages/HomePage'
 import { CustomersPage } from '@/pages/customers/CustomersPage'
 import { ProductsPage } from '@/pages/products/ProductsPage'
+import { CompaniesPage } from '@/pages/companies/CompaniesPage'
 
 function App() {
   return (
@@ -34,6 +35,14 @@ function App() {
           element={
             <ProtectedRoute>
               <ProductsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/empresas"
+          element={
+            <ProtectedRoute>
+              <CompaniesPage />
             </ProtectedRoute>
           }
         />
