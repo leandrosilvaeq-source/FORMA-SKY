@@ -7,6 +7,7 @@ import { HomePage } from '@/pages/HomePage'
 import { CustomersPage } from '@/pages/customers/CustomersPage'
 import { ProductsPage } from '@/pages/products/ProductsPage'
 import { CompaniesPage } from '@/pages/companies/CompaniesPage'
+import { OrdersPage } from '@/pages/orders/OrdersPage'
 
 function App() {
   return (
@@ -43,6 +44,14 @@ function App() {
           element={
             <ProtectedRoute>
               <CompaniesPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/pedidos"
+          element={
+            <ProtectedRoute>
+              <OrdersPage />
             </ProtectedRoute>
           }
         />
