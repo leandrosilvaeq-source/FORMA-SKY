@@ -7,6 +7,7 @@ import { ProductPriceForm } from '@/components/products/ProductPriceForm'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useAccessories } from '@/hooks/useAccessories'
 import { usePackaging } from '@/hooks/usePackaging'
@@ -27,13 +28,14 @@ function formatPrice(value: number): string {
 }
 
 export function ProductsPage() {
-  const { products, isLoading, error, refetch, create, changePrice } = useProducts()
+  const { products, isLoading, error, refetch, create, changePrice, update } = useProducts()
   const { accessories } = useAccessories()
   const { packaging } = usePackaging()
 
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [pendingToggleId, setPendingToggleId] = useState<string | null>(null)
 
   const [priceDialogProduct, setPriceDialogProduct] = useState<Product | null>(null)
   const [isSubmittingPrice, setIsSubmittingPrice] = useState(false)
@@ -47,6 +49,17 @@ export function ProductsPage() {
   function openCreateDialog() {
     setCreateError(null)
     setIsCreateDialogOpen(true)
+  }
+
+  async function handleToggleActive(product: Product) {
+    setPendingToggleId(product.id)
+    try {
+      await update(product.id, { is_active: !product.is_active })
+    } catch (err) {
+      toast.error(toErrorMessage(err))
+    } finally {
+      setPendingToggleId(null)
+    }
   }
 
   function openPriceDialog(product: Product) {
@@ -121,7 +134,12 @@ export function ProductsPage() {
     <AppLayout>
       <div className="flex items-center justify-between">
         <h1 className="font-heading text-2xl font-medium">Produtos</h1>
-        <Button onClick={openCreateDialog}>Novo produto</Button>
+        <Button
+          onClick={openCreateDialog}
+          className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
+        >
+          Novo produto
+        </Button>
       </div>
 
       {error && (
@@ -143,29 +161,56 @@ export function ProductsPage() {
         ) : products.length === 0 ? (
           <p className="text-muted-foreground text-sm">Nenhum produto cadastrado.</p>
         ) : (
-          <Table>
+          <Table className="table-fixed text-[16px]">
             <TableHeader>
               <TableRow>
-                <TableHead>Nome</TableHead>
-                <TableHead>Categoria</TableHead>
-                <TableHead>Preço</TableHead>
-                <TableHead>Ativo</TableHead>
-                <TableHead />
+                <TableHead className="h-auto w-[30%] py-2 whitespace-normal">Nome</TableHead>
+                <TableHead className="h-auto w-[20%] py-2 whitespace-normal">Categoria</TableHead>
+                <TableHead className="h-auto w-[15%] py-2 whitespace-normal">Preço</TableHead>
+                <TableHead className="h-auto w-[10%] py-2 whitespace-normal">Ativo</TableHead>
+                <TableHead className="h-auto w-[25%] py-2" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {products.map((product) => (
-                <TableRow key={product.id}>
-                  <TableCell>{product.name}</TableCell>
-                  <TableCell>{product.category ?? '—'}</TableCell>
+                <TableRow
+                  key={product.id}
+                  // Mesmo zebra striping com a paleta Forma já aprovado em
+                  // Clientes — ver frontend/src/pages/customers/CustomersPage.tsx.
+                  className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft"
+                >
+                  <TableCell className="truncate" title={product.name}>
+                    {product.name}
+                  </TableCell>
+                  <TableCell className="truncate" title={product.category ?? undefined}>
+                    {product.category ?? '—'}
+                  </TableCell>
                   <TableCell>{formatPrice(product.default_price)}</TableCell>
-                  <TableCell>{product.is_active ? 'Sim' : 'Não'}</TableCell>
                   <TableCell>
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={() => openPriceDialog(product)}>
+                    <Switch
+                      checked={product.is_active}
+                      disabled={pendingToggleId === product.id}
+                      onCheckedChange={() => void handleToggleActive(product)}
+                      aria-label={`${product.is_active ? 'Desativar' : 'Ativar'} ${product.name}`}
+                      className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openPriceDialog(product)}
+                        className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                      >
                         Alterar preço
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => openCompositionDialog(product)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openCompositionDialog(product)}
+                        className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                      >
                         Composição
                       </Button>
                     </div>

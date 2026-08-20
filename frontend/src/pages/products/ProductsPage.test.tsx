@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
@@ -76,12 +76,14 @@ function renderPage() {
 describe('ProductsPage', () => {
   let createMock: ReturnType<typeof vi.fn>
   let changePriceMock: ReturnType<typeof vi.fn>
+  let updateMock: ReturnType<typeof vi.fn>
   let refetchMock: ReturnType<typeof vi.fn>
   let saveCompositionMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     createMock = vi.fn().mockResolvedValue(undefined)
     changePriceMock = vi.fn().mockResolvedValue(undefined)
+    updateMock = vi.fn().mockResolvedValue({ ...product, is_active: false })
     refetchMock = vi.fn()
     saveCompositionMock = vi.fn().mockResolvedValue(undefined)
 
@@ -93,6 +95,7 @@ describe('ProductsPage', () => {
       refetch: refetchMock,
       create: createMock,
       changePrice: changePriceMock,
+      update: updateMock,
     })
     useAccessoriesMock.mockReturnValue({ accessories: [accessory], isLoading: false, error: null, refetch: vi.fn() })
     usePackagingMock.mockReturnValue({ packaging: [packagingItem], isLoading: false, error: null, refetch: vi.fn() })
@@ -109,13 +112,129 @@ describe('ProductsPage', () => {
     toastMock.error.mockReset()
   })
 
-  it('renders the product list with name, category, price and active status', () => {
+  it('renders the product list with name, category, price and an active Switch', () => {
     renderPage()
 
     expect(screen.getByText('Chaveiro')).toBeInTheDocument()
     expect(screen.getByText('Decoração')).toBeInTheDocument()
     expect(screen.getByText(/R\$\s*10,00/)).toBeInTheDocument()
-    expect(screen.getByText('Sim')).toBeInTheDocument()
+    expect(screen.queryByText('Sim')).not.toBeInTheDocument()
+    expect(screen.queryByText('Não')).not.toBeInTheDocument()
+    const toggle = screen.getByRole('switch', { name: 'Desativar Chaveiro' })
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+  })
+
+  describe('Switch de ativo/inativo na listagem', () => {
+    it('produto inativo é renderizado com o Switch desmarcado, com nome acessível de ativar', () => {
+      useProductsMock.mockReturnValue({
+        products: [{ ...product, is_active: false }],
+        isLoading: false,
+        error: null,
+        refetch: refetchMock,
+        create: createMock,
+        changePrice: changePriceMock,
+        update: updateMock,
+      })
+      renderPage()
+
+      const toggle = screen.getByRole('switch', { name: 'Ativar Chaveiro' })
+      expect(toggle).toHaveAttribute('aria-checked', 'false')
+    })
+
+    it('clicar no Switch de um produto ativo chama update com o id correto e is_active: false', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('switch', { name: 'Desativar Chaveiro' }))
+
+      await waitFor(() => expect(updateMock).toHaveBeenCalledWith('1', { is_active: false }))
+    })
+
+    it('clicar no Switch de um produto inativo chama update com o id correto e is_active: true', async () => {
+      useProductsMock.mockReturnValue({
+        products: [{ ...product, is_active: false }],
+        isLoading: false,
+        error: null,
+        refetch: refetchMock,
+        create: createMock,
+        changePrice: changePriceMock,
+        update: updateMock,
+      })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('switch', { name: 'Ativar Chaveiro' }))
+
+      await waitFor(() => expect(updateMock).toHaveBeenCalledWith('1', { is_active: true }))
+    })
+
+    it('bloqueia o Switch enquanto a mutation está pendente', async () => {
+      let resolveUpdate: (value: typeof product) => void = () => {}
+      updateMock.mockReturnValue(
+        new Promise((resolve) => {
+          resolveUpdate = resolve
+        }),
+      )
+      const user = userEvent.setup()
+      renderPage()
+
+      const toggle = screen.getByRole('switch', { name: 'Desativar Chaveiro' })
+      await user.click(toggle)
+
+      expect(toggle).toHaveAttribute('aria-disabled', 'true')
+
+      resolveUpdate({ ...product, is_active: false })
+      await waitFor(() => expect(toggle).not.toHaveAttribute('aria-disabled', 'true'))
+    })
+
+    it('mostra um toast de erro quando a mutation falha, sem travar o Switch', async () => {
+      updateMock.mockRejectedValue(new ApiError('database', 500, 'Falha ao atualizar produto.'))
+      const user = userEvent.setup()
+      renderPage()
+
+      const toggle = screen.getByRole('switch', { name: 'Desativar Chaveiro' })
+      await user.click(toggle)
+
+      await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Falha ao atualizar produto.'))
+      expect(toggle).not.toHaveAttribute('aria-disabled', 'true')
+    })
+
+    it('preserva as ações "Alterar preço" e "Composição" na mesma linha do Switch', () => {
+      renderPage()
+
+      const row = screen.getByRole('row', { name: /chaveiro/i })
+      expect(within(row).getByRole('switch', { name: 'Desativar Chaveiro' })).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: /alterar preço/i })).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: /^composição$/i })).toBeInTheDocument()
+    })
+  })
+
+  it('zebra striping: roxo claro nas linhas ímpares, branco nas pares, só nas linhas de dados do tbody', () => {
+    const secondProduct = { ...product, id: '2', name: 'Vaso' }
+    useProductsMock.mockReturnValue({
+      products: [product, secondProduct],
+      isLoading: false,
+      error: null,
+      refetch: refetchMock,
+      create: createMock,
+      changePrice: changePriceMock,
+      update: updateMock,
+    })
+    renderPage()
+
+    const dataRows = screen.getAllByRole('row').filter((row) => within(row).queryAllByRole('cell').length > 0)
+    expect(dataRows).toHaveLength(2)
+    for (const row of dataRows) {
+      expect(row).toHaveClass('odd:bg-brand-primary-soft/50')
+      expect(row).toHaveClass('even:bg-white')
+      expect(row).toHaveClass('hover:bg-brand-primary-soft')
+    }
+
+    const headerRow = screen
+      .getAllByRole('row')
+      .find((row) => within(row).queryAllByRole('columnheader').length > 0)
+    expect(headerRow).not.toHaveClass('odd:bg-brand-primary-soft/50')
+    expect(headerRow).not.toHaveClass('even:bg-white')
   })
 
   it('opens the dialog, submits a new product and shows a success toast', async () => {
@@ -253,6 +372,7 @@ describe('ProductsPage', () => {
       refetch: refetchMock,
       create: createMock,
       changePrice: changePriceMock,
+      update: updateMock,
     })
     const user = userEvent.setup()
     renderPage()
@@ -260,5 +380,37 @@ describe('ProductsPage', () => {
     expect(screen.getByText('Falha ao carregar produtos.')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /tentar novamente/i }))
     expect(refetchMock).toHaveBeenCalled()
+  })
+
+  it('shows the empty state when there are no products', () => {
+    useProductsMock.mockReturnValue({
+      products: [],
+      isLoading: false,
+      error: null,
+      refetch: refetchMock,
+      create: createMock,
+      changePrice: changePriceMock,
+      update: updateMock,
+    })
+    renderPage()
+
+    expect(screen.getByText('Nenhum produto cadastrado.')).toBeInTheDocument()
+  })
+
+  it('shows a loading skeleton while products are loading, instead of the table or the empty state', () => {
+    useProductsMock.mockReturnValue({
+      products: [],
+      isLoading: true,
+      error: null,
+      refetch: refetchMock,
+      create: createMock,
+      changePrice: changePriceMock,
+      update: updateMock,
+    })
+    renderPage()
+
+    expect(document.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Nenhum produto cadastrado.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
   })
 })

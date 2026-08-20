@@ -2,16 +2,18 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/errors'
 
-const { listProductsMock, createProductMock, updateProductPriceMock } = vi.hoisted(() => ({
+const { listProductsMock, createProductMock, updateProductPriceMock, updateProductMock } = vi.hoisted(() => ({
   listProductsMock: vi.fn(),
   createProductMock: vi.fn(),
   updateProductPriceMock: vi.fn(),
+  updateProductMock: vi.fn(),
 }))
 
 vi.mock('@/lib/api/products', () => ({
   listProducts: listProductsMock,
   createProduct: createProductMock,
   updateProductPrice: updateProductPriceMock,
+  updateProduct: updateProductMock,
 }))
 
 import { useProducts } from './useProducts'
@@ -39,6 +41,7 @@ describe('useProducts', () => {
     listProductsMock.mockReset()
     createProductMock.mockReset()
     updateProductPriceMock.mockReset()
+    updateProductMock.mockReset()
   })
 
   it('loads the product list on mount', async () => {
@@ -96,5 +99,22 @@ describe('useProducts', () => {
     expect(updateProductPriceMock).toHaveBeenCalledWith('1', { new_price: 15 })
     await waitFor(() => expect(listProductsMock).toHaveBeenCalledTimes(2))
     expect(result.current.products).toEqual([repriced])
+  })
+
+  it('update() calls the API and replaces the item locally, without a full refetch', async () => {
+    listProductsMock.mockResolvedValueOnce([productA, productB])
+    const deactivated = { ...productA, is_active: false }
+    updateProductMock.mockResolvedValue(deactivated)
+
+    const { result } = renderHook(() => useProducts())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    await act(async () => {
+      await result.current.update('1', { is_active: false })
+    })
+
+    expect(updateProductMock).toHaveBeenCalledWith('1', { is_active: false })
+    expect(listProductsMock).toHaveBeenCalledTimes(1)
+    expect(result.current.products).toEqual([deactivated, productB])
   })
 })

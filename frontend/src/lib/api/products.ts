@@ -1,9 +1,11 @@
 // Leitura direta via supabase-js: public.products concede SELECT a
 // authenticated (supabase/migrations/20260813205942_create_products_table.sql).
-// Escrita via Edge Function `products` (supabase/functions/products/index.ts):
-// default_price é coluna controlada (sem UPDATE direto concedido a
-// authenticated), então criação e alteração de preço sempre passam pelas
-// RPCs create_product/update_product_price.
+// Escrita: default_price é coluna controlada (sem UPDATE direto concedido a
+// authenticated), então criação e alteração de preço sempre passam pela
+// Edge Function `products` (RPCs create_product/update_product_price). Já
+// is_active está na lista de colunas com GRANT UPDATE direto a authenticated
+// (mesma migration, RLS "Active users can update products"), então
+// ativar/desativar produto usa supabase-js direto, igual a customers.
 
 import { supabase } from '@/lib/supabase'
 import { mapSupabaseError } from './errors'
@@ -28,11 +30,22 @@ export interface UpdateProductPriceInput {
   effective_from?: string
 }
 
+export interface UpdateProductInput {
+  is_active?: boolean
+}
+
 export async function listProducts(): Promise<Product[]> {
   const { data, error } = await supabase.from('products').select('*').order('name', { ascending: true })
 
   if (error) throw mapSupabaseError(error)
   return data as Product[]
+}
+
+export async function updateProduct(id: string, input: UpdateProductInput): Promise<Product> {
+  const { data, error } = await supabase.from('products').update(input).eq('id', id).select().single()
+
+  if (error) throw mapSupabaseError(error)
+  return data as Product
 }
 
 // POST /products -> create_product (supabase/functions/products/index.ts).

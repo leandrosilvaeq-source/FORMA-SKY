@@ -160,12 +160,11 @@ export function CustomersPage() {
                 return (
                   <TableRow
                     key={customer.id}
-                    // Zebra striping sutil com a paleta Forma: linha par usa
-                    // --brand-primary-soft bem diluído (/50), ímpar fica no
-                    // fundo neutro padrão, hover usa o mesmo tom sem diluir
-                    // (mais perceptível, ainda dentro da paleta, nunca roxo
-                    // forte/gradiente).
-                    className="odd:bg-background even:bg-brand-primary-soft/50 hover:bg-brand-primary-soft"
+                    // Zebra striping com a paleta Forma: linha ímpar usa
+                    // --brand-primary-soft diluído (/50), par fica branca,
+                    // hover usa o mesmo tom sem diluir (mais perceptível,
+                    // ainda dentro da paleta, nunca roxo forte/gradiente).
+                    className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft"
                   >
                     <TableCell className="truncate" title={customer.name}>
                       {customer.name}

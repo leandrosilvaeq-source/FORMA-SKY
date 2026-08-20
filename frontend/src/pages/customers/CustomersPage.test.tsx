@@ -125,6 +125,33 @@ describe('CustomersPage', () => {
     expect(within(cells[6]).getByRole('button', { name: /editar/i })).toBeInTheDocument()
   })
 
+  it('zebra striping: roxo claro nas linhas ímpares, branco nas pares, só nas linhas de dados do tbody', () => {
+    const secondCustomer: Customer = { ...customer, id: '2', name: 'Bruno' }
+    useCustomersMock.mockReturnValue({
+      customers: [customer, secondCustomer],
+      isLoading: false,
+      error: null,
+      refetch: refetchMock,
+      create: createMock,
+      update: updateMock,
+    })
+    renderPage()
+
+    const dataRows = screen.getAllByRole('row').filter((row) => within(row).queryAllByRole('cell').length > 0)
+    expect(dataRows).toHaveLength(2)
+    for (const row of dataRows) {
+      expect(row).toHaveClass('odd:bg-brand-primary-soft/50')
+      expect(row).toHaveClass('even:bg-white')
+      expect(row).toHaveClass('hover:bg-brand-primary-soft')
+    }
+
+    const headerRow = screen
+      .getAllByRole('row')
+      .find((row) => within(row).queryAllByRole('columnheader').length > 0)
+    expect(headerRow).not.toHaveClass('odd:bg-brand-primary-soft/50')
+    expect(headerRow).not.toHaveClass('even:bg-white')
+  })
+
   it('clicking "Editar" opens the dialog pre-filled for that customer', async () => {
     const user = userEvent.setup()
     renderPage()

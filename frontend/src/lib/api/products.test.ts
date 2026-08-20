@@ -6,7 +6,7 @@ const { callEdgeFunctionMock } = vi.hoisted(() => ({ callEdgeFunctionMock: vi.fn
 vi.mock('@/lib/supabase', () => ({ supabase: { from: fromMock } }))
 vi.mock('./edgeFunctionClient', () => ({ callEdgeFunction: callEdgeFunctionMock }))
 
-import { createProduct, listProducts, updateProductPrice } from './products'
+import { createProduct, listProducts, updateProduct, updateProductPrice } from './products'
 
 interface QueryResult {
   data: unknown
@@ -18,6 +18,9 @@ function chainableResult(result: QueryResult) {
   const chain = () => builder
   builder.select = vi.fn(chain)
   builder.order = vi.fn(chain)
+  builder.update = vi.fn(chain)
+  builder.eq = vi.fn(chain)
+  builder.single = vi.fn(() => Promise.resolve(result))
   builder.then = (onFulfilled: (value: QueryResult) => unknown) => Promise.resolve(result).then(onFulfilled)
   return builder
 }
@@ -61,5 +64,19 @@ describe('products api', () => {
       new_price: 20,
     })
     expect(result).toEqual({ price_history_id: 'ph1' })
+  })
+
+  it('updateProduct writes directly via supabase-js, not the Edge Function', async () => {
+    const updated = { id: 'prod-1', name: 'Chaveiro', is_active: false }
+    const builder = chainableResult({ data: updated, error: null })
+    fromMock.mockReturnValue(builder)
+
+    const result = await updateProduct('prod-1', { is_active: false })
+
+    expect(fromMock).toHaveBeenCalledWith('products')
+    expect(builder.update).toHaveBeenCalledWith({ is_active: false })
+    expect(builder.eq).toHaveBeenCalledWith('id', 'prod-1')
+    expect(callEdgeFunctionMock).not.toHaveBeenCalled()
+    expect(result).toEqual(updated)
   })
 })

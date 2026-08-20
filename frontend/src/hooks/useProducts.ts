@@ -2,8 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   createProduct,
   listProducts,
+  updateProduct,
   updateProductPrice,
   type CreateProductInput,
+  type UpdateProductInput,
   type UpdateProductPriceInput,
 } from '@/lib/api/products'
 import { ApiError } from '@/lib/api/errors'
@@ -16,6 +18,7 @@ interface UseProductsResult {
   refetch: () => void
   create: (input: CreateProductInput) => Promise<void>
   changePrice: (productId: string, input: UpdateProductPriceInput) => Promise<void>
+  update: (productId: string, input: UpdateProductInput) => Promise<Product>
 }
 
 function toApiError(err: unknown): ApiError {
@@ -77,5 +80,13 @@ export function useProducts(): UseProductsResult {
     [refetch],
   )
 
-  return { products, isLoading, error, refetch, create, changePrice }
+  // updateProduct devolve a linha completa (supabase-js direto, sem RPC) —
+  // igual a customers, substituímos o item local em vez de refazer a listagem.
+  const update = useCallback(async (productId: string, input: UpdateProductInput) => {
+    const updated = await updateProduct(productId, input)
+    setProducts((current) => current.map((product) => (product.id === productId ? updated : product)))
+    return updated
+  }, [])
+
+  return { products, isLoading, error, refetch, create, changePrice, update }
 }
