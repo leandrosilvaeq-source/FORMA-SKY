@@ -6,7 +6,7 @@ const { callEdgeFunctionMock } = vi.hoisted(() => ({ callEdgeFunctionMock: vi.fn
 vi.mock('@/lib/supabase', () => ({ supabase: { from: fromMock } }))
 vi.mock('./edgeFunctionClient', () => ({ callEdgeFunction: callEdgeFunctionMock }))
 
-import { createProduct, listProducts, updateProduct, updateProductPrice } from './products'
+import { createProduct, getProduct, listProducts, updateProduct, updateProductPrice } from './products'
 
 interface QueryResult {
   data: unknown
@@ -21,6 +21,7 @@ function chainableResult(result: QueryResult) {
   builder.update = vi.fn(chain)
   builder.eq = vi.fn(chain)
   builder.single = vi.fn(() => Promise.resolve(result))
+  builder.maybeSingle = vi.fn(() => Promise.resolve(result))
   builder.then = (onFulfilled: (value: QueryResult) => unknown) => Promise.resolve(result).then(onFulfilled)
   return builder
 }
@@ -78,5 +79,26 @@ describe('products api', () => {
     expect(builder.eq).toHaveBeenCalledWith('id', 'prod-1')
     expect(callEdgeFunctionMock).not.toHaveBeenCalled()
     expect(result).toEqual(updated)
+  })
+
+  it('getProduct reads directly from supabase-js by id and returns the row', async () => {
+    const row = { id: 'prod-1', name: 'Chaveiro' }
+    const builder = chainableResult({ data: row, error: null })
+    fromMock.mockReturnValue(builder)
+
+    const result = await getProduct('prod-1')
+
+    expect(fromMock).toHaveBeenCalledWith('products')
+    expect(builder.eq).toHaveBeenCalledWith('id', 'prod-1')
+    expect(callEdgeFunctionMock).not.toHaveBeenCalled()
+    expect(result).toEqual(row)
+  })
+
+  it('getProduct returns null (not an error) when no row matches the id', async () => {
+    fromMock.mockReturnValue(chainableResult({ data: null, error: null }))
+
+    const result = await getProduct('does-not-exist')
+
+    expect(result).toBeNull()
   })
 })

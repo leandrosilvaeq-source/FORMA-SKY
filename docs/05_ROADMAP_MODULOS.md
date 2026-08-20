@@ -140,9 +140,23 @@ implementação. Exceção pontual: o Módulo 1 antecipou 2 das tabelas do Módu
 
 ---
 
-# 6. Histórico de atualizações deste roadmap
+# 6. Gatilhos de retorno pendentes
+
+Pendências que devem **pausar o roadmap corrente** quando sua condição de disparo for
+satisfeita, para retomar um trabalho já entregue parcialmente em outro módulo. Nenhum item
+desta seção conta como concluído nem altera os percentuais das seções 2/3/5 — é só um lembrete
+formal de retomada.
+
+| Gatilho | Condição de disparo | Ação ao disparar | Status |
+| --- | --- | --- | --- |
+| Ficha Técnica do Produto — detalhamento completo de custos | Estrutura oficial de custos de material, energia, máquina, perdas, MDO e margem estiver implementada no banco (Módulo 4 — Precificação e Rentabilidade, Fase 2/3 — hoje só especificada em `03_MODELO_BANCO_DADOS.md` §18.1 `pricing_calculations` e §10.1 `printers`/§12.1 `filament_types`, sem nenhuma migration) | Pausar o roadmap corrente e retornar à Ficha Técnica do Produto (Módulo 1, `frontend/src/pages/products/ProductDetailPage.tsx`) para implementar o detalhamento completo de custos, custo total e margem — hoje limitada a Identificação e Produção (Incremento 1) | ⏳ Pendente — não disparado |
+
+---
+
+# 7. Histórico de atualizações deste roadmap
 
 | Data | Alteração |
 | --- | --- |
 | 2026-08-16 | Criação do roadmap. Auditoria confirma Módulo 0 quase operacional (~86%) e Módulo 1 com backend 100% pronto porém não operacional (~43%, frontend 0%). Módulos 2–10 recalculados distinguindo "especificado" de "implementado" (Fase 2 parcial = 50% quando só há especificação em doc `03` sem migrations); nenhum está operacional. |
 | 2026-08-16 | Módulo 1 Fase 4: telas de Clientes e Produtos (listar/criar/alterar preço) implementadas. Composição padrão de produtos adicionada: Migrations 18–19 antecipam `accessories`/`packaging` (cadastro mestre completo, sem automação de estoque) e criam `product_accessories`/`product_packaging` + `set_product_composition`; `PATCH /products/:id/composition` implementado em `products`, **deployado e validado por smoke test real** (frontend → Edge Function → RPC → banco → leitura de volta). Módulo 1 macro sobe para ~50% (Fase 4 parcial). Módulo 3 Fase 2 ganha nota: 2 de suas tabelas já existem, mas nenhuma regra de estoque foi implementada. |
+| 2026-08-20 | Módulo 1 Fase 4: Ficha Técnica do Produto (Incremento 1) implementada — rota `/produtos/:productId`, busca individual de produto, Identificação e Produção (peso/tempo do plate + estimativa por unidade), sem custos. Adicionada seção 6 "Gatilhos de retorno pendentes" registrando a pausa condicionada do roadmap para retomar a Ficha Técnica com custo total/margem quando a estrutura oficial de custos (doc `03` §18.1 `pricing_calculations`) for implementada — nenhum percentual macro alterado por esta entrada. |

@@ -124,6 +124,44 @@ describe('ProductsPage', () => {
     expect(toggle).toHaveAttribute('aria-checked', 'true')
   })
 
+  describe('nome do produto como link para a Ficha Técnica', () => {
+    it('o nome do produto é um link com o href correto', () => {
+      renderPage()
+
+      const nameLink = screen.getByRole('link', { name: 'Chaveiro' })
+      expect(nameLink).toHaveAttribute('href', '/produtos/1')
+    })
+
+    it('preserva Switch, "Alterar preço" e "Acessórios e Embalagem" na mesma linha do link', () => {
+      renderPage()
+
+      const row = screen.getByRole('row', { name: /chaveiro/i })
+      expect(within(row).getByRole('link', { name: 'Chaveiro' })).toBeInTheDocument()
+      expect(within(row).getByRole('switch', { name: 'Desativar Chaveiro' })).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: /alterar preço/i })).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: /^acessórios e embalagem$/i })).toBeInTheDocument()
+    })
+
+    it('clicar no nome não aciona o Switch nem outra ação da linha', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('link', { name: 'Chaveiro' }))
+
+      expect(updateMock).not.toHaveBeenCalled()
+      expect(changePriceMock).not.toHaveBeenCalled()
+    })
+
+    it('preserva a classe de zebra striping/hover da linha com o link', () => {
+      renderPage()
+
+      const row = screen.getByRole('row', { name: /chaveiro/i })
+      expect(row).toHaveClass('odd:bg-brand-primary-soft/50')
+      expect(row).toHaveClass('even:bg-white')
+      expect(row).toHaveClass('hover:bg-brand-primary-soft')
+    })
+  })
+
   describe('Switch de ativo/inativo na listagem', () => {
     it('produto inativo é renderizado com o Switch desmarcado, com nome acessível de ativar', () => {
       useProductsMock.mockReturnValue({
@@ -199,13 +237,13 @@ describe('ProductsPage', () => {
       expect(toggle).not.toHaveAttribute('aria-disabled', 'true')
     })
 
-    it('preserva as ações "Alterar preço" e "Composição" na mesma linha do Switch', () => {
+    it('preserva as ações "Alterar preço" e "Acessórios e Embalagem" na mesma linha do Switch', () => {
       renderPage()
 
       const row = screen.getByRole('row', { name: /chaveiro/i })
       expect(within(row).getByRole('switch', { name: 'Desativar Chaveiro' })).toBeInTheDocument()
       expect(within(row).getByRole('button', { name: /alterar preço/i })).toBeInTheDocument()
-      expect(within(row).getByRole('button', { name: /^composição$/i })).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: /^acessórios e embalagem$/i })).toBeInTheDocument()
     })
   })
 
@@ -271,21 +309,41 @@ describe('ProductsPage', () => {
     const user = userEvent.setup()
     renderPage()
 
+    // Campo "Novo preço" é um input bancário: os dígitos digitados
+    // preenchem da direita para a esquerda, os dois últimos são centavos —
+    // "1500" -> R$ 15,00 (ver ProductPriceForm.test.tsx para a cobertura
+    // completa do comportamento de digitação/Backspace/colagem).
     await user.click(screen.getByRole('button', { name: /alterar preço/i }))
-    await user.type(screen.getByLabelText(/novo preço/i), '15')
+    await user.type(screen.getByLabelText(/novo preço/i), '1500')
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
     await waitFor(() => expect(changePriceMock).toHaveBeenCalledWith('1', { new_price: 15, reason: null }))
     expect(toastMock.success).toHaveBeenCalledWith('Preço atualizado.')
   })
 
+  it('price dialog identifies the product by name and accepts a pasted comma-formatted amount', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /alterar preço/i }))
+
+    expect(screen.getByText('"Chaveiro"')).toBeInTheDocument()
+
+    const priceInput = screen.getByLabelText(/novo preço/i)
+    await user.click(priceInput)
+    await user.paste('15,50')
+    await user.click(screen.getByRole('button', { name: /^salvar$/i }))
+
+    await waitFor(() => expect(changePriceMock).toHaveBeenCalledWith('1', { new_price: 15.5, reason: null }))
+  })
+
   it('opens the composition dialog pré-preenchido and saves the replaced composition', async () => {
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(screen.getByRole('button', { name: /^composição$/i }))
+    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
 
-    expect(screen.getByDisplayValue('2')).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Quantidade do acessório' })).toHaveTextContent('2')
 
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
@@ -295,7 +353,7 @@ describe('ProductsPage', () => {
         packaging: [],
       }),
     )
-    expect(toastMock.success).toHaveBeenCalledWith('Composição atualizada.')
+    expect(toastMock.success).toHaveBeenCalledWith('Acessórios e embalagem atualizados.')
   })
 
   it('does not render the composition form while the composition is still loading', async () => {
@@ -311,7 +369,7 @@ describe('ProductsPage', () => {
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(screen.getByRole('button', { name: /^composição$/i }))
+    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
 
     expect(screen.queryByRole('button', { name: /^salvar$/i })).not.toBeInTheDocument()
     expect(screen.queryByText(/nenhum acessório na composição/i)).not.toBeInTheDocument()
@@ -331,7 +389,7 @@ describe('ProductsPage', () => {
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(screen.getByRole('button', { name: /^composição$/i }))
+    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
 
     expect(screen.getByText('Falha ao carregar composição.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^salvar$/i })).not.toBeInTheDocument()
@@ -353,7 +411,7 @@ describe('ProductsPage', () => {
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(screen.getByRole('button', { name: /^composição$/i }))
+    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
 
     expect(screen.getByText('Nenhum acessório na composição.')).toBeInTheDocument()
     expect(screen.getByText('Nenhuma embalagem na composição.')).toBeInTheDocument()
@@ -361,7 +419,7 @@ describe('ProductsPage', () => {
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
     await waitFor(() => expect(saveCompositionMock).toHaveBeenCalledWith({ accessories: [], packaging: [] }))
-    expect(toastMock.success).toHaveBeenCalledWith('Composição atualizada.')
+    expect(toastMock.success).toHaveBeenCalledWith('Acessórios e embalagem atualizados.')
   })
 
   it('shows an inline error with a retry action when the list fails to load', async () => {

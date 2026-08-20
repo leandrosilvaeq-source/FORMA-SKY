@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { ProductCompositionForm } from '@/components/products/ProductCompositionForm'
@@ -26,6 +27,9 @@ function toErrorMessage(err: unknown): string {
 function formatPrice(value: number): string {
   return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
+
+const PRODUCT_NAME_LINK_CLASSNAME =
+  'text-brand-primary hover:text-brand-primary-dark focus-visible:ring-brand-accent rounded outline-none hover:underline focus-visible:ring-2'
 
 export function ProductsPage() {
   const { products, isLoading, error, refetch, create, changePrice, update } = useProducts()
@@ -116,7 +120,7 @@ export function ProductsPage() {
     setCompositionError(null)
     try {
       await composition.save(values)
-      toast.success('Composição atualizada.')
+      toast.success('Acessórios e embalagem atualizados.')
       setCompositionDialogProduct(null)
     } catch (err) {
       const message = toErrorMessage(err)
@@ -180,7 +184,9 @@ export function ProductsPage() {
                   className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft"
                 >
                   <TableCell className="truncate" title={product.name}>
-                    {product.name}
+                    <Link to={`/produtos/${product.id}`} className={PRODUCT_NAME_LINK_CLASSNAME}>
+                      {product.name}
+                    </Link>
                   </TableCell>
                   <TableCell className="truncate" title={product.category ?? undefined}>
                     {product.category ?? '—'}
@@ -211,7 +217,7 @@ export function ProductsPage() {
                         onClick={() => openCompositionDialog(product)}
                         className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
                       >
-                        Composição
+                        Acessórios e Embalagem
                       </Button>
                     </div>
                   </TableCell>
@@ -243,11 +249,17 @@ export function ProductsPage() {
           if (!open) setPriceDialogProduct(null)
         }}
       >
-        <DialogContent>
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Alterar preço</DialogTitle>
             <DialogDescription>
-              {priceDialogProduct ? `Novo preço para "${priceDialogProduct.name}".` : ''}
+              {priceDialogProduct ? (
+                <>
+                  Novo preço para <span className="text-foreground font-medium">"{priceDialogProduct.name}"</span>.
+                </>
+              ) : (
+                ''
+              )}
             </DialogDescription>
           </DialogHeader>
           {priceDialogProduct && (
@@ -269,9 +281,9 @@ export function ProductsPage() {
           if (!open) setCompositionDialogProduct(null)
         }}
       >
-        <DialogContent>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Composição padrão</DialogTitle>
+            <DialogTitle>Acessórios e Embalagem</DialogTitle>
             <DialogDescription>
               {compositionDialogProduct ? `Acessórios e embalagens de "${compositionDialogProduct.name}".` : ''}
             </DialogDescription>

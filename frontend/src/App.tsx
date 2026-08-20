@@ -6,6 +6,7 @@ import { LoginPage } from '@/pages/LoginPage'
 import { HomePage } from '@/pages/HomePage'
 import { CustomersPage } from '@/pages/customers/CustomersPage'
 import { ProductsPage } from '@/pages/products/ProductsPage'
+import { ProductDetailPage } from '@/pages/products/ProductDetailPage'
 import { CompaniesPage } from '@/pages/companies/CompaniesPage'
 import { OrdersPage } from '@/pages/orders/OrdersPage'
 
@@ -36,6 +37,14 @@ function App() {
           element={
             <ProtectedRoute>
               <ProductsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/produtos/:productId"
+          element={
+            <ProtectedRoute>
+              <ProductDetailPage />
             </ProtectedRoute>
           }
         />

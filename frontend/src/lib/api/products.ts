@@ -41,6 +41,18 @@ export async function listProducts(): Promise<Product[]> {
   return data as Product[]
 }
 
+// Busca individual por id — usada pela Ficha Técnica do Produto (acesso
+// direto pela URL, não depende da listagem já ter sido carregada).
+// maybeSingle() (em vez de single()) devolve null em vez de lançar erro
+// quando 0 linhas batem — permite diferenciar "produto não encontrado" de
+// um erro real de rede/API no chamador.
+export async function getProduct(id: string): Promise<Product | null> {
+  const { data, error } = await supabase.from('products').select('*').eq('id', id).maybeSingle()
+
+  if (error) throw mapSupabaseError(error)
+  return data as Product | null
+}
+
 export async function updateProduct(id: string, input: UpdateProductInput): Promise<Product> {
   const { data, error } = await supabase.from('products').update(input).eq('id', id).select().single()
 
