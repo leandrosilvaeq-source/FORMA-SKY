@@ -11,7 +11,16 @@ import { useCompanies } from '@/hooks/useCompanies'
 import { useCustomers } from '@/hooks/useCustomers'
 import { useLeadSources } from '@/hooks/useLeadSources'
 import { ApiError } from '@/lib/api/errors'
+import {
+  formatWhatsAppForDisplay,
+  isValidInstagramHandle,
+  isValidWhatsAppNumber,
+  normalizeInstagramHandle,
+  normalizeWhatsAppNumber,
+} from '@/lib/forms/customerContact'
 import type { Customer } from '@/types/domain'
+
+const CONTACT_LINK_CLASSNAME = 'text-brand-primary hover:text-brand-primary-dark hover:underline'
 
 function toErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message
@@ -88,7 +97,12 @@ export function CustomersPage() {
     <AppLayout>
       <div className="flex items-center justify-between">
         <h1 className="font-heading text-2xl font-medium">Clientes</h1>
-        <Button onClick={openCreateDialog}>Novo cliente</Button>
+        <Button
+          onClick={openCreateDialog}
+          className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
+        >
+          Novo cliente
+        </Button>
       </div>
 
       {error && (
@@ -110,47 +124,110 @@ export function CustomersPage() {
         ) : customers.length === 0 ? (
           <p className="text-muted-foreground text-sm">Nenhum cliente cadastrado.</p>
         ) : (
-          <Table>
+          <Table className="table-fixed text-[16px]">
             <TableHeader>
               <TableRow>
-                <TableHead>Nome</TableHead>
-                <TableHead>WhatsApp</TableHead>
-                <TableHead>Instagram</TableHead>
-                <TableHead>Empresa</TableHead>
-                <TableHead>Origem</TableHead>
-                <TableHead>Ativo</TableHead>
-                <TableHead />
+                <TableHead className="h-auto w-[22%] py-2 whitespace-normal">Nome</TableHead>
+                <TableHead className="h-auto w-[18%] py-2 whitespace-normal">Empresa</TableHead>
+                <TableHead className="h-auto w-[13%] py-2 whitespace-normal">WhatsApp</TableHead>
+                <TableHead className="h-auto w-[13%] py-2 whitespace-normal">Instagram</TableHead>
+                <TableHead className="h-auto w-[16%] py-2 whitespace-normal">Como nos conheceu</TableHead>
+                <TableHead className="h-auto w-[8%] py-2 whitespace-normal">Ativo</TableHead>
+                <TableHead className="h-auto w-[10%] py-2" />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {customers.map((customer) => (
-                <TableRow key={customer.id}>
-                  <TableCell>{customer.name}</TableCell>
-                  <TableCell>{customer.whatsapp ?? '—'}</TableCell>
-                  <TableCell>{customer.instagram ?? '—'}</TableCell>
-                  <TableCell>
-                    {customer.company_id ? (companyNameById.get(customer.company_id) ?? '—') : '—'}
-                  </TableCell>
-                  <TableCell>
-                    {customer.acquisition_source_id
-                      ? (leadSourceNameById.get(customer.acquisition_source_id) ?? '—')
-                      : '—'}
-                  </TableCell>
-                  <TableCell>
-                    <Switch
-                      checked={customer.is_active}
-                      disabled={pendingToggleId === customer.id}
-                      onCheckedChange={() => void handleToggleActive(customer)}
-                      aria-label={customer.is_active ? 'Desativar cliente' : 'Ativar cliente'}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Button variant="outline" size="sm" onClick={() => openEditDialog(customer)}>
-                      Editar
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {customers.map((customer) => {
+                const companyName = customer.company_id ? (companyNameById.get(customer.company_id) ?? '—') : '—'
+                const leadSourceName = customer.acquisition_source_id
+                  ? (leadSourceNameById.get(customer.acquisition_source_id) ?? '—')
+                  : '—'
+
+                // Normalização só de APRESENTAÇÃO — nunca grava no banco.
+                // Dado antigo em qualquer formato continua exatamente como
+                // está até ser editado/salvo de novo; aqui só decidimos como
+                // MOSTRAR e se vira link.
+                const whatsappNormalized = customer.whatsapp ? normalizeWhatsAppNumber(customer.whatsapp) : ''
+                const whatsappIsValid = isValidWhatsAppNumber(whatsappNormalized)
+                const whatsappDisplay = whatsappIsValid
+                  ? formatWhatsAppForDisplay(whatsappNormalized)
+                  : (customer.whatsapp ?? '—')
+
+                const instagramNormalized = customer.instagram ? normalizeInstagramHandle(customer.instagram) : ''
+                const instagramIsValid = isValidInstagramHandle(instagramNormalized)
+                const instagramDisplay = instagramIsValid ? instagramNormalized : (customer.instagram ?? '—')
+
+                return (
+                  <TableRow
+                    key={customer.id}
+                    // Zebra striping sutil com a paleta Forma: linha par usa
+                    // --brand-primary-soft bem diluído (/50), ímpar fica no
+                    // fundo neutro padrão, hover usa o mesmo tom sem diluir
+                    // (mais perceptível, ainda dentro da paleta, nunca roxo
+                    // forte/gradiente).
+                    className="odd:bg-background even:bg-brand-primary-soft/50 hover:bg-brand-primary-soft"
+                  >
+                    <TableCell className="truncate" title={customer.name}>
+                      {customer.name}
+                    </TableCell>
+                    <TableCell className="truncate" title={companyName !== '—' ? companyName : undefined}>
+                      {companyName}
+                    </TableCell>
+                    <TableCell className="truncate" title={whatsappDisplay !== '—' ? whatsappDisplay : undefined}>
+                      {whatsappIsValid ? (
+                        <a
+                          href={`https://wa.me/${whatsappNormalized.slice(1)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={CONTACT_LINK_CLASSNAME}
+                          title={whatsappDisplay}
+                        >
+                          {whatsappDisplay}
+                        </a>
+                      ) : (
+                        whatsappDisplay
+                      )}
+                    </TableCell>
+                    <TableCell className="truncate" title={instagramDisplay !== '—' ? instagramDisplay : undefined}>
+                      {instagramIsValid ? (
+                        <a
+                          href={`https://instagram.com/${instagramNormalized.slice(1)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={CONTACT_LINK_CLASSNAME}
+                          title={instagramDisplay}
+                        >
+                          {instagramDisplay}
+                        </a>
+                      ) : (
+                        instagramDisplay
+                      )}
+                    </TableCell>
+                    <TableCell className="truncate" title={leadSourceName !== '—' ? leadSourceName : undefined}>
+                      {leadSourceName}
+                    </TableCell>
+                    <TableCell>
+                      <Switch
+                        checked={customer.is_active}
+                        disabled={pendingToggleId === customer.id}
+                        onCheckedChange={() => void handleToggleActive(customer)}
+                        aria-label={customer.is_active ? 'Desativar cliente' : 'Ativar cliente'}
+                        className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openEditDialog(customer)}
+                        className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                      >
+                        Editar
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
             </TableBody>
           </Table>
         )}

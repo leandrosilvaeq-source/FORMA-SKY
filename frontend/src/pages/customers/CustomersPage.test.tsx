@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
+import type { Customer } from '@/types/domain'
 
 const { useCustomersMock, useCompaniesMock, useLeadSourcesMock, toastMock, useAuthMock } = vi.hoisted(() => ({
   useCustomersMock: vi.fn(),
@@ -35,11 +36,11 @@ const company = {
 
 const leadSource = { id: 'l1', name: 'Indicação / boca a boca', is_active: true }
 
-const customer = {
+const customer: Customer = {
   id: '1',
   name: 'Ana',
-  whatsapp: null,
-  instagram: null,
+  whatsapp: '11999990000',
+  instagram: '@ana',
   company_id: 'c1',
   acquisition_source_id: 'l1',
   notes: null,
@@ -92,6 +93,48 @@ describe('CustomersPage', () => {
     expect(screen.queryByText('l1')).not.toBeInTheDocument()
   })
 
+  it('shows the column headers in the approved order, with "Como nos conheceu" instead of "Origem"', () => {
+    renderPage()
+
+    const headers = screen.getAllByRole('columnheader')
+    expect(headers.map((header) => header.textContent)).toEqual([
+      'Nome',
+      'Empresa',
+      'WhatsApp',
+      'Instagram',
+      'Como nos conheceu',
+      'Ativo',
+      '',
+    ])
+    expect(screen.queryByText('Origem')).not.toBeInTheDocument()
+  })
+
+  it('keeps each value under the correct column after the reorder', () => {
+    renderPage()
+
+    const row = screen.getByRole('row', { name: /ana/i })
+    const cells = within(row).getAllByRole('cell')
+    expect(cells[0]).toHaveTextContent('Ana')
+    expect(cells[1]).toHaveTextContent('Empresa A')
+    // 11999990000 é um número BR válido (11 dígitos): a listagem agora
+    // normaliza para exibição, ver describe 'WhatsApp/Instagram clicáveis'.
+    expect(cells[2]).toHaveTextContent('+55 (11) 99999-0000')
+    expect(cells[3]).toHaveTextContent('@ana')
+    expect(cells[4]).toHaveTextContent('Indicação / boca a boca')
+    expect(within(cells[5]).getByRole('switch')).toBeInTheDocument()
+    expect(within(cells[6]).getByRole('button', { name: /editar/i })).toBeInTheDocument()
+  })
+
+  it('clicking "Editar" opens the dialog pre-filled for that customer', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /editar/i }))
+
+    expect(screen.getByText('Editar cliente')).toBeInTheDocument()
+    expect(screen.getByLabelText(/^nome$/i)).toHaveValue('Ana')
+  })
+
   it('opens the dialog, submits a new customer and shows a success toast', async () => {
     const user = userEvent.setup()
     renderPage()
@@ -130,5 +173,78 @@ describe('CustomersPage', () => {
     expect(screen.getByText('Falha ao carregar clientes.')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /tentar novamente/i }))
     expect(refetchMock).toHaveBeenCalled()
+  })
+
+  describe('WhatsApp/Instagram clicáveis na listagem', () => {
+    function renderWithCustomer(overrides: Partial<typeof customer>) {
+      useCustomersMock.mockReturnValue({
+        customers: [{ ...customer, ...overrides }],
+        isLoading: false,
+        error: null,
+        refetch: refetchMock,
+        create: createMock,
+        update: updateMock,
+      })
+      renderPage()
+    }
+
+    it.each([
+      ['+5541999999999', '+55 (41) 99999-9999'],
+      ['(41) 99999-9999', '+55 (41) 99999-9999'],
+    ])('%s normaliza só para exibição como "%s" e vira link do WhatsApp', (raw, expectedDisplay) => {
+      renderWithCustomer({ whatsapp: raw })
+
+      const link = screen.getByRole('link', { name: expectedDisplay })
+      expect(link).toHaveTextContent(expectedDisplay)
+      expect(link).toHaveAttribute('href', 'https://wa.me/5541999999999')
+      expect(link).toHaveAttribute('target', '_blank')
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+    })
+
+    it('valor de WhatsApp irreconhecível permanece texto puro, sem virar link', () => {
+      renderWithCustomer({ whatsapp: 'az' })
+
+      expect(screen.getByText('az')).toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: /az/i })).not.toBeInTheDocument()
+    })
+
+    it('WhatsApp null continua mostrando "—"', () => {
+      renderWithCustomer({ whatsapp: null })
+
+      const row = screen.getByRole('row', { name: /ana/i })
+      const cells = within(row).getAllByRole('cell')
+      expect(cells[2]).toHaveTextContent('—')
+      expect(within(cells[2]).queryByRole('link')).not.toBeInTheDocument()
+    })
+
+    it.each([
+      ['@usuario', '@usuario'],
+      ['usuario', '@usuario'],
+      ['https://instagram.com/usuario/', '@usuario'],
+    ])('%s normaliza só para exibição como "%s" e vira link do Instagram', (raw, expectedDisplay) => {
+      renderWithCustomer({ instagram: raw })
+
+      const link = screen.getByRole('link', { name: expectedDisplay })
+      expect(link).toHaveTextContent(expectedDisplay)
+      expect(link).toHaveAttribute('href', 'https://instagram.com/usuario')
+      expect(link).toHaveAttribute('target', '_blank')
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+    })
+
+    it('valor de Instagram irreconhecível permanece texto puro, sem virar link', () => {
+      renderWithCustomer({ instagram: 'john doe' })
+
+      expect(screen.getByText('john doe')).toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: /john doe/i })).not.toBeInTheDocument()
+    })
+
+    it('Instagram null continua mostrando "—"', () => {
+      renderWithCustomer({ instagram: null })
+
+      const row = screen.getByRole('row', { name: /ana/i })
+      const cells = within(row).getAllByRole('cell')
+      expect(cells[3]).toHaveTextContent('—')
+      expect(within(cells[3]).queryByRole('link')).not.toBeInTheDocument()
+    })
   })
 })
