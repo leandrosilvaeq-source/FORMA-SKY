@@ -190,6 +190,15 @@ Representa o pedido como um todo.
 - `created_at`
 - `updated_at`
 
+### Formato de `order_number`
+
+`FS-XX-YYY`, gerado atomicamente por `next_order_number()`:
+
+- `FS` — prefixo fixo;
+- `XX` — dois últimos dígitos do ano (fuso `America/Sao_Paulo`);
+- `YYY` — sequência anual, com no mínimo três dígitos e reinício em `001` a cada novo ano; sem teto artificial — acima de `999` a sequência continua por extenso (`1000`, `1001`, ...), nunca truncada;
+- exemplo: `FS-26-001`, `FS-26-999`, `FS-26-1000`.
+
 ### Status do pedido
 
 - `QUOTE`

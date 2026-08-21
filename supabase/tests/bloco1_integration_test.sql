@@ -264,7 +264,7 @@ begin
     select count(*) into v_history_count from public.order_status_history
       where order_id = v_order_id and from_status is null and to_status = 'QUOTE';
 
-    if v_order_number !~ '^FS-[0-9]{4}-[0-9]{4}$' then
+    if v_order_number !~ '^FS-[0-9]{2}-[0-9]{3,}$' then
       raise exception 'order_number fora do formato: %', v_order_number;
     end if;
     if v_status <> 'QUOTE' then raise exception 'order_status deveria ser QUOTE, veio %', v_status; end if;
@@ -318,7 +318,7 @@ begin
       into v_order_number, v_status, v_payment_status, v_subtotal
       from public.orders where id = v_order_id;
 
-    if v_order_number !~ '^FS-[0-9]{4}-[0-9]{4}$' then raise exception 'order_number fora do formato: %', v_order_number; end if;
+    if v_order_number !~ '^FS-[0-9]{2}-[0-9]{3,}$' then raise exception 'order_number fora do formato: %', v_order_number; end if;
     if v_status <> 'QUOTE' then raise exception 'order_status deveria ser QUOTE, veio %', v_status; end if;
     if v_payment_status <> 'WAITING_PAYMENT' then raise exception 'payment_status deveria ser WAITING_PAYMENT'; end if;
     if v_subtotal <> 80.00 then raise exception 'subtotal deveria ser 80.00, veio %', v_subtotal; end if;
@@ -368,7 +368,7 @@ begin
       join public.custom_item_details cid on cid.order_item_id = oi.id
       where oi.order_id = v_order_id;
 
-    if v_order_number !~ '^FS-[0-9]{4}-[0-9]{4}$' then raise exception 'order_number fora do formato: %', v_order_number; end if;
+    if v_order_number !~ '^FS-[0-9]{2}-[0-9]{3,}$' then raise exception 'order_number fora do formato: %', v_order_number; end if;
     if v_status <> 'QUOTE' then raise exception 'order_status deveria ser QUOTE'; end if;
     if v_subtotal <> 120.00 then raise exception 'subtotal deveria ser 120.00, veio %', v_subtotal; end if;
     if v_current_version <> 'v1.0' then raise exception 'current_version deveria ser v1.0, veio %', v_current_version; end if;
@@ -1770,7 +1770,7 @@ begin
   begin
     set local role authenticated;
     insert into public.orders (order_number, customer_id, order_status, payment_status)
-      values ('FS-' || to_char(now(), 'YYYY') || '-9999', v_customer_id, 'QUOTE', 'WAITING_PAYMENT');
+      values ('FS-' || to_char(now(), 'YY') || '-999', v_customer_id, 'QUOTE', 'WAITING_PAYMENT');
     v_status := 'FAIL';
     v_details := 'INSERT como authenticated foi permitido (não deveria)';
   exception when insufficient_privilege then
@@ -2440,6 +2440,214 @@ begin
   exception when others then
     insert into zz_test_results(section, test_name, status, details)
       values ('10', '10.9 checagens de privilégio em accessories/packaging/product_accessories/product_packaging', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- =============================================================================
+-- SEÇÃO 11 — Formatação de order_number (FS-XX-YYY, migration
+-- 20260820233219_update_order_number_format.sql)
+-- =============================================================================
+-- Testa a EXPRESSÃO de formatação isoladamente (mesma lógica usada dentro
+-- de next_order_number(): lpad(seq::text, greatest(3, length(seq::text)),
+-- '0')) para uma tabela de casos que cobre a exigência de "nunca truncar
+-- acima de 999" — sem criar nenhum pedido nem chamar next_order_number()
+-- milhares de vezes. Controlado e transacional: só SELECTs sobre valores
+-- literais, nenhuma escrita.
+
+do $$
+declare
+  v_case record;
+  v_result text;
+  v_all_ok boolean := true;
+  v_details text := '';
+begin
+  begin
+    for v_case in
+      select * from (values
+        (1, '001'),
+        (10, '010'),
+        (999, '999'),
+        (1000, '1000'),
+        (9999, '9999'),
+        (10000, '10000')
+      ) as t(input_number, expected)
+    loop
+      v_result := lpad(
+        v_case.input_number::text,
+        greatest(3, length(v_case.input_number::text)),
+        '0'
+      );
+      if v_result <> v_case.expected then
+        v_all_ok := false;
+        v_details := v_details || format('input=%s esperado=%s obtido=%s; ', v_case.input_number, v_case.expected, v_result);
+      end if;
+    end loop;
+
+    if not v_all_ok then
+      raise exception 'divergência(s) na formatação da sequência: %', v_details;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.1 formatação da sequência (1, 10, 999, 1000, 9999, 10000) nunca trunca acima de 999', 'PASS', '1->001, 10->010, 999->999, 1000->1000, 9999->9999, 10000->10000');
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.1 formatação da sequência (1, 10, 999, 1000, 9999, 10000) nunca trunca acima de 999', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- Confirma o formato final ponta a ponta (FS-XX-YYY, ano com 2 dígitos)
+-- usando a própria next_order_number(), sem depender de literais soltos.
+-- Chamada dentro da mesma transação com ROLLBACK no fim deste arquivo —
+-- o incremento em order_number_counters para o ano corrente nunca
+-- persiste, mesmo sem a restauração explícita abaixo.
+do $$
+declare
+  v_generated text;
+  v_year integer := extract(year from now() at time zone 'America/Sao_Paulo')::integer;
+begin
+  begin
+    v_generated := public.next_order_number();
+
+    if v_generated !~ '^FS-[0-9]{2}-[0-9]{3,}$' then
+      raise exception 'next_order_number() retornou fora do formato FS-XX-YYY: %', v_generated;
+    end if;
+    if substring(v_generated from 4 for 2) <> lpad((v_year % 100)::text, 2, '0') then
+      raise exception 'next_order_number() retornou ano diferente do ano corrente: %', v_generated;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.2 next_order_number() gera FS-XX-YYY com o ano corrente (2 dígitos)', 'PASS', 'gerado=' || v_generated);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.2 next_order_number() gera FS-XX-YYY com o ano corrente (2 dígitos)', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- Confirma next_order_number() acima de 999 no mesmo ano, sem criar 1000
+-- pedidos: avança o contador do ano corrente diretamente para 999 (dentro
+-- desta mesma transação, sob ROLLBACK) e chama a função uma única vez
+-- para observar a próxima saída (1000). O valor original do contador é
+-- restaurado explicitamente logo em seguida — tanto no caminho de
+-- sucesso quanto no de exceção — como defesa em profundidade, mesmo o
+-- ROLLBACK final já garantindo que nada disto persiste.
+do $$
+declare
+  v_year integer := extract(year from now() at time zone 'America/Sao_Paulo')::integer;
+  v_original_last_number integer;
+  v_had_row boolean := false;
+  v_generated text;
+begin
+  begin
+    select last_number into v_original_last_number
+      from public.order_number_counters
+      where year = v_year;
+    v_had_row := found;
+
+    insert into public.order_number_counters (year, last_number)
+      values (v_year, 999)
+      on conflict (year) do update set last_number = 999;
+
+    v_generated := public.next_order_number();
+
+    if v_generated <> 'FS-' || lpad((v_year % 100)::text, 2, '0') || '-1000' then
+      raise exception 'esperado sequência 1000 sem truncamento, obtido: %', v_generated;
+    end if;
+
+    -- Restauração explícita do contador do ano corrente.
+    if v_had_row then
+      update public.order_number_counters set last_number = v_original_last_number where year = v_year;
+    else
+      delete from public.order_number_counters where year = v_year;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.3 next_order_number() ultrapassa 999 sem truncar (contador restaurado)', 'PASS', 'gerado=' || v_generated);
+  exception when others then
+    -- Restaura mesmo no caminho de exceção, antes de registrar o FAIL.
+    if v_had_row then
+      update public.order_number_counters set last_number = v_original_last_number where year = v_year;
+    else
+      delete from public.order_number_counters where year = v_year;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.3 next_order_number() ultrapassa 999 sem truncar (contador restaurado)', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- Confirma que a lógica de validação de consistência de
+-- order_number_counters (pré-validação 1.7 da migration
+-- 20260820233219_update_order_number_format.sql) detecta corretamente um
+-- contador abaixo da maior sequência já emitida no ano — sem aplicar a
+-- migration real, só reproduzindo a mesma consulta de detecção contra um
+-- cenário manipulado dentro desta transação (sob ROLLBACK). Nenhum dado
+-- real é usado: reaproveita o pedido de teste já criado na Seção 3
+-- (fixture order_catalog_id). O contador do ano do pedido de teste é
+-- restaurado explicitamente logo em seguida — tanto no caminho de
+-- sucesso quanto no de exceção — mesma defesa em profundidade dos testes
+-- 11.2/11.3, mesmo o ROLLBACK final já garantindo que nada disto persiste.
+do $$
+declare
+  v_order_id uuid;
+  v_order_number text;
+  v_year integer;
+  v_sequence integer;
+  v_original_last_number integer;
+  v_had_row boolean := false;
+  v_inconsistent_count integer;
+begin
+  begin
+    select value::uuid into v_order_id from zz_fixtures where key = 'order_catalog_id';
+    if v_order_id is null then
+      raise exception 'fixture order_catalog_id ausente (Seção 3 falhou)';
+    end if;
+
+    select order_number into v_order_number from public.orders where id = v_order_id;
+    v_year := substring(v_order_number from 4 for 4)::integer;
+    v_sequence := substring(v_order_number from 9 for 4)::integer;
+
+    select last_number into v_original_last_number
+      from public.order_number_counters
+      where year = v_year;
+    v_had_row := found;
+
+    -- Força o contador do ano do pedido de teste para abaixo da
+    -- sequência já emitida — exatamente o cenário que a pré-validação 1.7
+    -- da migration deve recusar com RAISE EXCEPTION.
+    insert into public.order_number_counters (year, last_number)
+      values (v_year, greatest(v_sequence - 1, 0))
+      on conflict (year) do update set last_number = greatest(v_sequence - 1, 0);
+
+    -- Mesma consulta de detecção usada na migration (seção 1.7): conta
+    -- anos cujo contador está ausente ou é menor que a maior sequência já
+    -- emitida naquele ano.
+    select count(*) into v_inconsistent_count
+      from (select v_year as old_year, v_sequence as max_seq) y
+      left join public.order_number_counters onc on onc.year = y.old_year
+      where onc.year is null or onc.last_number < y.max_seq;
+
+    if v_inconsistent_count <> 1 then
+      raise exception 'esperado detectar 1 inconsistência de contador, detectado %', v_inconsistent_count;
+    end if;
+
+    -- Restauração explícita do contador do ano do pedido de teste.
+    if v_had_row then
+      update public.order_number_counters set last_number = v_original_last_number where year = v_year;
+    else
+      delete from public.order_number_counters where year = v_year;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.4 detecção de contador abaixo da maior sequência emitida (pré-validação 1.7 da migration, contador restaurado)', 'PASS', 'ano=' || v_year || ' sequência=' || v_sequence);
+  exception when others then
+    if v_had_row then
+      update public.order_number_counters set last_number = v_original_last_number where year = v_year;
+    else
+      delete from public.order_number_counters where year = v_year;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.4 detecção de contador abaixo da maior sequência emitida (pré-validação 1.7 da migration, contador restaurado)', 'FAIL', sqlerrm);
   end;
 end $$;
 

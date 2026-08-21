@@ -63,7 +63,7 @@ const product = {
 
 const orderSummary = {
   order_id: 'o1',
-  order_number: 'FS-2026-0001',
+  order_number: 'FS-26-001',
   customer_id: 'c1',
   company_id: null,
   order_status: 'QUOTE' as const,
@@ -135,7 +135,7 @@ describe('OrdersPage', () => {
   it('renders the order list resolving the customer name and formatting currency, never raw UUIDs', () => {
     renderPage()
 
-    expect(screen.getByText('FS-2026-0001')).toBeInTheDocument()
+    expect(screen.getByText('FS-26-001')).toBeInTheDocument()
     expect(screen.getByText('Ana Cliente')).toBeInTheDocument()
     expect(screen.getByText('Orçamento')).toBeInTheDocument()
     expect(screen.getByText('Aguardando pagamento')).toBeInTheDocument()

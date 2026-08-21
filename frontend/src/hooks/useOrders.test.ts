@@ -16,7 +16,7 @@ import { useOrders } from './useOrders'
 
 const orderA = {
   order_id: '1',
-  order_number: 'FS-2026-0001',
+  order_number: 'FS-26-001',
   customer_id: 'c1',
   company_id: null,
   order_status: 'QUOTE',
@@ -38,7 +38,7 @@ const orderA = {
   pending_approval_items: 0,
 }
 
-const orderB = { ...orderA, order_id: '2', order_number: 'FS-2026-0002' }
+const orderB = { ...orderA, order_id: '2', order_number: 'FS-26-002' }
 
 describe('useOrders', () => {
   beforeEach(() => {
