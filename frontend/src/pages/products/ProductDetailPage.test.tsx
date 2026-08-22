@@ -168,13 +168,22 @@ describe('ProductDetailPage', () => {
       expect(screen.getAllByText('Ativo').length).toBeGreaterThan(0)
     })
 
-    it('renderiza "Peso total do produto" e "Tempo total de impressão" formatado como HH:MM:SS', () => {
+    it('renderiza "Peso total (g)" e "Tempo de Produção" formatado como HH:MM:SS, sem as nomenclaturas antigas', () => {
       renderPage()
 
-      expect(screen.getByText('Peso total do produto')).toBeInTheDocument()
+      expect(screen.getByText('Peso total (g)')).toBeInTheDocument()
       expect(screen.getByText('45 g')).toBeInTheDocument()
-      expect(screen.getByText('Tempo total de impressão')).toBeInTheDocument()
+      expect(screen.getByText('Tempo de Produção')).toBeInTheDocument()
       expect(screen.getByText('02:10:00')).toBeInTheDocument()
+      expect(screen.queryByText('Peso total do produto')).not.toBeInTheDocument()
+      expect(screen.queryByText('Tempo total de impressão')).not.toBeInTheDocument()
+    })
+
+    it('ordem visual na seção Produção: "Peso total (g)" antes de "Tempo de Produção"', () => {
+      renderPage()
+
+      const labels = screen.getAllByText(/^(Peso total \(g\)|Tempo de Produção)$/)
+      expect(labels.map((label) => label.textContent)).toEqual(['Peso total (g)', 'Tempo de Produção'])
     })
 
     it('não exibe mais "Unidades por plate", "Peso do plate" nem nenhuma estimativa por unidade', () => {

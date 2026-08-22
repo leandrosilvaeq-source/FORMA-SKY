@@ -225,11 +225,11 @@ function ProductDetailContent({ product }: { product: Product }) {
         <CardContent className="flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
             <Field
-              label="Peso total do produto"
+              label="Peso total (g)"
               value={product.default_weight_grams !== null ? formatGrams(product.default_weight_grams) : 'Não informado'}
             />
             <Field
-              label="Tempo total de impressão"
+              label="Tempo de Produção"
               value={
                 product.default_print_time_seconds !== null
                   ? formatSecondsToHHMMSS(product.default_print_time_seconds)

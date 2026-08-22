@@ -206,8 +206,8 @@ export function ProductsPage() {
                   <TableHead className="h-auto w-[19%] py-2 whitespace-normal">Nome</TableHead>
                   <TableHead className="h-auto w-[10%] py-2 whitespace-normal">Tipo</TableHead>
                   <TableHead className="h-auto w-[14%] py-2 whitespace-normal">Categoria</TableHead>
-                  <TableHead className="h-auto w-[12%] py-2 whitespace-normal">Tempo total de impressão</TableHead>
-                  <TableHead className="h-auto w-[9%] py-2 whitespace-normal">Peso total</TableHead>
+                  <TableHead className="h-auto w-[10%] py-2 whitespace-normal">Tempo de Produção</TableHead>
+                  <TableHead className="h-auto w-[11%] py-2 whitespace-normal">Peso total (g)</TableHead>
                   <TableHead className="h-auto w-[10%] py-2 whitespace-normal">Preço</TableHead>
                   <TableHead className="h-auto w-[8%] py-2 whitespace-normal">Ativo</TableHead>
                   <TableHead className="h-auto w-[18%] py-2" />

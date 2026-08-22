@@ -7,10 +7,10 @@ import { formatCentsToBRL } from '@/lib/forms/currencyField'
 function renderForm(overrides: Partial<Parameters<typeof ProductForm>[0]> = {}) {
   const onSubmit = vi.fn()
   const onCancel = vi.fn()
-  render(
+  const { unmount } = render(
     <ProductForm isSubmitting={false} submitError={null} onSubmit={onSubmit} onCancel={onCancel} {...overrides} />,
   )
-  return { onSubmit, onCancel }
+  return { onSubmit, onCancel, unmount }
 }
 
 async function fillNameAndPrice(user: ReturnType<typeof userEvent.setup>, priceDigits = '2500') {
@@ -38,24 +38,24 @@ describe('ProductForm', () => {
     expect(screen.getByLabelText(/categoria/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/descrição/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/^preço$/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/tempo total de impressão/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/peso total do produto/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/tempo de produção/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/peso total \(g\)/i)).toBeInTheDocument()
     expect(screen.getByRole('switch', { name: /permite personalização/i })).toBeInTheDocument()
     expect(screen.queryByLabelText(/unidades por pla/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/unidades por pla/i)).not.toBeInTheDocument()
   })
 
-  it('a ordem visual dos campos segue Nome, Categoria, Descrição, Preço, Tempo, Peso, Personalização', () => {
+  it('a ordem visual dos campos segue Nome, Categoria, Descrição, Preço, Peso, Tempo, Personalização — Peso total (g) antes de Tempo de Produção', () => {
     renderForm()
 
-    const labels = screen.getAllByText(/^(Nome|Categoria|Descrição|Preço|Tempo total de impressão|Peso total do produto \(g\)|Permite personalização)$/)
+    const labels = screen.getAllByText(/^(Nome|Categoria|Descrição|Preço|Peso total \(g\)|Tempo de Produção|Permite personalização)$/)
     expect(labels.map((label) => label.textContent)).toEqual([
       'Nome',
       'Categoria',
       'Descrição',
       'Preço',
-      'Tempo total de impressão',
-      'Peso total do produto (g)',
+      'Peso total (g)',
+      'Tempo de Produção',
       'Permite personalização',
     ])
   })
@@ -177,11 +177,11 @@ describe('ProductForm', () => {
     })
   })
 
-  describe('tempo total de impressão — campo inteligente', () => {
+  describe('tempo de produção — campo inteligente', () => {
     it('possui um texto de ajuda associado por aria-describedby', () => {
       renderForm()
 
-      const input = screen.getByLabelText(/tempo total de impressão/i)
+      const input = screen.getByLabelText(/tempo de produção/i)
       const describedBy = input.getAttribute('aria-describedby')
       expect(describedBy).toBeTruthy()
       const helpText = screen.getByText('Aceita 1h30min, 1,5h, 01:30:00, 90m ou 30m45s.')
@@ -198,7 +198,7 @@ describe('ProductForm', () => {
       const user = userEvent.setup()
       renderForm()
 
-      const input = screen.getByLabelText(/tempo total de impressão/i)
+      const input = screen.getByLabelText(/tempo de produção/i)
       await user.type(input, typed)
       await user.tab()
 
@@ -209,7 +209,7 @@ describe('ProductForm', () => {
       const user = userEvent.setup()
       const { onSubmit } = renderForm()
 
-      const input = screen.getByLabelText(/tempo total de impressão/i)
+      const input = screen.getByLabelText(/tempo de produção/i)
       await user.click(input)
       await user.tab()
       expect(input).toHaveValue('')
@@ -224,7 +224,7 @@ describe('ProductForm', () => {
       const user = userEvent.setup()
       renderForm()
 
-      const input = screen.getByLabelText(/tempo total de impressão/i)
+      const input = screen.getByLabelText(/tempo de produção/i)
       await user.type(input, 'abacaxi')
       await user.tab()
 
@@ -237,7 +237,7 @@ describe('ProductForm', () => {
       const { onSubmit } = renderForm()
 
       await fillNameAndPrice(user)
-      await user.type(screen.getByLabelText(/tempo total de impressão/i), 'abacaxi')
+      await user.type(screen.getByLabelText(/tempo de produção/i), 'abacaxi')
       await user.click(screen.getByRole('button', { name: /salvar/i }))
 
       expect(await screen.findByText(/duração inválida/i)).toBeInTheDocument()
@@ -249,7 +249,7 @@ describe('ProductForm', () => {
       const { onSubmit } = renderForm()
 
       await fillNameAndPrice(user)
-      await user.type(screen.getByLabelText(/tempo total de impressão/i), '30m45s')
+      await user.type(screen.getByLabelText(/tempo de produção/i), '30m45s')
       await user.click(screen.getByRole('button', { name: /salvar/i }))
 
       expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ default_print_time_seconds: 1845 }))
@@ -259,7 +259,7 @@ describe('ProductForm', () => {
       const user = userEvent.setup()
       renderForm()
 
-      const input = screen.getByLabelText(/tempo total de impressão/i)
+      const input = screen.getByLabelText(/tempo de produção/i)
       await user.type(input, '1h30min')
       await user.tab()
       expect(input).toHaveValue('01:30:00')
@@ -273,7 +273,7 @@ describe('ProductForm', () => {
     })
   })
 
-  describe('peso total do produto', () => {
+  describe('peso total (g)', () => {
     it('vazio é permitido (opcional)', async () => {
       const user = userEvent.setup()
       const { onSubmit } = renderForm()
@@ -289,7 +289,7 @@ describe('ProductForm', () => {
       const { onSubmit } = renderForm()
 
       await fillNameAndPrice(user)
-      await user.type(screen.getByLabelText(/peso total do produto/i), '0')
+      await user.type(screen.getByLabelText(/peso total \(g\)/i), '0')
       await user.click(screen.getByRole('button', { name: /salvar/i }))
 
       expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ default_weight_grams: 0 }))
@@ -300,7 +300,7 @@ describe('ProductForm', () => {
       const { onSubmit } = renderForm()
 
       await fillNameAndPrice(user)
-      await user.type(screen.getByLabelText(/peso total do produto/i), '45,5')
+      await user.type(screen.getByLabelText(/peso total \(g\)/i), '45,5')
       await user.click(screen.getByRole('button', { name: /salvar/i }))
 
       expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ default_weight_grams: 45.5 }))
@@ -311,7 +311,7 @@ describe('ProductForm', () => {
       const { onSubmit } = renderForm()
 
       await fillNameAndPrice(user)
-      await user.type(screen.getByLabelText(/peso total do produto/i), '-5')
+      await user.type(screen.getByLabelText(/peso total \(g\)/i), '-5')
       await user.click(screen.getByRole('button', { name: /salvar/i }))
 
       expect(await screen.findByText('O peso deve ser maior ou igual a 0.')).toBeInTheDocument()
@@ -323,7 +323,7 @@ describe('ProductForm', () => {
       const { onSubmit } = renderForm()
 
       await fillNameAndPrice(user)
-      await user.type(screen.getByLabelText(/peso total do produto/i), 'abc')
+      await user.type(screen.getByLabelText(/peso total \(g\)/i), 'abc')
       await user.click(screen.getByRole('button', { name: /salvar/i }))
 
       expect(await screen.findByText(/deve ser um número válido/i)).toBeInTheDocument()
@@ -332,11 +332,29 @@ describe('ProductForm', () => {
   })
 
   describe('personalização, categoria e descrição', () => {
-    it('permite personalização começa desmarcado e envia false por padrão', async () => {
+    it('criação: Switch inicia ativado por padrão', () => {
+      renderForm()
+
+      const toggle = screen.getByRole('switch', { name: /permite personalização/i })
+      expect(toggle).toBeChecked()
+    })
+
+    it('criação: sem interação no Switch, salvar envia allows_personalization: true', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
+
+      await fillNameAndPrice(user)
+      await user.click(screen.getByRole('button', { name: /salvar/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ allows_personalization: true }))
+    })
+
+    it('criação: usuário pode desativar o Switch manualmente e salvar allows_personalization: false', async () => {
       const user = userEvent.setup()
       const { onSubmit } = renderForm()
 
       const toggle = screen.getByRole('switch', { name: /permite personalização/i })
+      await user.click(toggle)
       expect(toggle).not.toBeChecked()
 
       await fillNameAndPrice(user)
@@ -345,26 +363,33 @@ describe('ProductForm', () => {
       expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ allows_personalization: false }))
     })
 
-    it('alternar o Switch envia allows_personalization: true', async () => {
+    it('criação: reabrir uma nova janela de "Novo produto" restaura o padrão ativado, mesmo após desativar na janela anterior', async () => {
       const user = userEvent.setup()
-      const { onSubmit } = renderForm()
+      const { unmount } = renderForm()
 
       await user.click(screen.getByRole('switch', { name: /permite personalização/i }))
-      await fillNameAndPrice(user)
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
+      expect(screen.getByRole('switch', { name: /permite personalização/i })).not.toBeChecked()
 
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ allows_personalization: true }))
+      // Fechar e reabrir a janela desmonta e remonta ProductForm (Dialog do
+      // Radix/base-ui não mantém o conteúdo montado quando fechado) — um
+      // novo formulário de criação nasce sempre do estado inicial, nunca do
+      // estado residual da instância anterior.
+      unmount()
+      renderForm()
+
+      expect(screen.getByRole('switch', { name: /permite personalização/i })).toBeChecked()
     })
 
-    it('o Switch é navegável e alternável por teclado', async () => {
+    it('o Switch é navegável e alternável por teclado (parte de ativado, teclado desativa)', async () => {
       const user = userEvent.setup()
       renderForm()
 
       const toggle = screen.getByRole('switch', { name: /permite personalização/i })
+      expect(toggle).toBeChecked()
       toggle.focus()
       await user.keyboard(' ')
 
-      expect(toggle).toBeChecked()
+      expect(toggle).not.toBeChecked()
     })
 
     it('categoria e descrição vazias enviam null', async () => {
@@ -609,8 +634,8 @@ describe('ProductForm', () => {
       expect(screen.getByRole('radio', { name: 'Decoração' })).toHaveAttribute('aria-checked', 'true')
       expect(screen.getByLabelText(/descrição/i)).toHaveValue('Chaveiro em formato de gato')
       expect(screen.getByLabelText(/^preço$/i)).toHaveValue(formatCentsToBRL(2550))
-      expect(screen.getByLabelText(/tempo total de impressão/i)).toHaveValue('01:30:00')
-      expect(screen.getByLabelText(/peso total do produto/i)).toHaveValue('45')
+      expect(screen.getByLabelText(/tempo de produção/i)).toHaveValue('01:30:00')
+      expect(screen.getByLabelText(/peso total \(g\)/i)).toHaveValue('45')
       expect(screen.getByRole('switch', { name: /permite personalização/i })).toBeChecked()
       expect(screen.getByRole('button', { name: 'Salvar alterações' })).toBeInTheDocument()
     })
@@ -638,6 +663,18 @@ describe('ProductForm', () => {
 
       expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ default_price: 25.5 }))
     })
+
+    it('edição preserva allowsPersonalization: true do produto existente (não força nenhum padrão)', () => {
+      renderForm({ mode: 'edit', initialValues: { ...editInitialValues, allowsPersonalization: true } })
+
+      expect(screen.getByRole('switch', { name: /permite personalização/i })).toBeChecked()
+    })
+
+    it('edição preserva allowsPersonalization: false do produto existente (não força ativado)', () => {
+      renderForm({ mode: 'edit', initialValues: { ...editInitialValues, allowsPersonalization: false } })
+
+      expect(screen.getByRole('switch', { name: /permite personalização/i })).not.toBeChecked()
+    })
   })
 
   describe('payload completo', () => {
@@ -649,9 +686,10 @@ describe('ProductForm', () => {
       await clickRadio(user, 'Categoria', 'Decoração')
       await user.type(screen.getByLabelText(/descrição/i), 'Chaveiro em formato de gato')
       await user.type(screen.getByLabelText(/^preço$/i), '2550')
-      await user.type(screen.getByLabelText(/tempo total de impressão/i), '1h30min')
-      await user.type(screen.getByLabelText(/peso total do produto/i), '45')
-      await user.click(screen.getByRole('switch', { name: /permite personalização/i }))
+      await user.type(screen.getByLabelText(/tempo de produção/i), '1h30min')
+      await user.type(screen.getByLabelText(/peso total \(g\)/i), '45')
+      // Permite personalização já nasce ativado por padrão na criação —
+      // não precisa de interação para o payload sair com true.
       await user.click(screen.getByRole('button', { name: /salvar/i }))
 
       expect(onSubmit).toHaveBeenCalledWith({

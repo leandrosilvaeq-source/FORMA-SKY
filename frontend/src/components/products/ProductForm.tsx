@@ -168,7 +168,11 @@ export function ProductForm({
   const [weightGrams, setWeightGrams] = useState(() =>
     initialValues?.defaultWeightGrams != null ? String(initialValues.defaultWeightGrams) : '',
   )
-  const [allowsPersonalization, setAllowsPersonalization] = useState(initialValues?.allowsPersonalization ?? false)
+  // Criação (sem initialValues): inicia ativado por padrão (true). Edição
+  // (initialValues sempre traz allowsPersonalization como boolean real,
+  // nunca null/undefined): o ?? nunca entra em jogo — o valor existente do
+  // produto é sempre preservado, mesmo quando é false.
+  const [allowsPersonalization, setAllowsPersonalization] = useState(initialValues?.allowsPersonalization ?? true)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
 
   // Mesmo reposicionamento de cursor ao final já aprovado em
@@ -412,7 +416,20 @@ export function ProductForm({
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor={DURATION_INPUT_ID}>Tempo total de impressão</Label>
+        <Label htmlFor="product-weight">Peso total (g)</Label>
+        <Input
+          id="product-weight"
+          inputMode="decimal"
+          value={weightGrams}
+          onChange={(event) => setWeightGrams(event.target.value)}
+        />
+        {fieldErrors.default_weight_grams && (
+          <p className="text-destructive text-sm">{fieldErrors.default_weight_grams}</p>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Label htmlFor={DURATION_INPUT_ID}>Tempo de Produção</Label>
         <Input
           id={DURATION_INPUT_ID}
           value={printTimeInput}
@@ -429,19 +446,6 @@ export function ProductForm({
           <p id={DURATION_ERROR_ID} className="text-destructive text-sm">
             {durationError}
           </p>
-        )}
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="product-weight">Peso total do produto (g)</Label>
-        <Input
-          id="product-weight"
-          inputMode="decimal"
-          value={weightGrams}
-          onChange={(event) => setWeightGrams(event.target.value)}
-        />
-        {fieldErrors.default_weight_grams && (
-          <p className="text-destructive text-sm">{fieldErrors.default_weight_grams}</p>
         )}
       </div>
 

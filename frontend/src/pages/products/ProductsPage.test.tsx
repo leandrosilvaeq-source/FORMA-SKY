@@ -156,8 +156,8 @@ describe('ProductsPage', () => {
     expect(screen.getByText('Peça Spot Reutilizável')).toBeInTheDocument()
   })
 
-  describe('colunas Tipo, Tempo total de impressão e Peso total', () => {
-    it('exibe Tipo (Catálogo), Tempo total (HH:MM:SS) e Peso total (g) quando preenchidos', () => {
+  describe('colunas Tipo, Tempo de Produção e Peso total (g)', () => {
+    it('exibe Tipo (Catálogo), Tempo de Produção (HH:MM:SS) e Peso total (g) quando preenchidos', () => {
       useProductsMock.mockReturnValue({
         products: [{ ...product, product_type: 'CATALOG', default_print_time_seconds: 5400, default_weight_grams: 45 }],
         isLoading: false,
@@ -170,8 +170,8 @@ describe('ProductsPage', () => {
       renderPage()
 
       expect(screen.getByRole('columnheader', { name: 'Tipo' })).toBeInTheDocument()
-      expect(screen.getByRole('columnheader', { name: 'Tempo total de impressão' })).toBeInTheDocument()
-      expect(screen.getByRole('columnheader', { name: 'Peso total' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Tempo de Produção' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Peso total (g)' })).toBeInTheDocument()
       const row = screen.getByRole('row', { name: /chaveiro/i })
       expect(within(row).getByText('Catálogo')).toBeInTheDocument()
       expect(within(row).getByText('01:30:00')).toBeInTheDocument()
@@ -197,7 +197,7 @@ describe('ProductsPage', () => {
       expect(within(row).getByText(label)).toBeInTheDocument()
     })
 
-    it('Tempo total de impressão e Peso total ausentes mostram "Não informado"', () => {
+    it('Tempo de Produção e Peso total (g) ausentes mostram "Não informado"', () => {
       useProductsMock.mockReturnValue({
         products: [{ ...product, default_print_time_seconds: null, default_weight_grams: null }],
         isLoading: false,
@@ -377,9 +377,11 @@ describe('ProductsPage', () => {
     await user.type(screen.getByLabelText(/^preço$/i), '2500')
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
+    // Permite personalização nasce ativado por padrão na criação — sem
+    // interação no Switch, o payload sai com allows_personalization: true.
     await waitFor(() =>
       expect(createMock).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'Vaso', default_price: 25, allows_personalization: false }),
+        expect.objectContaining({ name: 'Vaso', default_price: 25, allows_personalization: true }),
       ),
     )
     const payload = createMock.mock.calls[0][0]
@@ -406,7 +408,7 @@ describe('ProductsPage', () => {
     await user.click(screen.getByRole('button', { name: /novo produto/i }))
     await user.type(screen.getByLabelText(/^nome$/i), 'Vaso')
     await user.type(screen.getByLabelText(/^preço$/i), '2500')
-    await user.type(screen.getByLabelText(/tempo total de impressão/i), '1h30min')
+    await user.type(screen.getByLabelText(/tempo de produção/i), '1h30min')
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
     await waitFor(() =>
