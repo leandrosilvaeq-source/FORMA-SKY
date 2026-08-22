@@ -32,7 +32,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               120-150px pedidos), sem distorcer; centralizado verticalmente
               pelo items-center do header, sem aumentar seu padding. */}
           <img src="/brand/logo-symbol.svg" alt="Forma 3D Studio" className="h-6 w-auto" />
-          <nav className="flex items-center gap-1">
+          <nav aria-label="Navegação principal" className="flex items-center gap-1">
             {NAV_ITEMS.map((item) => {
               // Rota exata OU sub-rota interna do módulo (ex.: /produtos/novo,
               // /pedidos/123) — sempre com a barra depois do prefixo, para

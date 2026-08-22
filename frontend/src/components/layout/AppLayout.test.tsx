@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
 const { useAuthMock } = vi.hoisted(() => ({ useAuthMock: vi.fn() }))
@@ -8,12 +9,14 @@ vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
 import { AppLayout } from './AppLayout'
 
 function renderAt(path: string) {
-  useAuthMock.mockReturnValue({ session: { user: { email: 'op@formasky.com' } }, signOut: vi.fn() })
-  return render(
+  const signOut = vi.fn()
+  useAuthMock.mockReturnValue({ session: { user: { email: 'op@formasky.com' } }, signOut })
+  render(
     <MemoryRouter initialEntries={[path]}>
       <AppLayout>conteúdo</AppLayout>
     </MemoryRouter>,
   )
+  return { signOut }
 }
 
 describe('AppLayout', () => {
@@ -84,5 +87,31 @@ describe('AppLayout', () => {
 
     expect(screen.getByText('conteúdo')).toBeInTheDocument()
     expect(screen.getByText('op@formasky.com')).toBeInTheDocument()
+  })
+
+  it('a navegação principal tem nome acessível "Navegação principal"', () => {
+    renderAt('/produtos')
+
+    expect(screen.getByRole('navigation', { name: 'Navegação principal' })).toBeInTheDocument()
+  })
+
+  it('o botão "Sair" tem nome acessível "Sair" e chama signOut() exatamente uma vez ao clicar', async () => {
+    const user = userEvent.setup()
+    const { signOut } = renderAt('/produtos')
+
+    const logoutButton = screen.getByRole('button', { name: 'Sair' })
+    await user.click(logoutButton)
+
+    expect(signOut).toHaveBeenCalledTimes(1)
+  })
+
+  it('o botão "Sair" também é ativável pelo teclado (Enter)', async () => {
+    const user = userEvent.setup()
+    const { signOut } = renderAt('/produtos')
+
+    screen.getByRole('button', { name: 'Sair' }).focus()
+    await user.keyboard('{Enter}')
+
+    expect(signOut).toHaveBeenCalledTimes(1)
   })
 })

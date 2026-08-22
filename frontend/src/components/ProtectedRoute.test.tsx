@@ -43,4 +43,10 @@ describe('ProtectedRoute', () => {
 
     expect(screen.getByText(/carregando/i)).toBeInTheDocument()
   })
+
+  it('exposes the loading state as an accessible status region (role="status")', () => {
+    renderProtectedRoute(null, true)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Carregando...')
+  })
 })

@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { AuthContext } from '@/context/AuthContext'
 import { LoginPage } from './LoginPage'
+import type { Session } from '@supabase/supabase-js'
 
 function renderLoginPage(signIn = vi.fn().mockResolvedValue({ error: null })) {
   render(
@@ -47,5 +48,23 @@ describe('LoginPage', () => {
     await user.click(screen.getByRole('button', { name: /entrar/i }))
 
     expect(await screen.findByText('Credenciais inválidas')).toBeInTheDocument()
+  })
+
+  it('redirects an already authenticated session from /login to /', () => {
+    render(
+      <MemoryRouter initialEntries={['/login']}>
+        <AuthContext.Provider
+          value={{ session: {} as Session, isLoading: false, signIn: vi.fn(), signOut: vi.fn() }}
+        >
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/" element={<p>Página inicial</p>} />
+          </Routes>
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('Página inicial')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/e-mail/i)).not.toBeInTheDocument()
   })
 })

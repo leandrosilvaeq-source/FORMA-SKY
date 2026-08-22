@@ -9,6 +9,7 @@ import { ProductsPage } from '@/pages/products/ProductsPage'
 import { ProductDetailPage } from '@/pages/products/ProductDetailPage'
 import { CompaniesPage } from '@/pages/companies/CompaniesPage'
 import { OrdersPage } from '@/pages/orders/OrdersPage'
+import { NotFoundPage } from '@/pages/NotFoundPage'
 
 function App() {
   return (
@@ -61,6 +62,17 @@ function App() {
           element={
             <ProtectedRoute>
               <OrdersPage />
+            </ProtectedRoute>
+          }
+        />
+        {/* Coringa: qualquer URL sem rota correspondente. Dentro da área
+            protegida (exige sessão, como as demais) e nunca redireciona
+            sozinha — o usuário decide clicar em "Voltar ao início". */}
+        <Route
+          path="*"
+          element={
+            <ProtectedRoute>
+              <NotFoundPage />
             </ProtectedRoute>
           }
         />
