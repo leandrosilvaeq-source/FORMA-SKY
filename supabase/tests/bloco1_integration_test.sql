@@ -2602,6 +2602,7 @@ do $$
 declare
   v_order_id uuid;
   v_order_number text;
+  v_order_date date;
   v_year integer;
   v_sequence integer;
   v_original_last_number integer;
@@ -2614,9 +2615,34 @@ begin
       raise exception 'fixture order_catalog_id ausente (Seção 3 falhou)';
     end if;
 
-    select order_number into v_order_number from public.orders where id = v_order_id;
-    v_year := substring(v_order_number from 4 for 4)::integer;
-    v_sequence := substring(v_order_number from 9 for 4)::integer;
+    select order_number, order_date into v_order_number, v_order_date from public.orders where id = v_order_id;
+
+    -- Validação estrutural do formato FS-XX-YYY (mesma regex do CHECK
+    -- constraint da migration
+    -- 20260820233219_update_order_number_format.sql): prefixo FS, ano com
+    -- 2 dígitos, sequência com 3 OU MAIS dígitos — nunca largura fixa,
+    -- pois sequências >= 1000 não são truncadas por essa migration.
+    if v_order_number !~ '^FS-[0-9]{2}-[0-9]{3,}$' then
+      raise exception 'order_number % fora do formato esperado FS-XX-YYY', v_order_number;
+    end if;
+
+    -- Extração estrutural pelos segmentos separados por hífen (nunca por
+    -- posição fixa, que é incompatível com sequência de largura
+    -- variável): split_part(...,'-',2)=ano de 2 dígitos,
+    -- split_part(...,'-',3)=sequência (o cast para integer já descarta
+    -- zeros à esquerda: '001'->1, '010'->10, '999'->999).
+    v_sequence := split_part(v_order_number, '-', 3)::integer;
+
+    -- order_number_counters.year guarda o ano cheio (ex.: 2026), enquanto
+    -- order_number traz só os 2 últimos dígitos. Deriva o ano cheio a
+    -- partir do order_date real do pedido (não assume século por
+    -- aritmética) e valida que os 2 últimos dígitos batem com o sufixo do
+    -- order_number, como checagem de consistência.
+    v_year := extract(year from v_order_date)::integer;
+    if v_year % 100 <> split_part(v_order_number, '-', 2)::integer then
+      raise exception 'sufixo de ano do order_number (%) não corresponde ao ano de order_date (%)',
+        split_part(v_order_number, '-', 2), v_year;
+    end if;
 
     select last_number into v_original_last_number
       from public.order_number_counters
@@ -3015,7 +3041,26 @@ begin
 end $$;
 
 -- 12.9 Agregação geral: 2 itens CATALOG + 1 CUSTOM — item_types
--- deduplicado (só 2 valores); item_names com os 3, na ordem de criação.
+-- deduplicado (só 2 valores); item_names com os 3, sem deduplicar, na
+-- ordem determinística (created_at, id) documentada pela própria view
+-- (ver comentário da migration
+-- 20260821014342_extend_order_summary_and_payment_method.sql:
+-- "array_agg(oi.item_name order by oi.created_at, oi.id)").
+--
+-- Correção (instabilidade intermitente): os 3 itens são inseridos por
+-- uma única chamada de create_order(), ou seja, dentro de uma única
+-- transação/execução de função — e now() é fixo para toda a transação
+-- (= transaction_timestamp()), nunca avança entre os INSERTs. Logo os 3
+-- order_items recebem created_at IDÊNTICO sempre, e o desempate real cai
+-- inteiramente em order_items.id (uuid aleatório, sem relação com a
+-- ordem de criação) — exatamente o mesmo desempate já comprovado
+-- pelo teste 12.7/12.8. Este teste antes cravava o array literal na
+-- ordem de criação, o que só passava por coincidência de ordenação de
+-- uuid. Não há aqui um requisito de contrato de preservar ordem de
+-- inserção (não existe coluna de posição/sequência em order_items); o
+-- contrato real e já documentado é a ordem (created_at, id). A correção
+-- é assertar contra essa ordem computada a partir dos dados reais, e não
+-- contra um literal.
 do $$
 declare
   v_user_id uuid;
@@ -3024,6 +3069,7 @@ declare
   v_order_id uuid;
   v_item_types text[];
   v_item_names text[];
+  v_expected_names text[];
 begin
   begin
     select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
@@ -3054,21 +3100,33 @@ begin
       from public.vw_order_summary
       where order_id = v_order_id;
 
+    -- Ordem esperada de item_names computada a partir dos dados reais de
+    -- order_items, usando o MESMO critério determinístico documentado
+    -- pela view (created_at, id) — não um literal de ordem de criação,
+    -- que não é garantida quando created_at empata (ver comentário acima).
+    select array_agg(item_name order by created_at, id) into v_expected_names
+      from public.order_items
+      where order_id = v_order_id;
+
     -- 2 itens CATALOG + 1 CUSTOM: item_types deve deduplicar para só 2
     -- valores, em ordem explícita CATALOG→CUSTOM — nunca 3 valores.
     if v_item_types <> array['CATALOG', 'CUSTOM'] then
       raise exception 'item_types deveria ser {CATALOG,CUSTOM} (deduplicado, ordem explícita), veio %', v_item_types;
     end if;
-    -- item_names NUNCA deduplica: os 3 itens aparecem, na ordem de criação.
-    if v_item_names <> array['Item Catálogo Um', 'Item Catálogo Dois', 'Item Personalizado Três'] then
-      raise exception 'item_names deveria preservar a ordem de criação dos 3 itens, veio %', v_item_names;
+    -- item_names NUNCA deduplica: os 3 itens devem aparecer.
+    if array_length(v_item_names, 1) <> 3 then
+      raise exception 'item_names deveria conter os 3 itens sem deduplicar, veio % (tamanho %)', v_item_names, array_length(v_item_names, 1);
+    end if;
+    -- ... na ordem determinística (created_at, id) real da view.
+    if v_item_names <> v_expected_names then
+      raise exception 'item_names deveria seguir a ordem determinística (created_at, id) da view, esperado %, veio %', v_expected_names, v_item_names;
     end if;
 
     insert into zz_test_results(section, test_name, status, details)
-      values ('12', '12.9 vw_order_summary.item_types deduplicado em ordem explícita; item_names preserva ordem de criação (3 itens: 2 CATALOG + 1 CUSTOM)', 'PASS', 'order_id=' || v_order_id);
+      values ('12', '12.9 vw_order_summary.item_types deduplicado em ordem explícita; item_names sem dedup, ordem determinística (created_at, id) (3 itens: 2 CATALOG + 1 CUSTOM)', 'PASS', 'order_id=' || v_order_id);
   exception when others then
     insert into zz_test_results(section, test_name, status, details)
-      values ('12', '12.9 vw_order_summary.item_types deduplicado em ordem explícita; item_names preserva ordem de criação (3 itens: 2 CATALOG + 1 CUSTOM)', 'FAIL', sqlerrm);
+      values ('12', '12.9 vw_order_summary.item_types deduplicado em ordem explícita; item_names sem dedup, ordem determinística (created_at, id) (3 itens: 2 CATALOG + 1 CUSTOM)', 'FAIL', sqlerrm);
   end;
 end $$;
 
