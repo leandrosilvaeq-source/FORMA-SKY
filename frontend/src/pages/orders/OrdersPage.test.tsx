@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
+import type { ItemType, OrderSummary } from '@/types/domain'
 
 const {
   useOrdersMock,
@@ -88,14 +89,14 @@ const company = {
   updated_at: '',
 }
 
-const orderSummary = {
+const orderSummary: OrderSummary = {
   order_id: 'o1',
   order_number: 'FS-26-001',
   customer_id: 'c1',
   company_id: null,
-  order_status: 'QUOTE' as const,
-  payment_status: 'WAITING_PAYMENT' as const,
-  payment_method: 'PIX' as const,
+  order_status: 'QUOTE',
+  payment_status: 'WAITING_PAYMENT',
+  payment_method: 'PIX',
   delivery_method: 'Correios',
   order_date: '2026-08-17',
   expected_delivery_date: '2026-08-25',
@@ -112,7 +113,7 @@ const orderSummary = {
   approval_required: false,
   is_fully_approved: true,
   pending_approval_items: 0,
-  item_types: ['CATALOG'] as const,
+  item_types: ['CATALOG'],
   item_names: ['Chaveiro'],
 }
 
@@ -185,6 +186,54 @@ async function clickRadio(
 
 function renderPage() {
   return render(<OrdersPage />, { wrapper: MemoryRouter })
+}
+
+function mockOrders(
+  list: OrderSummary[],
+  overrides: Partial<{ isLoading: boolean; error: unknown; refetch: ReturnType<typeof vi.fn> }> = {},
+  createMock: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({ id: list[0]?.order_id }),
+) {
+  useOrdersMock.mockReturnValue({
+    orders: list,
+    isLoading: overrides.isLoading ?? false,
+    error: overrides.error ?? null,
+    refetch: overrides.refetch ?? vi.fn(),
+    create: createMock,
+  })
+}
+
+// A lista de sugestões do autocomplete pode repetir, como sugestão, o
+// mesmo texto já visível numa célula da tabela — por isso qualquer
+// asserção de presença/ausência precisa ser explicitamente escopada à
+// tabela ou à listbox, nunca screen.getByText/queryByText solto.
+function getTable(): HTMLElement {
+  return screen.getByRole('table')
+}
+
+function queryListbox(): HTMLElement | null {
+  return screen.queryByRole('listbox', { name: 'Sugestões de pedido' })
+}
+
+function getListbox(): HTMLElement {
+  return screen.getByRole('listbox', { name: 'Sugestões de pedido' })
+}
+
+async function applySort(
+  user: ReturnType<typeof userEvent.setup>,
+  columnLabel: string,
+  option: 'Ordenar crescente' | 'Ordenar decrescente' | 'Remover ordenação',
+): Promise<void> {
+  await user.click(screen.getByRole('button', { name: `Ordenar coluna ${columnLabel}` }))
+  await user.click(await screen.findByRole('menuitem', { name: option }))
+}
+
+// Retorna, na ordem visual atual (DOM), o Nº do pedido de cada linha de
+// dados — usado como "impressão digital" da ordem das linhas, já que é
+// sempre visível e único por linha, independente de qual coluna está de
+// fato ordenando.
+function getVisibleOrderNumbersInOrder(): string[] {
+  const dataRows = screen.getAllByRole('row').filter((row) => within(row).queryAllByRole('cell').length > 0)
+  return dataRows.map((row) => within(row).getAllByRole('cell')[0].textContent ?? '')
 }
 
 describe('formatDateOnly', () => {
@@ -790,6 +839,839 @@ describe('OrdersPage', () => {
 
       expect(screen.queryByRole('button', { name: /salvar alterações/i })).not.toBeInTheDocument()
       expect(screen.getByText(/Personalizado ou Spot/i)).toBeInTheDocument()
+    })
+  })
+
+  describe('Busca rápida de pedidos', () => {
+    const leandroCustomer = { ...customer, id: 'c2', name: 'Leandro Augusto' }
+    const joseCustomer = { ...customer, id: 'c3', name: 'José Contato' }
+
+    const orderLeandro: OrderSummary = {
+      ...orderSummary,
+      order_id: 'o10',
+      order_number: 'FS-26-010',
+      customer_id: 'c2',
+      item_types: ['CUSTOM'] as ItemType[],
+      item_names: ['Miniatura Simples'],
+    }
+    const orderPetlink = {
+      ...orderSummary,
+      order_id: 'o11',
+      order_number: 'FS-26-011',
+      item_names: ['Petlink', 'Chaveiro'],
+    }
+    const orderB2B = { ...orderSummary, order_id: 'o12', order_number: 'FS-26-012', company_id: 'co1' }
+    const orderJose = {
+      ...orderSummary,
+      order_id: 'o13',
+      order_number: 'FS-26-013',
+      customer_id: 'c3',
+      item_names: ['Porta-retrato'],
+    }
+
+    beforeEach(() => {
+      mockOrders([orderSummary, orderLeandro, orderPetlink, orderB2B, orderJose])
+      useCustomersMock.mockReturnValue({
+        customers: [customer, leandroCustomer, joseCustomer],
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+    })
+
+    it('possui rótulo acessível "Buscar pedido" e placeholder "Buscar por pedido, cliente ou produto..."', () => {
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar pedido' })
+      expect(input).toBeInTheDocument()
+      expect(input).toHaveAttribute('placeholder', 'Buscar por pedido, cliente ou produto...')
+    })
+
+    it('número completo ("FS-26-001") encontra o pedido correspondente', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'FS-26-001')
+
+      expect(within(getTable()).getByText('FS-26-001')).toBeInTheDocument()
+      expect(within(getTable()).queryByText('FS-26-010')).not.toBeInTheDocument()
+    })
+
+    it('número parcial ("26-010") encontra o pedido correspondente', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), '26-010')
+
+      expect(within(getTable()).getByText('FS-26-010')).toBeInTheDocument()
+      expect(within(getTable()).queryByText('FS-26-001')).not.toBeInTheDocument()
+    })
+
+    it('nome de cliente ("leandro") encontra pedidos cujo cliente exibido contenha o nome', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'leandro')
+
+      expect(within(getTable()).getByText('FS-26-010')).toBeInTheDocument()
+      expect(within(getTable()).queryByText('FS-26-001')).not.toBeInTheDocument()
+    })
+
+    it('nome de empresa em pedido B2B ("empresa xyz") encontra o pedido', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'empresa xyz')
+
+      expect(within(getTable()).getByText('FS-26-012')).toBeInTheDocument()
+    })
+
+    it('nome de produto ("petlink") encontra pedidos que contenham Petlink em Produto(s)', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'petlink')
+
+      expect(within(getTable()).getByText('FS-26-011')).toBeInTheDocument()
+    })
+
+    it('pedido com vários produtos: busca por qualquer um deles encontra o pedido (e outros pedidos com o mesmo produto)', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'chaveiro')
+
+      // FS-26-001 (só Chaveiro) e FS-26-011 (Petlink + Chaveiro) têm
+      // "Chaveiro" entre os produtos — busca em TODOS os produtos do
+      // pedido, não só o primeiro.
+      expect(within(getTable()).getByText('FS-26-001')).toBeInTheDocument()
+      expect(within(getTable()).getByText('FS-26-011')).toBeInTheDocument()
+    })
+
+    it('busca sem diferenciar maiúsculas/minúsculas', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'PETLINK')
+
+      expect(within(getTable()).getByText('FS-26-011')).toBeInTheDocument()
+    })
+
+    it('busca tolerante a acentos ("jose" encontra "José Contato")', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'jose')
+
+      expect(within(getTable()).getByText('FS-26-013')).toBeInTheDocument()
+    })
+
+    it('remove espaços extras do termo pesquisado', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), '   petlink   ')
+
+      expect(within(getTable()).getByText('FS-26-011')).toBeInTheDocument()
+    })
+
+    it('termo sem resultado mostra o estado vazio específico da busca, distinto de "Nenhum pedido cadastrado."', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'zzzxyz')
+
+      expect(screen.getByText('Nenhum pedido encontrado para esta busca.')).toBeInTheDocument()
+      expect(screen.queryByText('Nenhum pedido cadastrado.')).not.toBeInTheDocument()
+    })
+
+    it('não considera status, status financeiro nem método de pagamento na busca', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      // "orçamento" é o rótulo do Status (QUOTE) e "pix" é o rótulo do
+      // Método de pagamento de todos os pedidos deste fixture — nenhum
+      // dos dois aparece no número, cliente ou produto de nenhum pedido.
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'orçamento')
+      expect(screen.getByText('Nenhum pedido encontrado para esta busca.')).toBeInTheDocument()
+
+      await user.clear(screen.getByRole('combobox', { name: 'Buscar pedido' }))
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'pix')
+      expect(screen.getByText('Nenhum pedido encontrado para esta busca.')).toBeInTheDocument()
+    })
+
+    it('limpar busca restaura todos os pedidos', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar pedido' })
+      await user.type(input, 'petlink')
+      await user.click(screen.getByRole('button', { name: /limpar busca/i }))
+
+      expect(input).toHaveValue('')
+      expect(within(getTable()).getByText('FS-26-001')).toBeInTheDocument()
+      expect(within(getTable()).getByText('FS-26-010')).toBeInTheDocument()
+      expect(within(getTable()).getByText('FS-26-011')).toBeInTheDocument()
+      expect(within(getTable()).getByText('FS-26-012')).toBeInTheDocument()
+      expect(within(getTable()).getByText('FS-26-013')).toBeInTheDocument()
+    })
+
+    it('nenhuma nova chamada ao hook/API enquanto o usuário digita', async () => {
+      const refetchMock = vi.fn()
+      mockOrders([orderSummary, orderLeandro, orderPetlink, orderB2B, orderJose], { refetch: refetchMock })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'petlink')
+
+      expect(refetchMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('Autocomplete/typeahead do campo "Buscar pedido"', () => {
+    const leandroCustomer = { ...customer, id: 'c2', name: 'Leandro Augusto' }
+
+    // orderC repete o produto "Petlink" (também em orderB) e o cliente
+    // "Ana Cliente" (também em orderA) — cobre deduplicação dentro do
+    // mesmo tipo. orderD tem um PRODUTO literalmente chamado igual ao
+    // cliente "Leandro Augusto" — cobre "valores iguais de tipos
+    // diferentes preservados como sugestões distintas".
+    const orderA = { ...orderSummary, order_id: 'oA', order_number: 'FS-26-100', customer_id: 'c1', item_names: ['Chaveiro'] }
+    const orderB = { ...orderSummary, order_id: 'oB', order_number: 'FS-26-101', customer_id: 'c2', item_names: ['Petlink'] }
+    const orderC = {
+      ...orderSummary,
+      order_id: 'oC',
+      order_number: 'FS-26-102',
+      customer_id: 'c1',
+      item_names: ['Petlink', 'Boneco'],
+    }
+    const orderD = {
+      ...orderSummary,
+      order_id: 'oD',
+      order_number: 'FS-26-103',
+      customer_id: 'c1',
+      item_names: ['Leandro Augusto'],
+    }
+
+    beforeEach(() => {
+      mockOrders([orderA, orderB, orderC, orderD])
+      useCustomersMock.mockReturnValue({
+        customers: [customer, leandroCustomer],
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+    })
+
+    it('não abre a lista com o campo vazio', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('combobox', { name: 'Buscar pedido' }))
+
+      expect(queryListbox()).not.toBeInTheDocument()
+    })
+
+    it('sugestão do tipo Pedido aparece com o número, com o badge "Pedido"', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'fs-26-100')
+
+      const option = within(getListbox()).getByRole('option', { name: /FS-26-100/ })
+      expect(within(option).getByText('Pedido')).toBeInTheDocument()
+    })
+
+    it('sugestão do tipo Cliente aparece com o nome, com o badge "Cliente"', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'leandro augusto')
+
+      const option = within(getListbox()).getByRole('option', { name: /^Cliente/ })
+      expect(within(option).getByText('Cliente')).toBeInTheDocument()
+      expect(option).toHaveTextContent('Leandro Augusto')
+    })
+
+    it('sugestão do tipo Produto aparece com o nome, com o badge "Produto"', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'petlink')
+
+      const option = within(getListbox()).getByRole('option', { name: /^Produto/ })
+      expect(within(option).getByText('Produto')).toBeInTheDocument()
+      expect(option).toHaveTextContent('Petlink')
+    })
+
+    it('deduplica sugestões iguais dentro do mesmo tipo (Petlink em 2 pedidos, Ana Cliente em 2 pedidos)', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar pedido' })
+      await user.type(input, 'petlink')
+      expect(within(getListbox()).getAllByRole('option', { name: /Petlink/ })).toHaveLength(1)
+
+      await user.clear(input)
+      await user.type(input, 'ana cliente')
+      expect(within(getListbox()).getAllByRole('option', { name: /Ana Cliente/ })).toHaveLength(1)
+    })
+
+    it('não confunde valores iguais de tipos diferentes: Cliente "Leandro Augusto" e Produto "Leandro Augusto" continuam sugestões distintas', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'leandro augusto')
+
+      const options = within(getListbox()).getAllByRole('option')
+      expect(options).toHaveLength(2)
+      expect(within(getListbox()).getByRole('option', { name: /^Cliente/ })).toBeInTheDocument()
+      expect(within(getListbox()).getByRole('option', { name: /^Produto/ })).toBeInTheDocument()
+    })
+
+    it('sugestões são atualizadas a cada caractere digitado', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar pedido' })
+      await user.type(input, 'fs-26-10')
+      expect(within(getListbox()).getAllByRole('option').length).toBeGreaterThan(1)
+
+      await user.type(input, '0')
+      expect(within(getListbox()).getAllByRole('option')).toHaveLength(1)
+      expect(within(getListbox()).getByRole('option', { name: /FS-26-100/ })).toBeInTheDocument()
+    })
+
+    it('clicar na sugestão Cliente preenche o nome e mostra todos os pedidos desse cliente', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'ana cliente')
+      await user.click(within(getListbox()).getByRole('option', { name: /Ana Cliente/ }))
+
+      expect(screen.getByRole('combobox', { name: 'Buscar pedido' })).toHaveValue('Ana Cliente')
+      expect(queryListbox()).not.toBeInTheDocument()
+      // Ana Cliente é o cliente de orderA (FS-26-100) e orderC (FS-26-102).
+      expect(within(getTable()).getByText('FS-26-100')).toBeInTheDocument()
+      expect(within(getTable()).getByText('FS-26-102')).toBeInTheDocument()
+      expect(within(getTable()).queryByText('FS-26-101')).not.toBeInTheDocument()
+    })
+
+    it('clicar na sugestão Produto preenche o nome e mostra todos os pedidos com esse produto', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'petlink')
+      await user.click(within(getListbox()).getByRole('option', { name: /^Produto/ }))
+
+      expect(screen.getByRole('combobox', { name: 'Buscar pedido' })).toHaveValue('Petlink')
+      // Petlink aparece em orderB (FS-26-101) e orderC (FS-26-102).
+      expect(within(getTable()).getByText('FS-26-101')).toBeInTheDocument()
+      expect(within(getTable()).getByText('FS-26-102')).toBeInTheDocument()
+      expect(within(getTable()).queryByText('FS-26-100')).not.toBeInTheDocument()
+    })
+
+    it('ArrowDown + Enter seleciona a primeira sugestão', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar pedido' })
+      await user.type(input, 'fs-26-100')
+      await user.keyboard('{ArrowDown}{Enter}')
+
+      expect(input).toHaveValue('FS-26-100')
+      expect(queryListbox()).not.toBeInTheDocument()
+    })
+
+    it('ArrowUp navega para a sugestão anterior', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar pedido' })
+      await user.type(input, 'fs-26-10')
+      await user.keyboard('{ArrowDown}{ArrowDown}{ArrowUp}{Enter}')
+
+      // Independente de qual seja a 1ª opção na lista, ArrowDown 2x seguido
+      // de ArrowUp sempre volta para a 1ª opção ativada.
+      expect(queryListbox()).not.toBeInTheDocument()
+      expect((input as HTMLInputElement).value.length).toBeGreaterThan(0)
+    })
+
+    it('Escape fecha a lista sem apagar o texto digitado', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar pedido' })
+      await user.type(input, 'petlink')
+      await user.keyboard('{Escape}')
+
+      expect(queryListbox()).not.toBeInTheDocument()
+      expect(input).toHaveValue('petlink')
+    })
+
+    it('clicar fora do campo/lista fecha as sugestões, sem alterar o texto', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar pedido' })
+      await user.type(input, 'petlink')
+      expect(queryListbox()).toBeInTheDocument()
+
+      await user.click(screen.getByRole('heading', { name: 'Pedidos' }))
+
+      expect(queryListbox()).not.toBeInTheDocument()
+      expect(input).toHaveValue('petlink')
+    })
+
+    it('"Limpar busca" fecha o autocomplete e restaura a tabela completa', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'petlink')
+      await user.click(screen.getByRole('button', { name: /limpar busca/i }))
+
+      expect(queryListbox()).not.toBeInTheDocument()
+      expect(within(getTable()).getByText('FS-26-103')).toBeInTheDocument()
+    })
+
+    it('voltar a editar o texto reabre as sugestões com a lista atualizada', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar pedido' })
+      await user.type(input, 'fs-26-100')
+      await user.click(within(getListbox()).getByRole('option', { name: /FS-26-100/ }))
+      expect(queryListbox()).not.toBeInTheDocument()
+
+      await user.type(input, ' ')
+
+      expect(queryListbox()).toBeInTheDocument()
+    })
+
+    it('nenhuma seleção automática mesmo com uma única sugestão correspondente', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar pedido' })
+      await user.type(input, 'fs-26-103')
+
+      expect(within(getListbox()).getAllByRole('option')).toHaveLength(1)
+      expect(input).toHaveValue('fs-26-103')
+    })
+
+    it('atributos e nomes acessíveis do combobox/listbox/opções', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar pedido' })
+      expect(input).toHaveAttribute('aria-autocomplete', 'list')
+      expect(input).toHaveAttribute('aria-controls', 'order-search-listbox')
+      expect(input).toHaveAttribute('aria-expanded', 'false')
+      expect(input).not.toHaveAttribute('aria-activedescendant')
+
+      await user.type(input, 'fs-26-100')
+      expect(input).toHaveAttribute('aria-expanded', 'true')
+      expect(getListbox()).toHaveAttribute('id', 'order-search-listbox')
+
+      await user.keyboard('{ArrowDown}')
+      const activeOption = within(getListbox()).getByRole('option', { name: /FS-26-100/ })
+      expect(input).toHaveAttribute('aria-activedescendant', activeOption.id)
+      expect(activeOption).toHaveAttribute('aria-selected', 'true')
+    })
+  })
+
+  describe('Ordenação por coluna (menu estilo filtro de tabela)', () => {
+    beforeEach(() => {
+      useCustomersMock.mockReturnValue({
+        customers: [
+          customer,
+          { ...customer, id: 'c2', name: 'Beatriz Cliente' },
+          { ...customer, id: 'c3', name: 'Carlos Cliente' },
+        ],
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+    })
+
+    it('coluna Nº do pedido: comparação numérica natural (FS-26-1 < FS-26-2 < FS-26-10), crescente e decrescente', async () => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'FS-26-2' },
+        { ...orderSummary, order_id: 'o2', order_number: 'FS-26-10' },
+        { ...orderSummary, order_id: 'o3', order_number: 'FS-26-1' },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Nº pedido', 'Ordenar crescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['FS-26-1', 'FS-26-2', 'FS-26-10'])
+
+      await applySort(user, 'Nº pedido', 'Ordenar decrescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['FS-26-10', 'FS-26-2', 'FS-26-1'])
+    })
+
+    it('coluna Cliente: ordena pelo nome exibido, crescente e decrescente', async () => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'ORD-1', customer_id: 'c3' },
+        { ...orderSummary, order_id: 'o2', order_number: 'ORD-2', customer_id: 'c1' },
+        { ...orderSummary, order_id: 'o3', order_number: 'ORD-3', customer_id: 'c2' },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Cliente', 'Ordenar crescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-2', 'ORD-3', 'ORD-1'])
+
+      await applySort(user, 'Cliente', 'Ordenar decrescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-1', 'ORD-3', 'ORD-2'])
+    })
+
+    it('coluna Tipo(s): ordena pelo texto exibido; pedido sem itens (vazio) sempre no final', async () => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'ORD-SPOT', item_types: ['SPOT'] },
+        { ...orderSummary, order_id: 'o2', order_number: 'ORD-CATALOG', item_types: ['CATALOG'] },
+        { ...orderSummary, order_id: 'o3', order_number: 'ORD-VAZIO', item_types: [], item_names: [] },
+        { ...orderSummary, order_id: 'o4', order_number: 'ORD-CUSTOM', item_types: ['CUSTOM'] },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Tipo(s)', 'Ordenar crescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-CATALOG', 'ORD-CUSTOM', 'ORD-SPOT', 'ORD-VAZIO'])
+
+      await applySort(user, 'Tipo(s)', 'Ordenar decrescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-SPOT', 'ORD-CUSTOM', 'ORD-CATALOG', 'ORD-VAZIO'])
+    })
+
+    it('coluna Produto(s): ordena pelo texto conjunto exibido; pedido sem produtos (vazio) sempre no final', async () => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'ORD-ZEBRA', item_names: ['Zebra Produto'] },
+        { ...orderSummary, order_id: 'o2', order_number: 'ORD-ALFA', item_names: ['Alfa Produto'] },
+        { ...orderSummary, order_id: 'o3', order_number: 'ORD-VAZIO', item_types: [], item_names: [] },
+        { ...orderSummary, order_id: 'o4', order_number: 'ORD-BETA', item_names: ['Beta Produto'] },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Produto(s)', 'Ordenar crescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-ALFA', 'ORD-BETA', 'ORD-ZEBRA', 'ORD-VAZIO'])
+
+      await applySort(user, 'Produto(s)', 'Ordenar decrescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-ZEBRA', 'ORD-BETA', 'ORD-ALFA', 'ORD-VAZIO'])
+    })
+
+    it('coluna Status: ordena pelo rótulo exibido ao usuário, crescente e decrescente', async () => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'ORD-QUOTE', order_status: 'QUOTE' },
+        { ...orderSummary, order_id: 'o2', order_number: 'ORD-APPROVED', order_status: 'APPROVED' },
+        { ...orderSummary, order_id: 'o3', order_number: 'ORD-DELIVERED', order_status: 'DELIVERED' },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+
+      // Rótulos: "Aprovado", "Entregue", "Orçamento" — ordem alfabética.
+      await applySort(user, 'Status', 'Ordenar crescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-APPROVED', 'ORD-DELIVERED', 'ORD-QUOTE'])
+
+      await applySort(user, 'Status', 'Ordenar decrescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-QUOTE', 'ORD-DELIVERED', 'ORD-APPROVED'])
+    })
+
+    it('coluna Status financeiro: ordena pelo rótulo exibido, crescente e decrescente', async () => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'ORD-WAITING', payment_status: 'WAITING_PAYMENT' },
+        { ...orderSummary, order_id: 'o2', order_number: 'ORD-PAID', payment_status: 'PAID' },
+        { ...orderSummary, order_id: 'o3', order_number: 'ORD-DEPOSIT', payment_status: 'DEPOSIT_RECEIVED' },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+
+      // Rótulos: "Aguardando pagamento", "Pago", "Sinal recebido".
+      await applySort(user, 'Status financeiro', 'Ordenar crescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-WAITING', 'ORD-PAID', 'ORD-DEPOSIT'])
+
+      await applySort(user, 'Status financeiro', 'Ordenar decrescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-DEPOSIT', 'ORD-PAID', 'ORD-WAITING'])
+    })
+
+    it('coluna Método de pagamento: ordena pelo rótulo exibido; ausente (null) sempre no final', async () => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'ORD-PIX', payment_method: 'PIX' },
+        { ...orderSummary, order_id: 'o2', order_number: 'ORD-CARTAO', payment_method: 'CARTAO' },
+        { ...orderSummary, order_id: 'o3', order_number: 'ORD-NULO', payment_method: null },
+        { ...orderSummary, order_id: 'o4', order_number: 'ORD-DINHEIRO', payment_method: 'DINHEIRO' },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+
+      // Rótulos: "Cartão", "Dinheiro", "Pix".
+      await applySort(user, 'Método de pagamento', 'Ordenar crescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-CARTAO', 'ORD-DINHEIRO', 'ORD-PIX', 'ORD-NULO'])
+
+      await applySort(user, 'Método de pagamento', 'Ordenar decrescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-PIX', 'ORD-DINHEIRO', 'ORD-CARTAO', 'ORD-NULO'])
+    })
+
+    it('coluna Forma de entrega: ordena pelo rótulo exibido; ausente sempre no final', async () => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'ORD-TRANSP', delivery_method: 'Transportadora' },
+        { ...orderSummary, order_id: 'o2', order_number: 'ORD-MAOS', delivery_method: 'Em mãos' },
+        { ...orderSummary, order_id: 'o3', order_number: 'ORD-NULO', delivery_method: null },
+        { ...orderSummary, order_id: 'o4', order_number: 'ORD-CORREIOS', delivery_method: 'Correios' },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Forma de entrega', 'Ordenar crescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-CORREIOS', 'ORD-MAOS', 'ORD-TRANSP', 'ORD-NULO'])
+
+      await applySort(user, 'Forma de entrega', 'Ordenar decrescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-TRANSP', 'ORD-MAOS', 'ORD-CORREIOS', 'ORD-NULO'])
+    })
+
+    it('coluna Total: ordena pelo número monetário real, crescente e decrescente', async () => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'ORD-30', total_value: 30 },
+        { ...orderSummary, order_id: 'o2', order_number: 'ORD-10', total_value: 10 },
+        { ...orderSummary, order_id: 'o3', order_number: 'ORD-20', total_value: 20 },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Total', 'Ordenar crescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-10', 'ORD-20', 'ORD-30'])
+
+      await applySort(user, 'Total', 'Ordenar decrescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-30', 'ORD-20', 'ORD-10'])
+    })
+
+    it('coluna Saldo devedor: ordena pelo número monetário real, crescente e decrescente', async () => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'ORD-30', balance_due: 30 },
+        { ...orderSummary, order_id: 'o2', order_number: 'ORD-10', balance_due: 10 },
+        { ...orderSummary, order_id: 'o3', order_number: 'ORD-20', balance_due: 20 },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Saldo devedor', 'Ordenar crescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-10', 'ORD-20', 'ORD-30'])
+
+      await applySort(user, 'Saldo devedor', 'Ordenar decrescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-30', 'ORD-20', 'ORD-10'])
+    })
+
+    it('coluna Prazo: ordena pela data real (cronológica), não pelo texto formatado; ausente sempre no final', async () => {
+      // Datas propositalmente escolhidas para provar que NÃO é comparação
+      // textual do formato DD/MM/AAAA: "15/01/2026" < "01/02/2026" <
+      // "10/03/2026" como TEXTO ficaria só Fev, Mar, Jan (errado); a data
+      // real cronológica é Jan, Fev, Mar.
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'ORD-JAN', expected_delivery_date: '2026-01-15' },
+        { ...orderSummary, order_id: 'o2', order_number: 'ORD-MAR', expected_delivery_date: '2026-03-10' },
+        { ...orderSummary, order_id: 'o3', order_number: 'ORD-NULO', expected_delivery_date: null },
+        { ...orderSummary, order_id: 'o4', order_number: 'ORD-FEV', expected_delivery_date: '2026-02-01' },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Prazo', 'Ordenar crescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-JAN', 'ORD-FEV', 'ORD-MAR', 'ORD-NULO'])
+
+      await applySort(user, 'Prazo', 'Ordenar decrescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-MAR', 'ORD-FEV', 'ORD-JAN', 'ORD-NULO'])
+    })
+
+    it('ordenação estável: valores iguais preservam a ordem original', async () => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'ORD-A', total_value: 50 },
+        { ...orderSummary, order_id: 'o2', order_number: 'ORD-B', total_value: 50 },
+        { ...orderSummary, order_id: 'o3', order_number: 'ORD-C', total_value: 50 },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Total', 'Ordenar crescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-A', 'ORD-B', 'ORD-C'])
+
+      await applySort(user, 'Total', 'Ordenar decrescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-A', 'ORD-B', 'ORD-C'])
+    })
+
+    it('somente uma coluna ordenada por vez: escolher outra coluna substitui a ordenação anterior', async () => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'ORD-2', total_value: 20 },
+        { ...orderSummary, order_id: 'o2', order_number: 'ORD-1', total_value: 10 },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Nº pedido', 'Ordenar crescente')
+      expect(screen.getByRole('columnheader', { name: /^Nº pedido/ })).toHaveAttribute('aria-sort', 'ascending')
+
+      await applySort(user, 'Total', 'Ordenar crescente')
+      expect(screen.getByRole('columnheader', { name: /^Total/ })).toHaveAttribute('aria-sort', 'ascending')
+      expect(screen.getByRole('columnheader', { name: /^Nº pedido/ })).toHaveAttribute('aria-sort', 'none')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-1', 'ORD-2'])
+    })
+
+    it('remover a ordenação restaura a ordem original (a ordem em que o hook devolveu os registros)', async () => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'ORD-B', total_value: 20 },
+        { ...orderSummary, order_id: 'o2', order_number: 'ORD-A', total_value: 10 },
+      ])
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Total', 'Ordenar crescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-A', 'ORD-B'])
+
+      await applySort(user, 'Total', 'Remover ordenação')
+
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-B', 'ORD-A'])
+      expect(screen.getByRole('columnheader', { name: /^Total/ })).toHaveAttribute('aria-sort', 'none')
+    })
+
+    it('aria-sort correto: none por padrão, ascending/descending após ordenar', async () => {
+      mockOrders([orderSummary])
+      const user = userEvent.setup()
+      renderPage()
+
+      expect(screen.getByRole('columnheader', { name: /^Nº pedido/ })).toHaveAttribute('aria-sort', 'none')
+
+      await applySort(user, 'Nº pedido', 'Ordenar crescente')
+      expect(screen.getByRole('columnheader', { name: /^Nº pedido/ })).toHaveAttribute('aria-sort', 'ascending')
+
+      await applySort(user, 'Nº pedido', 'Ordenar decrescente')
+      expect(screen.getByRole('columnheader', { name: /^Nº pedido/ })).toHaveAttribute('aria-sort', 'descending')
+    })
+
+    it('a coluna Ações não é ordenável', () => {
+      mockOrders([orderSummary])
+      renderPage()
+
+      const headers = screen.getAllByRole('columnheader')
+      const actionsHeader = headers[headers.length - 1]
+      expect(actionsHeader).toHaveTextContent('Ações')
+      expect(within(actionsHeader).queryByRole('button', { name: /ordenar coluna/i })).not.toBeInTheDocument()
+      expect(actionsHeader).not.toHaveAttribute('aria-sort')
+    })
+
+    it('nomes acessíveis claros nos botões de ordenação de cada coluna de dados', () => {
+      mockOrders([orderSummary])
+      renderPage()
+
+      for (const label of [
+        'Nº pedido',
+        'Cliente',
+        'Tipo(s)',
+        'Produto(s)',
+        'Status',
+        'Status financeiro',
+        'Método de pagamento',
+        'Forma de entrega',
+        'Total',
+        'Saldo devedor',
+        'Prazo',
+      ]) {
+        expect(screen.getByRole('button', { name: `Ordenar coluna ${label}` })).toBeInTheDocument()
+      }
+    })
+  })
+
+  describe('Combinação entre busca e ordenação', () => {
+    beforeEach(() => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'ORD-CARLOS', customer_id: 'c1' },
+        { ...orderSummary, order_id: 'o2', order_number: 'ORD-ALICE', customer_id: 'c2' },
+        { ...orderSummary, order_id: 'o3', order_number: 'ORD-AMANDA', customer_id: 'c3' },
+      ])
+      useCustomersMock.mockReturnValue({
+        customers: [
+          { ...customer, id: 'c1', name: 'Carlos' },
+          { ...customer, id: 'c2', name: 'Alice' },
+          { ...customer, id: 'c3', name: 'Amanda' },
+        ],
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+    })
+
+    it('primeiro filtra pelo nome/número/produto, depois ordena o resultado filtrado', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'a')
+      expect(getVisibleOrderNumbersInOrder()).toHaveLength(3)
+
+      await applySort(user, 'Nº pedido', 'Ordenar crescente')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-ALICE', 'ORD-AMANDA', 'ORD-CARLOS'])
+    })
+
+    it('limpar a busca mantém a ordenação ativa', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Nº pedido', 'Ordenar decrescente')
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'a')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-CARLOS', 'ORD-AMANDA', 'ORD-ALICE'])
+
+      await user.click(screen.getByRole('button', { name: /limpar busca/i }))
+
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-CARLOS', 'ORD-AMANDA', 'ORD-ALICE'])
+      expect(screen.getByRole('columnheader', { name: /^Nº pedido/ })).toHaveAttribute('aria-sort', 'descending')
+    })
+
+    it('remover a ordenação mantém a busca ativa', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Nº pedido', 'Ordenar crescente')
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'amanda')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-AMANDA'])
+
+      await applySort(user, 'Nº pedido', 'Remover ordenação')
+
+      expect(screen.getByRole('combobox', { name: 'Buscar pedido' })).toHaveValue('amanda')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-AMANDA'])
+    })
+
+    it('autocomplete respeita a ordenação ativa e a preserva ao selecionar uma sugestão', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Nº pedido', 'Ordenar decrescente')
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'a')
+
+      const pedidoOptions = within(getListbox()).getAllByRole('option', { name: /^Pedido/ })
+      expect(pedidoOptions.map((option) => option.textContent)).toEqual([
+        expect.stringContaining('ORD-CARLOS'),
+        expect.stringContaining('ORD-AMANDA'),
+        expect.stringContaining('ORD-ALICE'),
+      ])
+
+      await user.click(pedidoOptions[0])
+
+      expect(screen.getByRole('columnheader', { name: /^Nº pedido/ })).toHaveAttribute('aria-sort', 'descending')
+    })
+
+    it('zebra striping é recalculado conforme a ordem visual resultante da busca + ordenação', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Nº pedido', 'Ordenar crescente')
+
+      const dataRows = screen.getAllByRole('row').filter((row) => within(row).queryAllByRole('cell').length > 0)
+      expect(dataRows.map((row) => within(row).getAllByRole('cell')[0].textContent)).toEqual([
+        'ORD-ALICE',
+        'ORD-AMANDA',
+        'ORD-CARLOS',
+      ])
+      for (const row of dataRows) {
+        expect(row).toHaveClass('odd:bg-brand-primary-soft/50')
+        expect(row).toHaveClass('even:bg-white')
+      }
     })
   })
 })

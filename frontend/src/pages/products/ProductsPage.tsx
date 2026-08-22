@@ -1,7 +1,10 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AppLayout } from '@/components/layout/AppLayout'
+import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
+import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
+import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { ProductCompositionForm } from '@/components/products/ProductCompositionForm'
 import { ProductForm } from '@/components/products/ProductForm'
 import { ProductPriceForm } from '@/components/products/ProductPriceForm'
@@ -16,9 +19,12 @@ import { useProductComposition } from '@/hooks/useProductComposition'
 import { useProducts } from '@/hooks/useProducts'
 import { ApiError } from '@/lib/api/errors'
 import { formatSecondsToHHMMSS } from '@/lib/forms/durationField'
+import { normalizeForSearch } from '@/lib/forms/textSearch'
 import type { UpdateProductCompositionInput } from '@/lib/api/productComposition'
 import type { CreateProductInput, UpdateProductPriceInput } from '@/lib/api/products'
 import type { Product, ProductType } from '@/types/domain'
+
+const PRODUCT_SEARCH_LISTBOX_ID = 'product-search-listbox'
 
 function toErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message
@@ -49,6 +55,32 @@ const PRODUCT_TYPE_LABELS: Record<ProductType, string> = {
 const PRODUCT_NAME_LINK_CLASSNAME =
   'text-brand-primary hover:text-brand-primary-dark focus-visible:ring-brand-accent rounded outline-none hover:underline focus-visible:ring-2'
 
+// Ordenação: Tipo/Categoria comparam pelo texto exibido ao usuário (nunca o
+// valor bruto de product_type); Tempo/Peso comparam o valor numérico em
+// segundos/gramas (nunca o texto já formatado em HH:MM:SS/"NNN g", que
+// ordenaria como texto e não numericamente); Preço é sempre um número
+// presente (products.default_price nunca é null no contrato).
+type ProductSortColumn = 'name' | 'product_type' | 'category' | 'print_time' | 'weight' | 'price' | 'is_active'
+
+function getProductSortValue(product: Product, column: ProductSortColumn): string | number | boolean | null {
+  switch (column) {
+    case 'name':
+      return product.name
+    case 'product_type':
+      return PRODUCT_TYPE_LABELS[product.product_type]
+    case 'category':
+      return product.category
+    case 'print_time':
+      return product.default_print_time_seconds
+    case 'weight':
+      return product.default_weight_grams
+    case 'price':
+      return product.default_price
+    case 'is_active':
+      return product.is_active
+  }
+}
+
 export function ProductsPage() {
   const { products, isLoading, error, refetch, create, changePrice, update } = useProducts()
   const { accessories } = useAccessories()
@@ -58,6 +90,8 @@ export function ProductsPage() {
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [pendingToggleId, setPendingToggleId] = useState<string | null>(null)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [sort, setSort] = useState<SortState<ProductSortColumn> | null>(null)
 
   const [priceDialogProduct, setPriceDialogProduct] = useState<Product | null>(null)
   const [isSubmittingPrice, setIsSubmittingPrice] = useState(false)
@@ -67,6 +101,38 @@ export function ProductsPage() {
   const [isSubmittingComposition, setIsSubmittingComposition] = useState(false)
   const [compositionError, setCompositionError] = useState<string | null>(null)
   const composition = useProductComposition(compositionDialogProduct?.id ?? null)
+
+  // Busca: só pelo nome (product.name), local sobre `products` já
+  // carregados — nenhuma nova chamada a useProducts/API a cada tecla
+  // digitada.
+  const filteredProducts = useMemo(() => {
+    const term = normalizeForSearch(searchTerm)
+    if (!term) return products
+    return products.filter((product) => normalizeForSearch(product.name).includes(term))
+  }, [products, searchTerm])
+
+  // Ordenação aplicada DEPOIS do filtro de busca (filtra primeiro, ordena o
+  // resultado filtrado em seguida). Nunca muta `products` (o array vindo
+  // do hook) — sortByColumn sempre retorna uma cópia nova.
+  const sortedProducts = useMemo(
+    () => sortByColumn(filteredProducts, sort, getProductSortValue),
+    [filteredProducts, sort],
+  )
+
+  // Sugestões do autocomplete: mesma lista já filtrada+ordenada que a
+  // tabela mostra (respeita a ordenação visual ativa), deduplicada por
+  // product.id — nunca duas sugestões idênticas quando a mesma referência
+  // aparece repetida no array vindo do hook.
+  const suggestions = useMemo(() => {
+    const seenIds = new Set<string>()
+    const result: Array<{ id: string; label: string }> = []
+    for (const product of sortedProducts) {
+      if (seenIds.has(product.id)) continue
+      seenIds.add(product.id)
+      result.push({ id: product.id, label: product.name })
+    }
+    return result
+  }, [sortedProducts])
 
   function openCreateDialog() {
     setCreateError(null)
@@ -186,7 +252,21 @@ export function ProductsPage() {
         </div>
       )}
 
-      <div className="mt-4">
+      <SearchAutocomplete
+        className="mt-4 max-w-xs"
+        value={searchTerm}
+        onValueChange={setSearchTerm}
+        suggestions={suggestions}
+        onSelect={setSearchTerm}
+        ariaLabel="Buscar produto"
+        placeholder="Buscar produto..."
+        clearLabel="Limpar busca"
+        listboxId={PRODUCT_SEARCH_LISTBOX_ID}
+        listboxAriaLabel="Sugestões de produto"
+        noResultsText="Nenhum produto encontrado."
+      />
+
+      <div className="mt-3">
         {isLoading ? (
           <div className="flex flex-col gap-2">
             <Skeleton className="h-8 w-full" />
@@ -195,6 +275,8 @@ export function ProductsPage() {
           </div>
         ) : products.length === 0 ? (
           <p className="text-muted-foreground text-sm">Nenhum produto cadastrado.</p>
+        ) : sortedProducts.length === 0 ? (
+          <p className="text-muted-foreground text-sm">Nenhum produto encontrado para esta busca.</p>
         ) : (
           // 8 colunas: overflow-x-auto + min-w garante rolagem horizontal
           // controlada só em telas estreitas (mesmo padrão já aprovado em
@@ -203,18 +285,60 @@ export function ProductsPage() {
             <Table className="min-w-[1200px] table-fixed text-[16px]">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="h-auto w-[19%] py-2 whitespace-normal">Nome</TableHead>
-                  <TableHead className="h-auto w-[10%] py-2 whitespace-normal">Tipo</TableHead>
-                  <TableHead className="h-auto w-[14%] py-2 whitespace-normal">Categoria</TableHead>
-                  <TableHead className="h-auto w-[10%] py-2 whitespace-normal">Tempo de Produção</TableHead>
-                  <TableHead className="h-auto w-[11%] py-2 whitespace-normal">Peso total (g)</TableHead>
-                  <TableHead className="h-auto w-[10%] py-2 whitespace-normal">Preço</TableHead>
-                  <TableHead className="h-auto w-[8%] py-2 whitespace-normal">Ativo</TableHead>
-                  <TableHead className="h-auto w-[18%] py-2" />
+                  <SortableColumnHeader
+                    column="name"
+                    label="Produto"
+                    sort={sort}
+                    onSortChange={setSort}
+                    className="w-[16%]"
+                  />
+                  <SortableColumnHeader
+                    column="product_type"
+                    label="Tipo"
+                    sort={sort}
+                    onSortChange={setSort}
+                    className="w-[9%]"
+                  />
+                  <SortableColumnHeader
+                    column="category"
+                    label="Categoria"
+                    sort={sort}
+                    onSortChange={setSort}
+                    className="w-[12%]"
+                  />
+                  <SortableColumnHeader
+                    column="print_time"
+                    label="Tempo de Produção"
+                    sort={sort}
+                    onSortChange={setSort}
+                    className="w-[11%]"
+                  />
+                  <SortableColumnHeader
+                    column="weight"
+                    label="Peso total (g)"
+                    sort={sort}
+                    onSortChange={setSort}
+                    className="w-[11%]"
+                  />
+                  <SortableColumnHeader
+                    column="price"
+                    label="Preço"
+                    sort={sort}
+                    onSortChange={setSort}
+                    className="w-[9%]"
+                  />
+                  <SortableColumnHeader
+                    column="is_active"
+                    label="Ativo"
+                    sort={sort}
+                    onSortChange={setSort}
+                    className="w-[8%]"
+                  />
+                  <TableHead className="h-auto w-[24%] py-2" />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {products.map((product) => {
+                {sortedProducts.map((product) => {
                   const printTimeText = formatPrintTime(product.default_print_time_seconds)
                   const weightText = formatWeight(product.default_weight_grams)
                   return (
@@ -222,6 +346,9 @@ export function ProductsPage() {
                       key={product.id}
                       // Mesmo zebra striping com a paleta Forma já aprovado em
                       // Clientes — ver frontend/src/pages/customers/CustomersPage.tsx.
+                      // Baseado na posição renderizada (nth-child via
+                      // odd:/even:), então já reflete a ordem visual atual
+                      // (busca + ordenação) sem nenhum cálculo extra.
                       className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft"
                     >
                       <TableCell className="truncate" title={product.name}>

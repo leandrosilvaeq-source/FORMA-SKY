@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
+import type { Product } from '@/types/domain'
 
 const { useProductsMock, useAccessoriesMock, usePackagingMock, useProductCompositionMock, toastMock, useAuthMock } =
   vi.hoisted(() => ({
@@ -23,7 +24,7 @@ vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
 
 import { ProductsPage } from './ProductsPage'
 
-const product = {
+const product: Product = {
   id: '1',
   name: 'Chaveiro',
   category: 'Decoração',
@@ -72,6 +73,60 @@ const productAccessoryRow = { id: 'pa1', product_id: '1', accessory_id: 'a1', qu
 
 function renderPage() {
   return render(<ProductsPage />, { wrapper: MemoryRouter })
+}
+
+function mockProducts(
+  list: Product[],
+  overrides: Partial<{ isLoading: boolean; error: unknown; refetch: ReturnType<typeof vi.fn> }> = {},
+  createMock: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined),
+  changePriceMock: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined),
+  updateMock: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(list[0]),
+) {
+  useProductsMock.mockReturnValue({
+    products: list,
+    isLoading: overrides.isLoading ?? false,
+    error: overrides.error ?? null,
+    refetch: overrides.refetch ?? vi.fn(),
+    create: createMock,
+    changePrice: changePriceMock,
+    update: updateMock,
+  })
+}
+
+// A lista de sugestões do autocomplete pode repetir, como sugestão, o
+// mesmo nome já visível numa célula da tabela — por isso qualquer
+// asserção de presença/ausência de um nome precisa ser explicitamente
+// escopada à tabela ou à listbox, nunca screen.getByText/queryByText solto
+// (que passaria a encontrar 2 elementos e quebrar com "multiple elements").
+function getTable(): HTMLElement {
+  return screen.getByRole('table')
+}
+
+function queryListbox(): HTMLElement | null {
+  return screen.queryByRole('listbox', { name: 'Sugestões de produto' })
+}
+
+function getListbox(): HTMLElement {
+  return screen.getByRole('listbox', { name: 'Sugestões de produto' })
+}
+
+async function applySort(
+  user: ReturnType<typeof userEvent.setup>,
+  columnLabel: string,
+  option: 'Ordenar crescente' | 'Ordenar decrescente' | 'Remover ordenação',
+): Promise<void> {
+  await user.click(screen.getByRole('button', { name: `Ordenar coluna ${columnLabel}` }))
+  await user.click(await screen.findByRole('menuitem', { name: option }))
+}
+
+// Retorna, na ordem visual atual (DOM), o nome de "Produto" de cada linha
+// de dados — usado como "impressão digital" da ordem das linhas em
+// qualquer teste de busca/ordenação, já que o nome é sempre visível e
+// único por linha nos fixtures usados aqui, independente de qual coluna
+// está de fato ordenando.
+function getVisibleProductNamesInOrder(): string[] {
+  const dataRows = screen.getAllByRole('row').filter((row) => within(row).queryAllByRole('cell').length > 0)
+  return dataRows.map((row) => within(row).getAllByRole('cell')[0].textContent ?? '')
 }
 
 describe('ProductsPage', () => {
@@ -408,7 +463,7 @@ describe('ProductsPage', () => {
     await user.click(screen.getByRole('button', { name: /novo produto/i }))
     await user.type(screen.getByLabelText(/^nome$/i), 'Vaso')
     await user.type(screen.getByLabelText(/^preço$/i), '2500')
-    await user.type(screen.getByLabelText(/tempo de produção/i), '1h30min')
+    await user.type(screen.getByRole('textbox', { name: /tempo de produção/i }), '1h30min')
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
     await waitFor(() =>
@@ -583,5 +638,500 @@ describe('ProductsPage', () => {
     expect(document.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0)
     expect(screen.queryByText('Nenhum produto cadastrado.')).not.toBeInTheDocument()
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  })
+
+  it('renomeação: mostra o cabeçalho "Produto" e não mostra mais "Nome"', () => {
+    renderPage()
+
+    expect(screen.getByRole('columnheader', { name: /^Produto/ })).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: 'Nome' })).not.toBeInTheDocument()
+  })
+
+  describe('Busca rápida por produto', () => {
+    const vaso = { ...product, id: '10', name: 'Vaso Decorativo' }
+    const suporte = { ...product, id: '11', name: 'Suporte de Celular' }
+    const luminaria = { ...product, id: '12', name: 'Luminária' }
+
+    beforeEach(() => {
+      mockProducts([vaso, suporte, luminaria])
+    })
+
+    it('possui rótulo acessível "Buscar produto" e placeholder "Buscar produto..."', () => {
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar produto' })
+      expect(input).toBeInTheDocument()
+      expect(input).toHaveAttribute('placeholder', 'Buscar produto...')
+    })
+
+    it('busca por nome completo encontra o produto correspondente', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'Vaso Decorativo')
+
+      expect(within(getTable()).getByText('Vaso Decorativo')).toBeInTheDocument()
+      expect(within(getTable()).queryByText('Suporte de Celular')).not.toBeInTheDocument()
+      expect(within(getTable()).queryByText('Luminária')).not.toBeInTheDocument()
+    })
+
+    it('correspondência parcial ("vaso") encontra "Vaso Decorativo"', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'vaso')
+
+      expect(within(getTable()).getByText('Vaso Decorativo')).toBeInTheDocument()
+      expect(within(getTable()).queryByText('Suporte de Celular')).not.toBeInTheDocument()
+    })
+
+    it('busca sem diferenciar maiúsculas/minúsculas', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'SUPORTE')
+
+      expect(within(getTable()).getByText('Suporte de Celular')).toBeInTheDocument()
+      expect(within(getTable()).queryByText('Vaso Decorativo')).not.toBeInTheDocument()
+    })
+
+    it('busca tolerante a acentos ("luminaria" encontra "Luminária")', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'luminaria')
+
+      expect(within(getTable()).getByText('Luminária')).toBeInTheDocument()
+    })
+
+    it('remove espaços extras do termo pesquisado', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), '   vaso   ')
+
+      expect(within(getTable()).getByText('Vaso Decorativo')).toBeInTheDocument()
+    })
+
+    it('termo sem resultado mostra o estado vazio específico da busca, distinto de "Nenhum produto cadastrado."', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'xyzxyz')
+
+      expect(screen.getByText('Nenhum produto encontrado para esta busca.')).toBeInTheDocument()
+      expect(screen.queryByText('Nenhum produto cadastrado.')).not.toBeInTheDocument()
+    })
+
+    it('não considera tipo, categoria, preço ou outros campos — só o nome', async () => {
+      mockProducts([{ ...vaso, category: 'Decorativos Especiais' }, suporte, luminaria])
+      const user = userEvent.setup()
+      renderPage()
+
+      // "especiais" só bate na categoria de Vaso, nunca no nome.
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'especiais')
+
+      expect(screen.getByText('Nenhum produto encontrado para esta busca.')).toBeInTheDocument()
+    })
+
+    it('limpar busca restaura todos os produtos', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar produto' })
+      await user.type(input, 'vaso')
+      await user.click(screen.getByRole('button', { name: /limpar busca/i }))
+
+      expect(input).toHaveValue('')
+      expect(screen.getByText('Vaso Decorativo')).toBeInTheDocument()
+      expect(screen.getByText('Suporte de Celular')).toBeInTheDocument()
+      expect(screen.getByText('Luminária')).toBeInTheDocument()
+    })
+
+    it('nenhuma nova chamada ao hook/API enquanto o usuário digita', async () => {
+      const refetchMock = vi.fn()
+      mockProducts([vaso, suporte, luminaria], { refetch: refetchMock })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'vaso')
+
+      expect(refetchMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('Autocomplete/typeahead do campo "Buscar produto"', () => {
+    const vaso = { ...product, id: '20', name: 'Vaso Grande' }
+    const vasinho = { ...product, id: '21', name: 'Vaso Pequeno' }
+    const chaveiro = { ...product, id: '22', name: 'Chaveiro' }
+
+    beforeEach(() => {
+      mockProducts([vaso, vasinho, chaveiro])
+    })
+
+    it('não abre a lista com o campo vazio', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('combobox', { name: 'Buscar produto' }))
+
+      expect(queryListbox()).not.toBeInTheDocument()
+    })
+
+    it('sugestões são atualizadas a cada caractere digitado', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar produto' })
+      await user.type(input, 'vaso')
+      expect(within(getListbox()).getAllByRole('option')).toHaveLength(2)
+
+      await user.type(input, ' g')
+      expect(within(getListbox()).getAllByRole('option')).toHaveLength(1)
+      expect(within(getListbox()).getByRole('option', { name: 'Vaso Grande' })).toBeInTheDocument()
+    })
+
+    it('clicar numa sugestão preenche o nome completo, filtra a tabela e fecha a lista', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'vaso')
+      await user.click(within(getListbox()).getByRole('option', { name: 'Vaso Pequeno' }))
+
+      expect(screen.getByRole('combobox', { name: 'Buscar produto' })).toHaveValue('Vaso Pequeno')
+      expect(queryListbox()).not.toBeInTheDocument()
+      expect(within(getTable()).getByText('Vaso Pequeno')).toBeInTheDocument()
+      expect(within(getTable()).queryByText('Vaso Grande')).not.toBeInTheDocument()
+    })
+
+    it('ArrowDown + Enter seleciona a primeira sugestão', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar produto' })
+      await user.type(input, 'vaso')
+      await user.keyboard('{ArrowDown}{Enter}')
+
+      expect(input).toHaveValue('Vaso Grande')
+      expect(queryListbox()).not.toBeInTheDocument()
+    })
+
+    it('ArrowUp navega para a sugestão anterior', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar produto' })
+      await user.type(input, 'vaso')
+      await user.keyboard('{ArrowDown}{ArrowDown}') // ativa Vaso Pequeno (índice 1)
+      await user.keyboard('{ArrowUp}') // volta para Vaso Grande (índice 0)
+      await user.keyboard('{Enter}')
+
+      expect(input).toHaveValue('Vaso Grande')
+    })
+
+    it('Escape fecha a lista sem apagar o texto digitado', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar produto' })
+      await user.type(input, 'vaso')
+      await user.keyboard('{Escape}')
+
+      expect(queryListbox()).not.toBeInTheDocument()
+      expect(input).toHaveValue('vaso')
+      expect(within(getTable()).getByText('Vaso Grande')).toBeInTheDocument()
+      expect(within(getTable()).getByText('Vaso Pequeno')).toBeInTheDocument()
+    })
+
+    it('clicar fora do campo/lista fecha as sugestões, sem alterar o texto nem a tabela', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar produto' })
+      await user.type(input, 'vaso')
+      expect(queryListbox()).toBeInTheDocument()
+
+      await user.click(screen.getByRole('heading', { name: 'Produtos' }))
+
+      expect(queryListbox()).not.toBeInTheDocument()
+      expect(input).toHaveValue('vaso')
+    })
+
+    it('"Limpar busca" fecha o autocomplete e restaura a tabela completa', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'vaso')
+      await user.click(screen.getByRole('button', { name: /limpar busca/i }))
+
+      expect(queryListbox()).not.toBeInTheDocument()
+      expect(within(getTable()).getByText('Chaveiro')).toBeInTheDocument()
+    })
+
+    it('voltar a editar o texto reabre as sugestões com a lista atualizada', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar produto' })
+      await user.type(input, 'vaso')
+      await user.click(within(getListbox()).getByRole('option', { name: 'Vaso Grande' }))
+      expect(queryListbox()).not.toBeInTheDocument()
+
+      await user.type(input, ' extra')
+
+      expect(queryListbox()).toBeInTheDocument()
+    })
+
+    it('nenhuma seleção automática mesmo com uma única sugestão correspondente', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar produto' })
+      await user.type(input, 'chaveiro')
+
+      expect(within(getListbox()).getAllByRole('option')).toHaveLength(1)
+      expect(input).toHaveValue('chaveiro')
+      expect(within(getTable()).getByText('Chaveiro')).toBeInTheDocument()
+    })
+
+    it('atributos e nomes acessíveis do combobox/listbox/opções', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const input = screen.getByRole('combobox', { name: 'Buscar produto' })
+      expect(input).toHaveAttribute('aria-autocomplete', 'list')
+      expect(input).toHaveAttribute('aria-controls', 'product-search-listbox')
+      expect(input).toHaveAttribute('aria-expanded', 'false')
+      expect(input).not.toHaveAttribute('aria-activedescendant')
+
+      await user.type(input, 'vaso')
+      expect(input).toHaveAttribute('aria-expanded', 'true')
+      expect(getListbox()).toHaveAttribute('id', 'product-search-listbox')
+
+      await user.keyboard('{ArrowDown}')
+      const activeOption = within(getListbox()).getByRole('option', { name: 'Vaso Grande' })
+      expect(input).toHaveAttribute('aria-activedescendant', activeOption.id)
+      expect(activeOption).toHaveAttribute('aria-selected', 'true')
+    })
+  })
+
+  describe('Ordenação por coluna (menu estilo filtro de tabela)', () => {
+    // Conjunto único de 4 produtos reaproveitado por todos os testes desta
+    // seção. Propositalmente inclui: valores vazios (id 'p3', category/
+    // print_time/weight null) para provar que ficam sempre no final; e um
+    // empate real de nome ('ana' vs 'Ana', id 'p2' e 'p3', nessa ordem
+    // original) e de Tipo (CATALOG em 'p3' e 'p4') para provar
+    // estabilidade — comparação por Intl.Collator(sensitivity:'base')
+    // trata "ana"/"Ana" como iguais.
+    const rowCarlos = {
+      ...product,
+      id: 'p1',
+      name: 'Carlos',
+      product_type: 'SPOT' as const,
+      category: 'Zeta Categoria',
+      default_print_time_seconds: 300,
+      default_weight_grams: 30,
+      default_price: 30,
+      is_active: true,
+    }
+    const rowAnaLower = {
+      ...product,
+      id: 'p2',
+      name: 'ana',
+      product_type: 'CUSTOM' as const,
+      category: 'Alfa Categoria',
+      default_print_time_seconds: 100,
+      default_weight_grams: 10,
+      default_price: 10,
+      is_active: false,
+    }
+    const rowAnaUpper = {
+      ...product,
+      id: 'p3',
+      name: 'Ana',
+      product_type: 'CATALOG' as const,
+      category: null,
+      default_print_time_seconds: null,
+      default_weight_grams: null,
+      default_price: 20,
+      is_active: true,
+    }
+    const rowBeatriz = {
+      ...product,
+      id: 'p4',
+      name: 'Beatriz',
+      product_type: 'CATALOG' as const,
+      category: 'Beta Categoria',
+      default_print_time_seconds: 200,
+      default_weight_grams: 20,
+      default_price: 15,
+      is_active: true,
+    }
+
+    beforeEach(() => {
+      mockProducts([rowCarlos, rowAnaLower, rowAnaUpper, rowBeatriz])
+    })
+
+    it.each([
+      ['Produto', ['ana', 'Ana', 'Beatriz', 'Carlos'], ['Carlos', 'Beatriz', 'ana', 'Ana']],
+      ['Tipo', ['Ana', 'Beatriz', 'ana', 'Carlos'], ['Carlos', 'ana', 'Ana', 'Beatriz']],
+      ['Categoria', ['ana', 'Beatriz', 'Carlos', 'Ana'], ['Carlos', 'Beatriz', 'ana', 'Ana']],
+      ['Tempo de Produção', ['ana', 'Beatriz', 'Carlos', 'Ana'], ['Carlos', 'Beatriz', 'ana', 'Ana']],
+      ['Peso total (g)', ['ana', 'Beatriz', 'Carlos', 'Ana'], ['Carlos', 'Beatriz', 'ana', 'Ana']],
+      ['Preço', ['ana', 'Beatriz', 'Ana', 'Carlos'], ['Carlos', 'Ana', 'Beatriz', 'ana']],
+      ['Ativo', ['ana', 'Carlos', 'Ana', 'Beatriz'], ['Carlos', 'Ana', 'Beatriz', 'ana']],
+    ])('coluna %s: crescente e decrescente respeitam a ordem esperada (vazios sempre no final, texto de Tipo/Categoria, numérico de Tempo/Peso/Preço)', async (columnLabel, ascOrder, descOrder) => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, columnLabel, 'Ordenar crescente')
+      expect(getVisibleProductNamesInOrder()).toEqual(ascOrder)
+
+      await applySort(user, columnLabel, 'Ordenar decrescente')
+      expect(getVisibleProductNamesInOrder()).toEqual(descOrder)
+    })
+
+    it('somente uma coluna ordenada por vez: escolher outra coluna substitui a ordenação anterior', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Produto', 'Ordenar crescente')
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'ascending')
+
+      await applySort(user, 'Preço', 'Ordenar crescente')
+      expect(screen.getByRole('columnheader', { name: /^Preço/ })).toHaveAttribute('aria-sort', 'ascending')
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'none')
+      expect(getVisibleProductNamesInOrder()).toEqual(['ana', 'Beatriz', 'Ana', 'Carlos'])
+    })
+
+    it('remover a ordenação restaura a ordem original (a ordem em que o hook devolveu os registros)', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Produto', 'Ordenar decrescente')
+      expect(getVisibleProductNamesInOrder()).not.toEqual(['Carlos', 'ana', 'Ana', 'Beatriz'])
+
+      await applySort(user, 'Produto', 'Remover ordenação')
+
+      expect(getVisibleProductNamesInOrder()).toEqual(['Carlos', 'ana', 'Ana', 'Beatriz'])
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'none')
+    })
+
+    it('aria-sort correto: none por padrão, ascending/descending após ordenar', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'none')
+
+      await applySort(user, 'Produto', 'Ordenar crescente')
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'ascending')
+
+      await applySort(user, 'Produto', 'Ordenar decrescente')
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'descending')
+    })
+
+    it('a coluna de ações (sem título nem dado próprio) não é ordenável', () => {
+      renderPage()
+
+      const headers = screen.getAllByRole('columnheader')
+      const actionsHeader = headers[headers.length - 1]
+      expect(actionsHeader).toHaveTextContent('')
+      expect(within(actionsHeader).queryByRole('button', { name: /ordenar coluna/i })).not.toBeInTheDocument()
+      expect(actionsHeader).not.toHaveAttribute('aria-sort')
+    })
+
+    it('nomes acessíveis claros nos botões de ordenação de cada coluna', () => {
+      renderPage()
+
+      for (const label of ['Produto', 'Tipo', 'Categoria', 'Tempo de Produção', 'Peso total (g)', 'Preço', 'Ativo']) {
+        expect(screen.getByRole('button', { name: `Ordenar coluna ${label}` })).toBeInTheDocument()
+      }
+    })
+  })
+
+  describe('Combinação entre busca e ordenação', () => {
+    const carlos = { ...product, id: 'p1', name: 'Carlos', default_price: 30 }
+    const alice = { ...product, id: 'p2', name: 'Alice', default_price: 10 }
+    const amanda = { ...product, id: 'p3', name: 'Amanda', default_price: 20 }
+
+    beforeEach(() => {
+      mockProducts([carlos, alice, amanda])
+    })
+
+    it('primeiro filtra pelo nome, depois ordena o resultado filtrado', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'a')
+      expect(getVisibleProductNamesInOrder()).toHaveLength(3)
+
+      await applySort(user, 'Produto', 'Ordenar crescente')
+      expect(getVisibleProductNamesInOrder()).toEqual(['Alice', 'Amanda', 'Carlos'])
+
+      await user.clear(screen.getByRole('combobox', { name: 'Buscar produto' }))
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'am')
+      expect(getVisibleProductNamesInOrder()).toEqual(['Amanda'])
+    })
+
+    it('limpar a busca mantém a ordenação ativa', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Produto', 'Ordenar decrescente')
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'a')
+      expect(getVisibleProductNamesInOrder()).toEqual(['Carlos', 'Amanda', 'Alice'])
+
+      await user.click(screen.getByRole('button', { name: /limpar busca/i }))
+
+      expect(getVisibleProductNamesInOrder()).toEqual(['Carlos', 'Amanda', 'Alice'])
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'descending')
+    })
+
+    it('remover a ordenação mantém a busca ativa', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Produto', 'Ordenar crescente')
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'am')
+      expect(getVisibleProductNamesInOrder()).toEqual(['Amanda'])
+
+      await applySort(user, 'Produto', 'Remover ordenação')
+
+      expect(screen.getByRole('combobox', { name: 'Buscar produto' })).toHaveValue('am')
+      expect(getVisibleProductNamesInOrder()).toEqual(['Amanda'])
+    })
+
+    it('autocomplete respeita a ordenação ativa e preserva a ordenação ao selecionar uma sugestão', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Produto', 'Ordenar decrescente')
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'a')
+
+      const options = within(getListbox()).getAllByRole('option')
+      expect(options.map((option) => option.textContent)).toEqual(['Carlos', 'Amanda', 'Alice'])
+
+      await user.click(options[0])
+
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'descending')
+    })
+
+    it('zebra striping é recalculado conforme a ordem visual resultante da busca + ordenação', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Produto', 'Ordenar crescente')
+
+      const dataRows = screen.getAllByRole('row').filter((row) => within(row).queryAllByRole('cell').length > 0)
+      expect(dataRows.map((row) => within(row).getAllByRole('cell')[0].textContent)).toEqual([
+        'Alice',
+        'Amanda',
+        'Carlos',
+      ])
+      for (const row of dataRows) {
+        expect(row).toHaveClass('odd:bg-brand-primary-soft/50')
+        expect(row).toHaveClass('even:bg-white')
+      }
+    })
   })
 })

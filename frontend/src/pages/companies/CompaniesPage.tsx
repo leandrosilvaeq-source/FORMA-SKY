@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { AppLayout } from '@/components/layout/AppLayout'
+import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
+import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
+import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { CompanyForm, type CompanyFormValues, type ContactsStatus } from '@/components/companies/CompanyForm'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -17,6 +20,7 @@ import {
   normalizeInstagramHandle,
   normalizeWhatsAppNumber,
 } from '@/lib/forms/customerContact'
+import { normalizeForSearch } from '@/lib/forms/textSearch'
 import type { Company } from '@/types/domain'
 
 // Helpers de normalização/validação de contato reaproveitados de
@@ -26,6 +30,7 @@ import type { Company } from '@/types/domain'
 // renomeado/movido nesta rodada: o contrato já é genérico o bastante.
 const CONTACT_LINK_CLASSNAME =
   'text-brand-primary hover:text-brand-primary-dark focus-visible:ring-brand-accent rounded outline-none hover:underline focus-visible:ring-2'
+const COMPANY_SEARCH_LISTBOX_ID = 'company-search-listbox'
 
 function toErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message
@@ -39,6 +44,77 @@ function contactsCellText(status: ContactsStatus, names: string[]): string {
   if (status === 'loading') return 'Carregando contatos…'
   if (status === 'error') return 'Contato indisponível'
   return names.length > 0 ? names.join(', ') : '—'
+}
+
+// Uma linha "de exibição" pré-computada por empresa — os mesmos valores já
+// normalizados/formatados que a tabela mostra (nunca o dado bruto do banco
+// para WhatsApp/Instagram/Contato(s), por exigência explícita — ordenar
+// pelo valor normalizado/exibido, não pelo texto cru gravado).
+interface CompanyRow {
+  company: Company
+  contactsText: string
+  contactsSortValue: string | null
+  whatsappDisplay: string | null
+  whatsappHref: string | null
+  instagramDisplay: string | null
+  instagramHref: string | null
+  notes: string | null
+}
+
+function buildCompanyRow(
+  company: Company,
+  customersStatus: ContactsStatus,
+  customerNamesByCompanyId: Map<string, string[]>,
+): CompanyRow {
+  const contactNames = customerNamesByCompanyId.get(company.id) ?? []
+  const contactsText = contactsCellText(customersStatus, contactNames)
+  const contactsSortValue = contactNames.length > 0 ? contactNames.join(', ') : null
+
+  // Normalização só de APRESENTAÇÃO — nunca grava no banco. Dado antigo em
+  // qualquer formato continua exatamente como está até ser editado/salvo
+  // de novo pelo formulário; aqui só decidimos como MOSTRAR, se vira link,
+  // e por qual valor ordenar (mesmo padrão de CustomersPage.tsx).
+  const whatsappNormalized = company.whatsapp ? normalizeWhatsAppNumber(company.whatsapp) : ''
+  const whatsappIsValid = isValidWhatsAppNumber(whatsappNormalized)
+  const whatsappDisplay = whatsappIsValid ? formatWhatsAppForDisplay(whatsappNormalized) : (company.whatsapp ?? null)
+  const whatsappHref = whatsappIsValid ? `https://wa.me/${whatsappNormalized.slice(1)}` : null
+
+  const instagramNormalized = company.instagram ? normalizeInstagramHandle(company.instagram) : ''
+  const instagramIsValid = isValidInstagramHandle(instagramNormalized)
+  const instagramDisplay = instagramIsValid ? instagramNormalized : (company.instagram ?? null)
+  const instagramHref = instagramIsValid ? `https://instagram.com/${instagramNormalized.slice(1)}` : null
+
+  const notes = company.notes && company.notes.trim() ? company.notes : null
+
+  return {
+    company,
+    contactsText,
+    contactsSortValue,
+    whatsappDisplay,
+    whatsappHref,
+    instagramDisplay,
+    instagramHref,
+    notes,
+  }
+}
+
+type CompanySortColumn = 'name' | 'contacts' | 'whatsapp' | 'instagram' | 'notes' | 'is_active'
+
+function getCompanySortValue(row: CompanyRow, column: CompanySortColumn): string | boolean | null {
+  switch (column) {
+    case 'name':
+      return row.company.name
+    case 'contacts':
+      return row.contactsSortValue
+    case 'whatsapp':
+      return row.whatsappDisplay
+    case 'instagram':
+      return row.instagramDisplay
+    case 'notes':
+      return row.notes
+    case 'is_active':
+      return row.company.is_active
+  }
 }
 
 export function CompaniesPage() {
@@ -79,6 +155,43 @@ export function CompaniesPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [pendingToggleId, setPendingToggleId] = useState<string | null>(null)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [sort, setSort] = useState<SortState<CompanySortColumn> | null>(null)
+
+  // Linhas de exibição pré-computadas — nunca modificam `companies` (o
+  // array vindo do hook), sempre uma cópia derivada nova via .map.
+  const rows = useMemo(
+    () => companies.map((company) => buildCompanyRow(company, customersStatus, customerNamesByCompanyId)),
+    [companies, customersStatus, customerNamesByCompanyId],
+  )
+
+  // Busca: só pelo nome (company.name), local sobre `rows` já carregadas —
+  // nenhuma nova chamada a useCompanies/API a cada tecla digitada.
+  const filteredRows = useMemo(() => {
+    const term = normalizeForSearch(searchTerm)
+    if (!term) return rows
+    return rows.filter((row) => normalizeForSearch(row.company.name).includes(term))
+  }, [rows, searchTerm])
+
+  // Ordenação aplicada DEPOIS do filtro de busca (filtra primeiro, ordena o
+  // resultado filtrado em seguida). Nunca muta `companies`/`rows` —
+  // sortByColumn sempre retorna uma cópia nova.
+  const sortedRows = useMemo(() => sortByColumn(filteredRows, sort, getCompanySortValue), [filteredRows, sort])
+
+  // Sugestões do autocomplete: mesma lista já filtrada+ordenada que a
+  // tabela mostra (respeita a ordenação visual ativa), deduplicada por
+  // company.id — nunca duas sugestões idênticas quando a mesma referência
+  // aparece repetida no array vindo do hook.
+  const suggestions = useMemo(() => {
+    const seenIds = new Set<string>()
+    const result: Array<{ id: string; label: string }> = []
+    for (const row of sortedRows) {
+      if (seenIds.has(row.company.id)) continue
+      seenIds.add(row.company.id)
+      result.push({ id: row.company.id, label: row.company.name })
+    }
+    return result
+  }, [sortedRows])
 
   function openCreateDialog() {
     setEditingCompany(null)
@@ -160,7 +273,21 @@ export function CompaniesPage() {
         </div>
       )}
 
-      <div className="mt-4">
+      <SearchAutocomplete
+        className="mt-4 max-w-xs"
+        value={searchTerm}
+        onValueChange={setSearchTerm}
+        suggestions={suggestions}
+        onSelect={setSearchTerm}
+        ariaLabel="Buscar empresa"
+        placeholder="Buscar empresa..."
+        clearLabel="Limpar busca"
+        listboxId={COMPANY_SEARCH_LISTBOX_ID}
+        listboxAriaLabel="Sugestões de empresa"
+        noResultsText="Nenhuma empresa encontrada."
+      />
+
+      <div className="mt-3">
         {isLoading ? (
           <div className="flex flex-col gap-2">
             <Skeleton className="h-8 w-full" />
@@ -169,115 +296,137 @@ export function CompaniesPage() {
           </div>
         ) : companies.length === 0 ? (
           <p className="text-muted-foreground text-sm">Nenhuma empresa cadastrada.</p>
+        ) : sortedRows.length === 0 ? (
+          <p className="text-muted-foreground text-sm">Nenhuma empresa encontrada para esta busca.</p>
         ) : (
-          <Table className="table-fixed text-[16px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="h-auto w-[18%] py-2 whitespace-normal">Nome</TableHead>
-                <TableHead className="h-auto w-[20%] py-2 whitespace-normal">Contato(s)</TableHead>
-                <TableHead className="h-auto w-[13%] py-2 whitespace-normal">WhatsApp</TableHead>
-                <TableHead className="h-auto w-[13%] py-2 whitespace-normal">Instagram</TableHead>
-                <TableHead className="h-auto w-[19%] py-2 whitespace-normal">Observações</TableHead>
-                <TableHead className="h-auto w-[7%] py-2 whitespace-normal">Ativo</TableHead>
-                <TableHead className="h-auto w-[10%] py-2" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {companies.map((company) => {
-                // Normalização só de APRESENTAÇÃO — nunca grava no banco.
-                // Dado antigo em qualquer formato continua exatamente como
-                // está até ser editado/salvo de novo pelo formulário; aqui só
-                // decidimos como MOSTRAR e se vira link (mesmo padrão de
-                // CustomersPage.tsx).
-                const whatsappNormalized = company.whatsapp ? normalizeWhatsAppNumber(company.whatsapp) : ''
-                const whatsappIsValid = isValidWhatsAppNumber(whatsappNormalized)
-                const whatsappDisplay = whatsappIsValid
-                  ? formatWhatsAppForDisplay(whatsappNormalized)
-                  : (company.whatsapp ?? '—')
-
-                const instagramNormalized = company.instagram ? normalizeInstagramHandle(company.instagram) : ''
-                const instagramIsValid = isValidInstagramHandle(instagramNormalized)
-                const instagramDisplay = instagramIsValid ? instagramNormalized : (company.instagram ?? '—')
-
-                // null, vazio ou só espaços em branco viram "—" — nunca
-                // tratados como "sem observação" de formas diferentes.
-                const notesDisplay = company.notes && company.notes.trim() ? company.notes : '—'
-
-                const contactNames = customerNamesByCompanyId.get(company.id) ?? []
-                const contactsText = contactsCellText(customersStatus, contactNames)
-
-                return (
-                  <TableRow
-                    key={company.id}
-                    // Zebra striping com a paleta Forma: linha ímpar usa
-                    // --brand-primary-soft diluído (/50), par fica branca,
-                    // hover usa o mesmo tom sem diluir — mesmo padrão já
-                    // aprovado em Clientes/Produtos.
-                    className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft"
-                  >
-                    <TableCell className="truncate" title={company.name}>
-                      {company.name}
-                    </TableCell>
-                    <TableCell className="truncate" title={contactNames.length > 0 ? contactNames.join(', ') : undefined}>
-                      {contactsText}
-                    </TableCell>
-                    <TableCell className="truncate" title={whatsappDisplay !== '—' ? whatsappDisplay : undefined}>
-                      {whatsappIsValid ? (
-                        <a
-                          href={`https://wa.me/${whatsappNormalized.slice(1)}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className={CONTACT_LINK_CLASSNAME}
-                          title={whatsappDisplay}
+          <div className="overflow-x-auto">
+            <Table className="min-w-[1100px] table-fixed text-[16px]">
+              <TableHeader>
+                <TableRow>
+                  <SortableColumnHeader
+                    column="name"
+                    label="Empresa"
+                    sort={sort}
+                    onSortChange={setSort}
+                    className="w-[16%]"
+                  />
+                  <SortableColumnHeader
+                    column="contacts"
+                    label="Contato(s)"
+                    sort={sort}
+                    onSortChange={setSort}
+                    className="w-[19%]"
+                  />
+                  <SortableColumnHeader
+                    column="whatsapp"
+                    label="WhatsApp"
+                    sort={sort}
+                    onSortChange={setSort}
+                    className="w-[13%]"
+                  />
+                  <SortableColumnHeader
+                    column="instagram"
+                    label="Instagram"
+                    sort={sort}
+                    onSortChange={setSort}
+                    className="w-[13%]"
+                  />
+                  <SortableColumnHeader
+                    column="notes"
+                    label="Observações"
+                    sort={sort}
+                    onSortChange={setSort}
+                    className="w-[18%]"
+                  />
+                  <SortableColumnHeader
+                    column="is_active"
+                    label="Ativo"
+                    sort={sort}
+                    onSortChange={setSort}
+                    className="w-[7%]"
+                  />
+                  <TableHead className="h-auto w-[14%] py-2" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sortedRows.map(({ company, contactsText, whatsappDisplay, whatsappHref, instagramDisplay, instagramHref, notes }) => {
+                  const contactNames = customerNamesByCompanyId.get(company.id) ?? []
+                  return (
+                    <TableRow
+                      key={company.id}
+                      // Zebra striping com a paleta Forma: linha ímpar usa
+                      // --brand-primary-soft diluído (/50), par fica branca,
+                      // hover usa o mesmo tom sem diluir — mesmo padrão já
+                      // aprovado em Clientes/Produtos. Baseado na posição
+                      // renderizada (nth-child via odd:/even:), então já
+                      // reflete a ordem visual atual (busca + ordenação) sem
+                      // nenhum cálculo extra.
+                      className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft"
+                    >
+                      <TableCell className="truncate" title={company.name}>
+                        {company.name}
+                      </TableCell>
+                      <TableCell className="truncate" title={contactNames.length > 0 ? contactNames.join(', ') : undefined}>
+                        {contactsText}
+                      </TableCell>
+                      <TableCell className="truncate" title={whatsappDisplay ?? undefined}>
+                        {whatsappHref ? (
+                          <a
+                            href={whatsappHref}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={CONTACT_LINK_CLASSNAME}
+                            title={whatsappDisplay ?? undefined}
+                          >
+                            {whatsappDisplay}
+                          </a>
+                        ) : (
+                          (whatsappDisplay ?? '—')
+                        )}
+                      </TableCell>
+                      <TableCell className="truncate" title={instagramDisplay ?? undefined}>
+                        {instagramHref ? (
+                          <a
+                            href={instagramHref}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={CONTACT_LINK_CLASSNAME}
+                            title={instagramDisplay ?? undefined}
+                          >
+                            {instagramDisplay}
+                          </a>
+                        ) : (
+                          (instagramDisplay ?? '—')
+                        )}
+                      </TableCell>
+                      <TableCell className="truncate" title={notes ?? undefined}>
+                        {notes ?? '—'}
+                      </TableCell>
+                      <TableCell>
+                        <Switch
+                          checked={company.is_active}
+                          disabled={pendingToggleId === company.id}
+                          onCheckedChange={() => void handleToggleActive(company)}
+                          aria-label={`${company.is_active ? 'Desativar' : 'Ativar'} ${company.name}`}
+                          className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openEditDialog(company)}
+                          className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
                         >
-                          {whatsappDisplay}
-                        </a>
-                      ) : (
-                        whatsappDisplay
-                      )}
-                    </TableCell>
-                    <TableCell className="truncate" title={instagramDisplay !== '—' ? instagramDisplay : undefined}>
-                      {instagramIsValid ? (
-                        <a
-                          href={`https://instagram.com/${instagramNormalized.slice(1)}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className={CONTACT_LINK_CLASSNAME}
-                          title={instagramDisplay}
-                        >
-                          {instagramDisplay}
-                        </a>
-                      ) : (
-                        instagramDisplay
-                      )}
-                    </TableCell>
-                    <TableCell className="truncate" title={notesDisplay !== '—' ? notesDisplay : undefined}>
-                      {notesDisplay}
-                    </TableCell>
-                    <TableCell>
-                      <Switch
-                        checked={company.is_active}
-                        disabled={pendingToggleId === company.id}
-                        onCheckedChange={() => void handleToggleActive(company)}
-                        aria-label={`${company.is_active ? 'Desativar' : 'Ativar'} ${company.name}`}
-                        className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => openEditDialog(company)}
-                        className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-                      >
-                        Editar
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
+                          Editar
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </div>
 
