@@ -788,7 +788,8 @@ Exemplos:
 
 Referenciado pela composição padrão de produtos (§9.3). Cadastro/edição pela interface fica para
 uma subetapa futura — nesta etapa a leitura via frontend é só listagem (para montar a
-composição); fixtures de teste são criadas via SQL controlado.
+composição); fixtures de teste são criadas via SQL controlado. **Planejamento da interface de
+cadastro mestre aprovado em 2026-08-22, implementação ainda não iniciada — ver §13.3.**
 
 ---
 
@@ -815,6 +816,70 @@ Exemplos:
 - caixa M;
 - Ziplock PP;
 - sacola Kraft.
+
+Mesma ressalva de §13.1: planejamento da interface de cadastro mestre aprovado em 2026-08-22,
+implementação ainda não iniciada — ver §13.3.
+
+---
+
+## 13.3 Interface de cadastro mestre — decisões aprovadas (planejamento, 2026-08-22)
+
+Decisão de escopo do Módulo 3 (Estoque e Inventário) para a interface de cadastro mestre de
+`accessories`/`packaging`, aprovada em 2026-08-22. **Ainda não implementada** — plano dividido em
+8 incrementos (Incremento 1 = esta documentação; ver `05_ROADMAP_MODULOS.md` §9). Nenhum código,
+migration ou Edge Function foi criado por esta entrada.
+
+### Campos expostos na interface
+
+- Nome (`name`);
+- Tamanho (`size`) — opcional;
+- Variante (`variant`);
+- Estoque mínimo (`minimum_stock`);
+- Ativo (`is_active`);
+- Custo unitário (`unit_cost`) — **somente leitura**.
+
+`material` **não aparece** na interface de cadastro mestre — a coluna permanece preservada no
+banco, intacta, nunca lida/editada por esta interface. Não haverá campo de Fornecedor (a tabela
+`suppliers`, §14, continua fora de escopo, só especificada). `current_stock` não será editado
+diretamente nesta etapa — nenhuma mudança de grant é necessária para manter essa restrição (o
+`UPDATE` desta coluna já não é concedido a `authenticated` desde a Migration 18).
+
+### Tamanho — opções oficiais e valores legados
+
+Opções oficiais da interface: PP, P, M, G, GG. Vazio significa "Não se aplica". **Nenhuma CHECK
+constraint será criada nesta etapa** — `size` continua texto livre no banco. Valores legados fora
+de PP/P/M/G/GG são preservados integralmente e aparecem na listagem exatamente como estão
+gravados; ao editar um registro assim, a interface nunca apaga nem converte o valor
+silenciosamente — o usuário decide manter o valor legado ou substituí-lo por uma das 5 opções
+oficiais. Não será possível criar, a partir da interface, um tamanho novo fora das 5 opções
+oficiais (só valores legados pré-existentes podem estar fora do enum).
+
+### Custo unitário
+
+`unit_cost` é **somente leitura** na interface de cadastro mestre — não há digitação manual de
+custo neste cadastro. Quando `unit_cost is null`, a interface exibe "Não informado"; um custo
+ausente nunca é tratado como zero em nenhum cálculo. Valores legados existentes (ex.: gravados via
+SQL controlado para fixtures) são preservados e exibidos normalmente. Novos custos dependerão
+futuramente das compras e entradas de estoque — **nenhuma fórmula de custo é definida ou
+inventada nesta etapa**.
+
+> **Lembrete de retomada:** quando as entradas de estoque e as regras de compras estiverem
+> implementadas e validadas, retornar ao cadastro mestre de Acessórios e Embalagens para calcular
+> e exibir automaticamente o custo conforme as compras registradas.
+
+### Exclusão
+
+A interface terá um botão "Excluir" com confirmação explícita. Exclusão física só é permitida
+para um item nunca utilizado; um item vinculado a `product_accessories`/`product_packaging` (§9.3)
+não pode ser excluído, nem um item com movimentação/histórico de estoque (quando
+`stock_movements`/`stock_reservations`, §15, existirem). Um item bloqueado deve ser desativado
+(`is_active = false`) em vez de excluído. Nenhuma exclusão em cascata é permitida. A exclusão só
+pode ser executada por um contrato protegido no backend (function `security definer` + Edge
+Function, mesmo padrão de `set_product_composition`, §9.3) — o frontend nunca recebe `GRANT
+DELETE` direto sobre `accessories`/`packaging` (confirmado por leitura: nenhuma tabela do projeto
+concede DELETE a `authenticated` hoje). **Esta exclusão protegida exigirá uma migration específica
+(nova function), ainda não criada nesta etapa.** Dados oficiais (incluindo a Petlink) nunca são
+usados como massa de teste para esta funcionalidade.
 
 ---
 

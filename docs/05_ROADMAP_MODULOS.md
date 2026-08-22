@@ -129,7 +129,7 @@ implementação. Exceção pontual: o Módulo 1 antecipou 2 das tabelas do Módu
 | Módulo | Fase 1 — Definição funcional | Fase 2 — Modelo e regras | Fases 3–7 |
 | --- | --- | --- | --- |
 | 2 — Produção | ✅ 100% (doc 01 §12–14) | 🟡 50% — especificado (doc 03 §10–11), sem migrations | ❌ 0% |
-| 3 — Estoque e Inventário | ✅ 100% (doc 01 §15–21) | 🟡 50% — `accessories`/`packaging` (doc 03 §13) **implementados** (Migration 18, antecipados pelo Módulo 1 só como cadastro mestre); `filament_types`, `spool_tares`, `filament_spools`, `suppliers`, `stock_movements`, `stock_reservations`, `inventories`, `inventory_items` (doc 03 §12, §14–16) continuam apenas especificados, sem migration; nenhuma regra de negócio de estoque (saldo/reserva/consumo) implementada | ❌ 0% |
+| 3 — Estoque e Inventário | ✅ 100% (doc 01 §15–21) | 🟡 50% — `accessories`/`packaging` (doc 03 §13) **implementados** (Migration 18, antecipados pelo Módulo 1 só como cadastro mestre); `filament_types`, `spool_tares`, `filament_spools`, `suppliers`, `stock_movements`, `stock_reservations`, `inventories`, `inventory_items` (doc 03 §12, §14–16) continuam apenas especificados, sem migration; nenhuma regra de negócio de estoque (saldo/reserva/consumo) implementada; plano de interface para cadastro mestre de acessórios/embalagens **aprovado** em 2026-08-22, implementação ainda não iniciada — ver §9 | ❌ 0% |
 | 4 — Precificação e Rentabilidade | ✅ 100% (doc 01 §22–30) | 🟡 50% — especificado (doc 03 §17–18), sem migrations | ❌ 0% |
 | 5 — Manutenção e Equipamentos | ✅ 100% (doc 01 §65) | 🟡 50% — especificado (doc 03 §24), sem migrations | ❌ 0% |
 | 6 — Onboarding, Alertas e Gestão | ✅ 100% (doc 01 §3, §59–66) | 🟡 50% — `alerts`/`notifications` especificados (doc 03 §22); escala (§25) especificada; reaproveita `parameters` do Módulo 4 (também não implementado) | ❌ 0% |
@@ -150,12 +150,107 @@ formal de retomada.
 | Gatilho | Condição de disparo | Ação ao disparar | Status |
 | --- | --- | --- | --- |
 | Ficha Técnica do Produto — detalhamento completo de custos | Estrutura oficial de custos de material, energia, máquina, perdas, MDO e margem estiver implementada no banco (Módulo 4 — Precificação e Rentabilidade, Fase 2/3 — hoje só especificada em `03_MODELO_BANCO_DADOS.md` §18.1 `pricing_calculations` e §10.1 `printers`/§12.1 `filament_types`, sem nenhuma migration) | Pausar o roadmap corrente e retornar à Ficha Técnica do Produto (Módulo 1, `frontend/src/pages/products/ProductDetailPage.tsx`) para implementar o detalhamento completo de custos, custo total e margem — hoje a ficha já cobre Identificação, Produção, Acessórios, Embalagens e Subtotal de componentes (Incrementos 1–2); seguem pendentes material, energia, máquina, perdas, MDO, custo total e margem | ⏳ Pendente — não disparado |
-| Cadastro oficial de acessórios/embalagens mestres e composição de produtos (incl. Petlink) | Módulo 3 — Estoque e Inventário possuir uma **interface funcional e validada** para cadastrar acessórios e embalagens mestres (hoje o cadastro mestre existe só no banco — tabelas `accessories`/`packaging`, Migration 18 — sem nenhuma tela; `products`/`product_accessories`/`product_packaging` já suportam composição via `set_product_composition`, mas dependem de acessórios/embalagens cadastrados) | Avisar o usuário de que a interface de Estoque está disponível, para que ele faça os cadastros oficiais de acessórios/embalagens e complete a composição dos produtos existentes — incluindo o cadastro oficial da Petlink já presente no ambiente, hoje sem composição associada | ⏳ Pendente — não disparado (interface de Estoque ainda não existe) |
+| Cadastro oficial de acessórios/embalagens mestres e composição de produtos (incl. Petlink) | Módulo 3 — Estoque e Inventário possuir uma **interface funcional e validada** para cadastrar acessórios e embalagens mestres (hoje o cadastro mestre existe só no banco — tabelas `accessories`/`packaging`, Migration 18 — sem nenhuma tela; `products`/`product_accessories`/`product_packaging` já suportam composição via `set_product_composition`, mas dependem de acessórios/embalagens cadastrados) | Avisar o usuário de que a interface de Estoque está disponível, para que ele faça os cadastros oficiais de acessórios/embalagens e complete a composição dos produtos existentes — incluindo o cadastro oficial da Petlink já presente no ambiente, hoje sem composição associada | ⏳ Pendente — não disparado (interface de Estoque ainda não existe; plano de cadastro mestre aprovado em 2026-08-22 e dividido em 8 incrementos — ver §9 —, implementação ainda não iniciada) |
 | Filtros rápidos por status na listagem de Pedidos | Os fluxos de status operacional (`order_status`) e status financeiro (`payment_status`) de Pedidos estarem **funcionais e validados de ponta a ponta** (hoje esses campos existem só como dados exibidos/traduzidos na listagem — `OrdersPage.tsx` — e podem ser ordenados/pesquisados por texto exibido, mas não há nenhuma transição de status operacional/financeiro implementada nem validada nesta rodada) | Retornar à listagem de Pedidos e criar botões de filtro rápido por status operacional e financeiro, incluindo "Aguardando pagamento" e os demais estados disponíveis (`ORDER_STATUS_LABELS`/`PAYMENT_STATUS_LABELS` já existentes em `OrdersPage.tsx`) | ⏳ Pendente — não disparado (fluxos de status ainda não são funcionais/validados) |
 
 ---
 
-# 7. Histórico de atualizações deste roadmap
+# 8. Regra permanente — padrão de novas listagens e módulos
+
+Regra permanente do Forma Sky, registrada em 2026-08-22 durante o planejamento do Módulo 3
+(Estoque): **"Toda nova listagem ou módulo deverá nascer seguindo o padrão visual e funcional
+consolidado em Clientes, Produtos, Empresas e Pedidos."**
+
+O padrão inclui, no mínimo:
+
+- `AppLayout` e navegação global existentes;
+- identidade visual e tokens oficiais da Forma 3D Studio;
+- margens, espaçamentos e densidade já aprovados nas páginas existentes;
+- tabela no padrão existente (`table-fixed`, distribuição de colunas consistente);
+- linhas ímpares em roxo suave, linhas pares em branco;
+- hover no padrão Forma;
+- truncamento de textos longos com `title`;
+- coluna de ações compacta;
+- `Switch` de Ativo padronizado;
+- busca rápida;
+- filtros pertinentes ao módulo;
+- ordenação por coluna;
+- estado de carregamento (loading);
+- estado de erro;
+- estado de lista vazia;
+- estado específico de busca/filtro sem resultado;
+- acessibilidade, foco visível e operação por teclado;
+- responsividade;
+- testes correspondentes.
+
+Nenhum módulo novo deve criar uma identidade visual paralela; componentes, utilitários e tokens já
+aprovados (`AppLayout`, `SearchAutocomplete`, `SortableColumnHeader`, `sorting.ts`,
+`textSearch.ts`) devem ser reutilizados quando tecnicamente adequados, sem refatoração ampla dos
+módulos já existentes.
+
+---
+
+# 9. Módulo 3 — Estoque e Inventário: plano de cadastro mestre (aprovado, implementação não iniciada)
+
+Planejamento aprovado em 2026-08-22 para a interface de cadastro mestre de `accessories`/
+`packaging` (Bloco 1, Migration 18) — cobre definição funcional e regras de negócio do cadastro
+mestre; **implementação (backend/frontend) ainda não iniciada**. Plano dividido em 8 incrementos
+(Incremento 1 = esta documentação). Cadastro oficial (incluindo a composição da Petlink) segue
+não liberado até a interface estar implementada e validada — ver gatilho pendente em §6.
+
+Regras de campos/tamanho/custo/exclusão aprovadas: ver `03_MODELO_BANCO_DADOS.md` §13.3.
+
+### Padrão visual e funcional
+
+Segue a regra permanente registrada em §8 (Clientes/Produtos/Empresas/Pedidos como referência) —
+nenhuma identidade paralela.
+
+### Busca, filtros e ordenação
+
+Acessórios e Embalagens terão estados de busca/filtro/ordenação **independentes** entre si (nunca
+compartilhados).
+
+- Busca por: Nome, Tamanho, Variante.
+- Filtros: Status (Todos/Ativos/Inativos); Tamanho (Todos/Não se aplica/PP/P/M/G/GG); Custo
+  (Todos/Custo disponível/Custo não informado); ação "Limpar filtros"; indicação visual de filtros
+  ativos.
+- Ordenação: Nome, Tamanho (ordem semântica PP < P < M < G < GG, não alfabética), Variante, Custo,
+  Estoque mínimo, Ativo — valores vazios sempre em posição previsível (ao final, independente da
+  direção).
+- Busca e filtros serão **locais** (sobre a lista já carregada), conforme o padrão já usado em
+  Clientes/Produtos/Empresas/Pedidos, e **não serão persistidos na URL** nesta etapa.
+
+### Rotas planejadas (decisão técnica, não implementada)
+
+`/estoque`, `/estoque/acessorios`, `/estoque/embalagens` — a entrada "Estoque" da navegação deverá
+permanecer marcada como ativa nas duas sub-rotas. Esta é só uma decisão registrada; `App.tsx` e
+`AppLayout.tsx` não foram alterados por esta entrada.
+
+### Contratos de escrita — decisão pendente antes do Incremento 2
+
+Ainda **não está decidido definitivamente** se criação/edição/ativação/desativação usarão acesso
+autenticado direto ao Supabase ou uma Edge Function dedicada. Requisitos já fixados,
+independentemente de qual opção for escolhida:
+
+- toda escrita exige autenticação, validação e tratamento padronizado de erro;
+- exclusão obrigatoriamente passa por function/RPC protegida via Edge Function (nunca acesso
+  direto) — ver `03_MODELO_BANCO_DADOS.md` §13.3;
+- a decisão entre acesso direto e Edge Function para criar/editar/ativar/desativar será tomada
+  explicitamente antes do Incremento 2 — a recomendação preferencial registrada é Edge Function,
+  por consistência, validação centralizada e auditoria futura;
+- nenhuma operação remota (migration, deploy, escrita em produção) será executada sem autorização
+  explícita separada.
+
+### Status
+
+Definição funcional: ✅ aprovada. Regras do cadastro mestre: ✅ aprovadas (ver doc `03` §13.3).
+Implementação (backend/frontend): ❌ não iniciada. Plano: 8 incrementos definidos. Cadastro
+oficial: 🔒 ainda não liberado. Nenhum percentual macro (seções 2/5) é alterado por esta entrada —
+plano aprovado não é implementação (ver regra em §1).
+
+---
+
+# 10. Histórico de atualizações deste roadmap
 
 | Data | Alteração |
 | --- | --- |
@@ -164,3 +259,4 @@ formal de retomada.
 | 2026-08-20 | Módulo 1 Fase 4: Ficha Técnica do Produto — Incrementos 1 e 2 concluídos. Incremento 1: rota `/produtos/:productId`, busca individual de produto, Identificação e Produção (peso/tempo do plate + estimativa por unidade). Incremento 2: seções Acessórios e Embalagens (nome, situação, quantidade, custo unitário, subtotal por linha, com itens inativos/indisponíveis preservados) e card Subtotal de componentes (estados completo/parcial/não calculável/vazio, custo ausente nunca tratado como zero) — ainda sem custo de material, energia, máquina, perdas, MDO, custo total ou margem. Adicionada seção 6 "Gatilhos de retorno pendentes" registrando a pausa condicionada do roadmap para retomar a Ficha Técnica com custo total/margem quando a estrutura oficial de custos (doc `03` §18.1 `pricing_calculations`) for implementada — nenhum percentual macro alterado por esta entrada. |
 | 2026-08-22 | Módulo 1: ajuste visual no formulário de Produto (criação e edição, mesmo componente `ProductForm.tsx`) — campo "Peso total (g)" passa a aparecer antes de "Tempo de Produção" (antes: Tempo de impressão antes do Peso); títulos das colunas correspondentes na listagem (`ProductsPage.tsx`) atualizados para os mesmos textos. Nenhuma lógica de validação, conversão de duração ou contrato de API/banco alterada. Adicionado à seção 6 novo gatilho pendente: quando o Módulo 3 — Estoque tiver interface funcional e validada para cadastrar acessórios/embalagens mestres, avisar o usuário para fazer os cadastros oficiais e completar a composição dos produtos, incluindo o cadastro oficial da Petlink já existente no ambiente — não implementado agora, só registrado como pendência; nenhum percentual macro alterado por esta entrada. |
 | 2026-08-22 | Módulo 1: padrão de busca rápida + autocomplete/typeahead + ordenação por coluna (menu estilo filtro de tabela), já validado em Clientes/Produtos/Empresas, estendido para a listagem de Pedidos (`OrdersPage.tsx`) — busca por número do pedido, cliente/empresa exibido ou nome de qualquer produto do pedido; ordenação em todas as 11 colunas de dados (Nº pedido com comparação numérica natural, Total/Saldo devedor numéricos, Prazo pela data real). Componente compartilhado `SearchAutocomplete.tsx` ganhou um campo opcional `description` (badge de tipo — "Pedido"/"Cliente"/"Produto") para diferenciar sugestões heterogêneas; Clientes/Produtos/Empresas não passam esse campo e continuam com a mesma renderização de antes (suítes de teste dos 3 módulos reexecutadas, sem regressão). Nenhuma alteração na criação/edição de pedidos, nos fluxos de status operacional/financeiro, nem no contrato de `vw_order_summary`. Adicionado à seção 6 novo gatilho pendente: quando os fluxos de status operacional e financeiro de Pedidos estiverem funcionais e validados de ponta a ponta, retornar à listagem para criar botões de filtro rápido por status (incluindo "Aguardando pagamento") — não implementado nesta rodada, só registrado como pendência; nenhum percentual macro alterado por esta entrada. |
+| 2026-08-22 | Módulo 3 (Estoque): auditoria somente leitura seguida de planejamento aprovado para a interface de cadastro mestre de acessórios/embalagens (Incremento 1 do plano de 8 incrementos) — nenhum código, migration, Edge Function ou dado remoto alterado por esta entrada, só documentação. Registradas em `03_MODELO_BANCO_DADOS.md` §13.3: campos da interface (Nome/Tamanho/Variante/Estoque mínimo/Ativo/Custo somente leitura), remoção de Material e Fornecedor da UI (colunas preservadas/inexistentes no banco), Tamanho opcional com 5 opções oficiais (PP/P/M/G/GG) sem CHECK constraint e sem conversão automática de valores legados, `unit_cost` somente leitura com lembrete de retomada quando compras/entradas de estoque existirem, e regras de exclusão física guardada (exigirá migration própria, ainda não criada). Adicionadas a este roadmap: §8 (regra permanente de padrão visual/funcional para novos módulos) e §9 (plano de Módulo 3 — busca/filtros/ordenação independentes por aba, rotas planejadas `/estoque/*` não implementadas, contrato de escrita ainda em aberto entre acesso direto e Edge Function, recomendação por Edge Function). Nenhum percentual macro alterado por esta entrada — plano aprovado não é implementação. |
