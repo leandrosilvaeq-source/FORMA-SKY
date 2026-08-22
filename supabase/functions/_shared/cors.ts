@@ -16,7 +16,18 @@ function getAllowedOrigins(): string[] {
 
 export function buildCorsHeaders(req: Request): Record<string, string> {
   const headers: Record<string, string> = {
-    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    // PUT precisa estar aqui: é o método usado por
+    // supabase/functions/orders/index.ts (update_order e o novo
+    // PUT /orders/:id/full -> update_quote_order). Sem PUT nesta lista, o
+    // preflight OPTIONS do navegador nega a requisição real antes mesmo
+    // dela ser enviada — fetch() rejeita com um erro genérico de rede
+    // (TypeError, sem detalhe algum acessível via JS), idêntico ao que
+    // apareceria numa falha de conexão real. Causa raiz confirmada por
+    // preflight manual (curl -X OPTIONS com
+    // Access-Control-Request-Method: PUT): a origem já estava na
+    // allowlist (Access-Control-Allow-Origin correto), só o método faltava
+    // aqui.
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers":
       "authorization, apikey, content-type, x-client-info",
     // Necessário porque Access-Control-Allow-Origin varia por requisição

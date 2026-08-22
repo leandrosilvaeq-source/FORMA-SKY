@@ -57,15 +57,32 @@ export async function callEdgeFunction<T>(
     throw new ApiError('authorization', 401, 'Sessão expirada. Faça login novamente.')
   }
 
-  const response = await fetch(`${FUNCTIONS_BASE_URL}/${name}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-      apikey: PUBLISHABLE_KEY,
-      'Content-Type': 'application/json',
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
+  // ACHADO (auditoria do erro genérico em FS-26-001): sem este try/catch,
+  // uma falha de fetch() em si (rede offline, CORS bloqueado pelo
+  // navegador, DNS, etc.) escapa como uma exceção crua (TypeError), nunca
+  // instância de ApiError — cai no fallback genérico de toErrorMessage()
+  // em cada tela ("Ocorreu um erro inesperado. Tente novamente."), sem
+  // nenhuma pista real do que houve. Convertido aqui para um ApiError com
+  // uma mensagem segura (nunca a mensagem crua do navegador, que pode
+  // variar e não deve ser tratada como confiável para exibir ao usuário).
+  let response: Response
+  try {
+    response = await fetch(`${FUNCTIONS_BASE_URL}/${name}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        apikey: PUBLISHABLE_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+  } catch {
+    throw new ApiError(
+      'database',
+      0,
+      'Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente.',
+    )
+  }
 
   let envelope: EdgeFunctionEnvelope<T>
   try {

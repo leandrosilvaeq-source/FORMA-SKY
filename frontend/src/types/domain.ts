@@ -20,6 +20,12 @@ export type PaymentMethod = 'PIX' | 'DINHEIRO' | 'CARTAO'
 
 export type ItemType = 'CATALOG' | 'CUSTOM' | 'SPOT'
 
+// products.product_type — mesmos 3 valores técnicos de ItemType (reutilizados
+// de propósito, nunca reinventados), mas um tipo próprio: classifica o
+// PRODUTO no Catálogo, não o item de um pedido específico. Migration
+// 20260821090000_add_product_type.sql (ainda não aplicada).
+export type ProductType = 'CATALOG' | 'CUSTOM' | 'SPOT'
+
 export type SearchTimeStatus = 'NOT_INFORMED' | 'IN_PROGRESS' | 'RECORDED'
 
 export type PaymentType = 'SINAL' | 'FINAL' | 'INTEGRAL' | 'AJUSTE'
@@ -71,11 +77,22 @@ export interface ModelSource {
 export interface Product {
   id: string
   name: string
+  // Classificação do produto no Catálogo — migration 20260821090000_add_product_type.sql
+  // (ainda não aplicada), NOT NULL DEFAULT 'CATALOG'. Só CATALOG está
+  // habilitado nos fluxos de Pedidos por enquanto.
+  product_type: ProductType
   category: string | null
   description: string | null
   default_price: number
-  default_print_time_minutes: number | null
+  // Segundos inteiros — renomeada de default_print_time_minutes (integer,
+  // minutos) pela migration que converte os valores legados (*60). Nunca
+  // formatado como Date/duração de calendário; ver
+  // frontend/src/lib/forms/durationField.ts.
+  default_print_time_seconds: number | null
   default_weight_grams: number | null
+  // Legado: coluna preservada no banco (não é mais exibida/editável em
+  // nenhuma tela — removida de "Novo produto" e da Ficha Técnica), nunca
+  // preenchida por produtos novos (sempre null a partir desta rodada).
   units_per_plate: number | null
   default_file_id: string | null
   allows_personalization: boolean
@@ -108,7 +125,12 @@ export interface Order {
   updated_at: string
 }
 
-// supabase/migrations/20260814040037_create_order_summary_views.sql (vw_order_summary)
+// supabase/migrations/20260814040037_create_order_summary_views.sql (vw_order_summary),
+// estendida por
+// supabase/migrations/20260821014342_extend_order_summary_and_payment_method.sql
+// com payment_method/delivery_method (colunas de orders, antes ausentes da
+// view) e item_types/item_names (agregados de order_items via LEFT JOIN
+// LATERAL — nunca persistidos em orders).
 export interface OrderSummary {
   order_id: string
   order_number: string
@@ -116,6 +138,8 @@ export interface OrderSummary {
   company_id: string | null
   order_status: OrderStatus
   payment_status: PaymentStatus
+  payment_method: PaymentMethod | null
+  delivery_method: string | null
   order_date: string
   expected_delivery_date: string | null
   actual_delivery_date: string | null
@@ -131,6 +155,14 @@ export interface OrderSummary {
   approval_required: boolean
   is_fully_approved: boolean
   pending_approval_items: number
+  // Tipos distintos de order_items.item_type presentes no pedido, em ordem
+  // alfabética determinística (array_agg(distinct ... order by ...) na
+  // view) — nunca duplicado, mesmo com vários itens do mesmo tipo.
+  item_types: ItemType[]
+  // Nome de TODOS os itens (order_items.item_name), na ordem de criação
+  // (array_agg(... order by created_at) na view) — inclui CATALOG, CUSTOM
+  // e SPOT igualmente, sem tentar resolver nome via product_id.
+  item_names: string[]
 }
 
 // supabase/migrations/20260814005328_create_order_items_table.sql

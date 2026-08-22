@@ -21,6 +21,8 @@ const orderA = {
   company_id: null,
   order_status: 'QUOTE',
   payment_status: 'WAITING_PAYMENT',
+  payment_method: null,
+  delivery_method: null,
   order_date: '2026-08-17',
   expected_delivery_date: null,
   actual_delivery_date: null,
@@ -36,6 +38,8 @@ const orderA = {
   approval_required: false,
   is_fully_approved: true,
   pending_approval_items: 0,
+  item_types: ['CATALOG'],
+  item_names: ['Chaveiro'],
 }
 
 const orderB = { ...orderA, order_id: '2', order_number: 'FS-26-002' }

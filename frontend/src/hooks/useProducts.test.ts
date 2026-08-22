@@ -24,7 +24,8 @@ const productA = {
   category: null,
   description: null,
   default_price: 10,
-  default_print_time_minutes: null,
+  product_type: 'CATALOG',
+  default_print_time_seconds: null,
   default_weight_grams: null,
   units_per_plate: null,
   default_file_id: null,
@@ -76,10 +77,10 @@ describe('useProducts', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false))
 
     await act(async () => {
-      await result.current.create({ name: 'Vaso', default_price: 25 })
+      await result.current.create({ name: 'Vaso', product_type: 'CATALOG', default_price: 25 })
     })
 
-    expect(createProductMock).toHaveBeenCalledWith({ name: 'Vaso', default_price: 25 })
+    expect(createProductMock).toHaveBeenCalledWith({ name: 'Vaso', product_type: 'CATALOG', default_price: 25 })
     await waitFor(() => expect(listProductsMock).toHaveBeenCalledTimes(2))
     expect(result.current.products).toEqual([productA, productB])
   })

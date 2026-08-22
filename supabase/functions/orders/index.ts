@@ -1,8 +1,10 @@
 // Edge Function: orders
 //
 // Rotas implementadas:
-//   POST /orders     -> RPC create_order
-//   PUT  /orders/:id -> RPC update_order
+//   POST /orders          -> RPC create_order
+//   PUT  /orders/:id      -> RPC update_order
+//   PUT  /orders/:id/full -> RPC update_quote_order (edição completa
+//     atômica de cabeçalho + itens — só QUOTE, só itens CATALOG)
 //
 // orders NÃO possui nenhuma rota GET. Leituras do Bloco 1 ficam no
 // frontend, diretamente via Supabase client autenticado (JWT do usuário) +
@@ -25,14 +27,29 @@
 //
 // RPCs usadas, conferidas contra
 // supabase/migrations/20260814030351_create_order_business_functions.sql
-// (update_order) e
-// supabase/migrations/20260814051143_create_initial_custom_version_fix.sql
-// (create_order, versão vigente — corrige só o ramo CUSTOM em relação à
-// Migration 15, passando a gravar também a linha inicial em
-// custom_versions):
-//   create_order(uuid, uuid, uuid, date, text, numeric, numeric, text, jsonb, uuid)
+// (update_order),
+// supabase/migrations/20260821014342_extend_order_summary_and_payment_method.sql
+// (create_order — ver nota abaixo sobre as duas sobrecargas existentes) e
+// supabase/migrations/20260821031143_add_update_quote_order.sql
+// (update_quote_order — edição completa atômica, só QUOTE/CATALOG):
+//   create_order(uuid, uuid, uuid, date, text, numeric, numeric, text, jsonb, uuid, text)
 //   update_order(uuid, uuid, uuid, uuid, text, date, date, text, numeric, numeric, text, uuid)
-// Ambas security definer, EXECUTE concedido só a service_role.
+//   update_quote_order(uuid, uuid, uuid, uuid, text, date, text, numeric, numeric, text, jsonb, uuid)
+// Todas security definer, EXECUTE concedido só a service_role.
+//
+// create_order tem DUAS sobrecargas no banco (identidade de função em
+// PostgreSQL inclui a lista de tipos dos parâmetros — uma função de 10
+// parâmetros e uma de 11 são funções DISTINTAS, nunca a mesma função
+// "estendida"): a de 10 parâmetros (Migration 17,
+// supabase/migrations/20260814051143_create_initial_custom_version_fix.sql)
+// é preservada intocada, sem EXECUTE para nada além de service_role, mas
+// esta Edge Function NUNCA a chama. Esta Edge Function sempre chama a de
+// 11 parâmetros (a única com p_payment_method), enviando os 11 parâmetros
+// nomeados sempre, inclusive payment_method=null quando não informado —
+// o PostgREST/supabase-js resolve overloads pelo CONJUNTO de nomes de
+// parâmetro presentes na chamada; como só a sobrecarga de 11 parâmetros
+// tem um parâmetro chamado p_payment_method, enviar esse nome já elimina
+// a de 10 parâmetros das candidatas, sem nenhuma ambiguidade possível.
 
 import { handlePreflight } from "../_shared/cors.ts";
 import { jsonResponse, errorResponse } from "../_shared/http.ts";
@@ -77,6 +94,10 @@ Deno.serve(async (req: Request) => {
 
     if (req.method === "POST" && route.length === 0) {
       return await handleCreateOrder(req);
+    }
+
+    if (req.method === "PUT" && route.length === 2 && route[1] === "full") {
+      return await handleUpdateFullOrder(req, route[0]);
     }
 
     if (req.method === "PUT" && route.length === 1) {
@@ -190,9 +211,26 @@ function optionalDateOnly(value: unknown, field: string): string | null {
 // ---------------------------------------------------------------------------
 // POST /orders -> create_order(p_customer_id, p_company_id, p_lead_source_id,
 //   p_expected_delivery_date, p_delivery_method, p_shipping_cost,
-//   p_discount_value, p_notes, p_items, p_changed_by)
+//   p_discount_value, p_notes, p_items, p_changed_by, p_payment_method)
 //
-// Nenhum dos 10 parâmetros tem DEFAULT no SQL (mesmo padrão de
+// payment_method no CORPO HTTP é OPCIONAL na criação — orders.payment_method
+// é nullable e o POST nunca exigiu presença de chave para os demais campos
+// opcionais (diferente do PUT, que usa requirePresent para todos): omitido
+// ou null no corpo vira null aqui, sem erro. Validado com o mesmo
+// PAYMENT_METHODS/optionalEnum já usado em handleUpdateOrder — a própria
+// CHECK constraint de orders.payment_method (e a validação equivalente
+// dentro da própria RPC de 11 parâmetros) é a defesa final, mas validar
+// aqui devolve um 400 claro em vez de deixar a RPC estourar um erro de
+// constraint genérico.
+//
+// Na chamada ao RPC (admin.rpc abaixo), p_payment_method é SEMPRE enviado
+// como chave (null quando não informado) — nunca omitido do objeto —
+// porque é justamente a presença desse nome de parâmetro que faz o
+// PostgREST resolver para a sobrecarga de 11 parâmetros de create_order()
+// (supabase/migrations/20260821014342_extend_order_summary_and_payment_method.sql),
+// nunca para a de 10 parâmetros preservada pela Migration 17.
+//
+// Nenhum dos demais parâmetros tem DEFAULT no SQL (mesmo padrão de
 // create_product) — todos são sempre enviados, com null explícito nos
 // opcionais ausentes. p_shipping_cost/p_discount_value = null são seguros:
 // a própria função faz coalesce(..., 0) internamente.
@@ -212,6 +250,7 @@ async function handleCreateOrder(req: Request): Promise<Response> {
   const customerId = requireUuid(body.customer_id, "customer_id");
   const companyId = optionalUuid(body.company_id, "company_id");
   const leadSourceId = optionalUuid(body.lead_source_id, "lead_source_id");
+  const paymentMethod = optionalEnum(body.payment_method, "payment_method", PAYMENT_METHODS);
   const expectedDeliveryDate = optionalDateOnly(
     body.expected_delivery_date,
     "expected_delivery_date",
@@ -238,6 +277,7 @@ async function handleCreateOrder(req: Request): Promise<Response> {
     p_notes: notes,
     p_items: items,
     p_changed_by: operator.userId,
+    p_payment_method: paymentMethod,
   });
 
   if (error) throw mapPgError(error);
@@ -323,6 +363,83 @@ async function handleUpdateOrder(req: Request, orderId: string): Promise<Respons
   if (error) throw mapPgError(error);
 
   return jsonResponse(req, { success: true }, 200);
+}
+
+// ---------------------------------------------------------------------------
+// PUT /orders/:id/full -> update_quote_order(p_order_id, p_customer_id,
+//   p_company_id, p_lead_source_id, p_payment_method,
+//   p_expected_delivery_date, p_delivery_method, p_shipping_cost,
+//   p_discount_value, p_notes, p_items, p_changed_by)
+//
+// Edição completa atômica: cabeçalho + itens substituídos numa única
+// chamada de RPC — nunca create_order, nunca múltiplas mutações
+// sequenciais (update_order + add/update/remove_order_item). Só aceita
+// itens CATALOG (item_type diferente de CATALOG é rejeitado aqui, com uma
+// mensagem específica desta rota, antes mesmo de chamar validateOrderItem
+// — evita a mensagem genérica de custom_details/spot_details ausente para
+// um caso que já sabemos ser inválido). A RPC em si recusa pedidos fora de
+// QUOTE ou com qualquer item CUSTOM/SPOT (atual ou enviado) — esta função
+// nunca replica essas checagens de status/tipo, só a de item_type=CATALOG
+// no formato do payload.
+// ---------------------------------------------------------------------------
+async function handleUpdateFullOrder(req: Request, orderId: string): Promise<Response> {
+  const operator = await resolveOperator(req);
+
+  if (!isUuid(orderId)) {
+    throw new ValidationError("Identificador de pedido inválido na rota.");
+  }
+
+  const rawBody = await req.text();
+  rejectIdentityFields(rawBody);
+  const body = parseJsonBody(rawBody);
+
+  const customerId = requireUuid(body.customer_id, "customer_id");
+  const companyId = optionalUuid(body.company_id, "company_id");
+  const leadSourceId = optionalUuid(body.lead_source_id, "lead_source_id");
+  const paymentMethod = optionalEnum(body.payment_method, "payment_method", PAYMENT_METHODS);
+  const expectedDeliveryDate = optionalDateOnly(
+    body.expected_delivery_date,
+    "expected_delivery_date",
+  );
+  const deliveryMethod = optionalString(body.delivery_method, "delivery_method");
+  const shippingCost = optionalNumber(body.shipping_cost, "shipping_cost", { min: 0 });
+  const discountValue = optionalNumber(body.discount_value, "discount_value", { min: 0 });
+  const notes = optionalString(body.notes, "notes");
+
+  if (!Array.isArray(body.items) || body.items.length === 0) {
+    throw new ValidationError("Campo obrigatório: items deve ser um array com ao menos 1 item.");
+  }
+
+  const items = body.items.map((raw, index) => {
+    const prefix = `items[${index}]`;
+    const item = requireObject(raw, prefix);
+    if (item.item_type !== "CATALOG") {
+      throw new ValidationError(
+        `Campo inválido: ${prefix}.item_type deve ser CATALOG — a edição completa só aceita itens de Catálogo nesta versão.`,
+      );
+    }
+    return validateOrderItem(raw, index);
+  });
+
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("update_quote_order", {
+    p_order_id: orderId,
+    p_customer_id: customerId,
+    p_company_id: companyId,
+    p_lead_source_id: leadSourceId,
+    p_payment_method: paymentMethod,
+    p_expected_delivery_date: expectedDeliveryDate,
+    p_delivery_method: deliveryMethod,
+    p_shipping_cost: shippingCost,
+    p_discount_value: discountValue,
+    p_notes: notes,
+    p_items: items,
+    p_changed_by: operator.userId,
+  });
+
+  if (error) throw mapPgError(error);
+
+  return jsonResponse(req, { id: data }, 200);
 }
 
 // ---------------------------------------------------------------------------

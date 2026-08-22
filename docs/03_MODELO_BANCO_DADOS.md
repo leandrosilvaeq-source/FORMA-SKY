@@ -410,15 +410,16 @@ Produtos permanentes do Catálogo.
 
 - `id`
 - `name`
-- `category`
+- `product_type` (`text`, `NOT NULL DEFAULT 'CATALOG'`) — classificação do produto no Catálogo: `CATALOG`, `CUSTOM` (Personalizado) ou `SPOT` — mesmos 3 valores técnicos de `order_items.item_type`, reutilizados de propósito (migration `20260821090000_add_product_type.sql`, ainda não aplicada). Todo produto existente antes desta migration foi classificado como `CATALOG` automaticamente (o `DEFAULT` é aplicado retroativamente pelo `ADD COLUMN`). **Só `CATALOG` está habilitado nos fluxos de criação de pedido (`create_order`/`update_quote_order`) por enquanto** — esta coluna classifica o produto no Catálogo, mas não habilita nenhum fluxo novo de pedido para `CUSTOM`/`SPOT`.
+- `category` — texto livre. A interface oferece uma seleção pré-definida (Chaveiro, Suporte, Brinquedo Sensorial, Decoração, Pet, Gamer, Geek, Beauty, Office) mais "Outro" (texto livre); o valor gravado é sempre o texto exato (da opção selecionada ou digitado em "Outro") — nunca um código separado do valor exibido. Categorias gravadas antes desta mudança que não batem com nenhuma opção pré-definida (incluindo "Beauty Office", opção antiga substituída por "Beauty"/"Office" separados) continuam válidas e abrem como "Outro" ao editar, com o texto preenchido — nunca convertidas ou apagadas automaticamente.
 - `description`
 - `default_price`
 - `default_material_id`
-- `default_print_time_minutes`
+- `default_print_time_seconds` (`integer`) — tempo total de impressão do produto, armazenado em **segundos** (renomeada de `default_print_time_minutes`, que armazenava minutos e não suportava precisão de segundos; migration `20260821070000_rename_default_print_time_to_seconds.sql`, ainda não aplicada). `NULL` = não informado. A interface sempre exibe/aceita o valor formatado como `HH:MM:SS` (ver `frontend/src/lib/forms/durationField.ts`); a coluna nunca é representada via `Date`/duração de calendário.
 - `default_weight_grams`
-- `units_per_plate`
+- `units_per_plate` — **campo legado**: preservado no banco (não sofre `DROP` nesta migration), mas sem uso na interface atual — removido do formulário "Novo produto" e da Ficha Técnica do Produto (decisão aprovada). `create_product()` sempre recebe `null` para este parâmetro a partir da Edge Function.
 - `default_file_id`
-- `allows_personalization`
+- `allows_personalization` — **não confundir com `product_type = 'CUSTOM'`**: são regras distintas e documentadas separadamente (docs/01_ESPECIFICACAO_FUNCIONAL.md §11.1/§11.2/§11.4). `allows_personalization` marca um produto de **Catálogo** que aceita personalizações leves (nome, texto, logo, troca de cor — cobradas via taxa de personalização, R$5,90/h, em `order_items.personalization_fee`), permanecendo `product_type = 'CATALOG'`. Já `product_type = 'CUSTOM'` classifica o próprio produto como inteiramente Personalizado (sob encomenda). Um produto pode ter `product_type = 'CATALOG'` e `allows_personalization = true` ao mesmo tempo — não são mutuamente exclusivos nem se substituem.
 - `is_active`
 - `created_at`
 - `updated_at`
@@ -428,6 +429,22 @@ Produtos permanentes do Catálogo.
 O preço não deve ser recalculado automaticamente a cada pedido.
 
 Custos devem ser monitorados separadamente.
+
+#### SPOT reutilizável — regra confirmada, sem campo adicional
+
+O modelo já distingue um SPOT reutilizável de um SPOT exclusivo de um pedido, sem nenhuma coluna
+extra (`is_reusable` **não existe e não é necessária**):
+
+- **Produto registrado em `public.products`** (qualquer `product_type`, incluindo `SPOT`) **=
+  produto reutilizável** — tem cadastro permanente, aparece na listagem de Produtos e pode ser
+  referenciado por `order_items.product_id` em pedidos futuros.
+- **SPOT exclusivo de um pedido** = uma linha em `order_items` com `item_type = 'SPOT'` e
+  `product_id IS NULL` (constraint `order_items_product_id_matches_item_type`, migration
+  `20260814005328_create_order_items_table.sql`) — existe só naquele pedido, nunca tem
+  contrapartida em `products`, e por isso nunca aparece na listagem de Produtos.
+
+Não há necessidade atual de um campo adicional para marcar "reutilizável": a própria existência
+(ou ausência) da linha em `products` já é o sinal.
 
 `default_packaging_id` (1 embalagem, sem quantidade), citado em versões anteriores deste
 documento, **nunca foi criado** em nenhuma migration e foi superado por `product_packaging`

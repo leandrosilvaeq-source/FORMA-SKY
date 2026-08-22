@@ -28,7 +28,10 @@ const product = {
   category: 'Decoração',
   description: 'Chaveiro em formato de gato',
   default_price: 25.5,
-  default_print_time_minutes: 130,
+  // 2h10min = 7800s — mesmo valor de antes (130 minutos), já convertido
+  // pela migration de renomeação (simula um produto legado convertido).
+  product_type: 'CATALOG',
+  default_print_time_seconds: 7800,
   default_weight_grams: 45,
   units_per_plate: 4,
   default_file_id: null,
@@ -165,20 +168,45 @@ describe('ProductDetailPage', () => {
       expect(screen.getAllByText('Ativo').length).toBeGreaterThan(0)
     })
 
-    it('renderiza peso e tempo do plate e as unidades por plate', () => {
+    it('renderiza "Peso total do produto" e "Tempo total de impressão" formatado como HH:MM:SS', () => {
       renderPage()
 
+      expect(screen.getByText('Peso total do produto')).toBeInTheDocument()
       expect(screen.getByText('45 g')).toBeInTheDocument()
-      expect(screen.getByText('2 h 10 min')).toBeInTheDocument()
-      expect(screen.getByText('4')).toBeInTheDocument()
+      expect(screen.getByText('Tempo total de impressão')).toBeInTheDocument()
+      expect(screen.getByText('02:10:00')).toBeInTheDocument()
     })
 
-    it('calcula peso e tempo estimados por unidade (plate / units_per_plate)', () => {
+    it('não exibe mais "Unidades por plate", "Peso do plate" nem nenhuma estimativa por unidade', () => {
       renderPage()
 
-      // 45g / 4 = 11.25g; 130min / 4 = 32.5min -> arredonda para 33min = 0h 33min
-      expect(screen.getByText('11,25 g (estimado)')).toBeInTheDocument()
-      expect(screen.getByText('33 min (estimado)')).toBeInTheDocument()
+      expect(screen.queryByText(/unidades por pla/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/peso do plate/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/tempo de impressão do plate/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/estimado por unidade/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/\(estimado\)/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/plate completo/i)).not.toBeInTheDocument()
+    })
+
+    it('produto legado convertido (antes em minutos) continua exibindo o tempo equivalente em HH:MM:SS', () => {
+      // product.default_print_time_seconds = 7800 simula exatamente um
+      // produto legado de 130 minutos já convertido pela migration
+      // (130 * 60 = 7800) — 7800s = 02:10:00, mesmo tempo "real" de antes.
+      renderPage()
+
+      expect(screen.getByText('02:10:00')).toBeInTheDocument()
+    })
+
+    it('tempo de impressão zero (00:00:00) é exibido, não confundido com "Não informado"', () => {
+      useProductMock.mockReturnValue({
+        status: 'success',
+        product: { ...product, default_print_time_seconds: 0 },
+        error: null,
+        retry: retryMock,
+      })
+      renderPage()
+
+      expect(screen.getByText('00:00:00')).toBeInTheDocument()
     })
 
     it('produto inativo mostra o indicador "Inativo"', () => {
@@ -200,7 +228,8 @@ describe('ProductDetailPage', () => {
       category: null,
       description: null,
       default_weight_grams: null,
-      default_print_time_minutes: null,
+      product_type: 'CATALOG',
+      default_print_time_seconds: null,
       units_per_plate: null,
     }
 
@@ -212,33 +241,12 @@ describe('ProductDetailPage', () => {
       expect(naoInformada.length).toBe(2)
     })
 
-    it('peso, tempo e unidades por plate nulos mostram "Não informado"', () => {
+    it('peso e tempo nulos mostram "Não informado" (somente os 2 campos que restaram em Produção)', () => {
       useProductMock.mockReturnValue({ status: 'success', product: productWithNulls, error: null, retry: retryMock })
       renderPage()
 
       const naoInformado = screen.getAllByText('Não informado')
-      expect(naoInformado.length).toBe(3)
-    })
-
-    it('units_per_plate ausente resulta em "Não calculável" para os valores por unidade', () => {
-      useProductMock.mockReturnValue({ status: 'success', product: productWithNulls, error: null, retry: retryMock })
-      renderPage()
-
-      const naoCalculavel = screen.getAllByText('Não calculável')
-      expect(naoCalculavel.length).toBe(2)
-    })
-
-    it('units_per_plate igual a 0 (inválido) também resulta em "Não calculável", sem dividir por zero', () => {
-      useProductMock.mockReturnValue({
-        status: 'success',
-        product: { ...product, units_per_plate: 0 },
-        error: null,
-        retry: retryMock,
-      })
-      renderPage()
-
-      const naoCalculavel = screen.getAllByText('Não calculável')
-      expect(naoCalculavel.length).toBe(2)
+      expect(naoInformado.length).toBe(2)
     })
   })
 

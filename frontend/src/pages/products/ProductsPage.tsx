@@ -15,9 +15,10 @@ import { usePackaging } from '@/hooks/usePackaging'
 import { useProductComposition } from '@/hooks/useProductComposition'
 import { useProducts } from '@/hooks/useProducts'
 import { ApiError } from '@/lib/api/errors'
+import { formatSecondsToHHMMSS } from '@/lib/forms/durationField'
 import type { UpdateProductCompositionInput } from '@/lib/api/productComposition'
 import type { CreateProductInput, UpdateProductPriceInput } from '@/lib/api/products'
-import type { Product } from '@/types/domain'
+import type { Product, ProductType } from '@/types/domain'
 
 function toErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message
@@ -26,6 +27,23 @@ function toErrorMessage(err: unknown): string {
 
 function formatPrice(value: number): string {
   return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+}
+
+function formatPrintTime(seconds: number | null): string {
+  return seconds !== null ? formatSecondsToHHMMSS(seconds) : 'Não informado'
+}
+
+function formatWeight(grams: number | null): string {
+  return grams !== null ? `${grams.toLocaleString('pt-BR')} g` : 'Não informado'
+}
+
+// Só CATALOG está em uso real hoje — os rótulos de CUSTOM/SPOT já aparecem
+// na listagem porque o Tipo passou a ser selecionável em "Novo produto",
+// mesmo esses dois fluxos não estando habilitados em Pedidos ainda.
+const PRODUCT_TYPE_LABELS: Record<ProductType, string> = {
+  CATALOG: 'Catálogo',
+  CUSTOM: 'Personalizado',
+  SPOT: 'SPOT',
 }
 
 const PRODUCT_NAME_LINK_CLASSNAME =
@@ -146,6 +164,19 @@ export function ProductsPage() {
         </Button>
       </div>
 
+      {/* Regra confirmada (não é mais uma lacuna a preencher): o modelo já
+          distingue SPOT reutilizável sem nenhum campo adicional —
+          - registro em public.products = produto reutilizável (aparece
+            aqui, qualquer que seja product_type: CATALOG, CUSTOM ou SPOT);
+          - SPOT criado só dentro de um pedido vive exclusivamente em
+            order_items (item_type='SPOT', product_id NULL) e nunca tem
+            linha correspondente em products — por isso nunca aparece
+            nesta listagem, sem precisar de nenhuma coluna is_reusable. */}
+      <p className="text-muted-foreground mt-1 text-sm">
+        A listagem reúne todos os produtos de Catálogo e os produtos reutilizáveis. Produtos SPOT criados somente
+        dentro de um pedido não aparecem aqui; um SPOT aparece quando é cadastrado como produto reutilizável.
+      </p>
+
       {error && (
         <div className="border-destructive/50 bg-destructive/10 mt-4 flex items-center justify-between rounded-lg border p-3 text-sm">
           <span>{toErrorMessage(error)}</span>
@@ -165,71 +196,90 @@ export function ProductsPage() {
         ) : products.length === 0 ? (
           <p className="text-muted-foreground text-sm">Nenhum produto cadastrado.</p>
         ) : (
-          <Table className="table-fixed text-[16px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="h-auto w-[30%] py-2 whitespace-normal">Nome</TableHead>
-                <TableHead className="h-auto w-[20%] py-2 whitespace-normal">Categoria</TableHead>
-                <TableHead className="h-auto w-[15%] py-2 whitespace-normal">Preço</TableHead>
-                <TableHead className="h-auto w-[10%] py-2 whitespace-normal">Ativo</TableHead>
-                <TableHead className="h-auto w-[25%] py-2" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {products.map((product) => (
-                <TableRow
-                  key={product.id}
-                  // Mesmo zebra striping com a paleta Forma já aprovado em
-                  // Clientes — ver frontend/src/pages/customers/CustomersPage.tsx.
-                  className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft"
-                >
-                  <TableCell className="truncate" title={product.name}>
-                    <Link to={`/produtos/${product.id}`} className={PRODUCT_NAME_LINK_CLASSNAME}>
-                      {product.name}
-                    </Link>
-                  </TableCell>
-                  <TableCell className="truncate" title={product.category ?? undefined}>
-                    {product.category ?? '—'}
-                  </TableCell>
-                  <TableCell>{formatPrice(product.default_price)}</TableCell>
-                  <TableCell>
-                    <Switch
-                      checked={product.is_active}
-                      disabled={pendingToggleId === product.id}
-                      onCheckedChange={() => void handleToggleActive(product)}
-                      aria-label={`${product.is_active ? 'Desativar' : 'Ativar'} ${product.name}`}
-                      className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => openPriceDialog(product)}
-                        className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-                      >
-                        Alterar preço
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => openCompositionDialog(product)}
-                        className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-                      >
-                        Acessórios e Embalagem
-                      </Button>
-                    </div>
-                  </TableCell>
+          // 8 colunas: overflow-x-auto + min-w garante rolagem horizontal
+          // controlada só em telas estreitas (mesmo padrão já aprovado em
+          // Pedidos/Empresas) — nenhuma coluna cortada em desktop amplo.
+          <div className="overflow-x-auto">
+            <Table className="min-w-[1200px] table-fixed text-[16px]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="h-auto w-[19%] py-2 whitespace-normal">Nome</TableHead>
+                  <TableHead className="h-auto w-[10%] py-2 whitespace-normal">Tipo</TableHead>
+                  <TableHead className="h-auto w-[14%] py-2 whitespace-normal">Categoria</TableHead>
+                  <TableHead className="h-auto w-[12%] py-2 whitespace-normal">Tempo total de impressão</TableHead>
+                  <TableHead className="h-auto w-[9%] py-2 whitespace-normal">Peso total</TableHead>
+                  <TableHead className="h-auto w-[10%] py-2 whitespace-normal">Preço</TableHead>
+                  <TableHead className="h-auto w-[8%] py-2 whitespace-normal">Ativo</TableHead>
+                  <TableHead className="h-auto w-[18%] py-2" />
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {products.map((product) => {
+                  const printTimeText = formatPrintTime(product.default_print_time_seconds)
+                  const weightText = formatWeight(product.default_weight_grams)
+                  return (
+                    <TableRow
+                      key={product.id}
+                      // Mesmo zebra striping com a paleta Forma já aprovado em
+                      // Clientes — ver frontend/src/pages/customers/CustomersPage.tsx.
+                      className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft"
+                    >
+                      <TableCell className="truncate" title={product.name}>
+                        <Link to={`/produtos/${product.id}`} className={PRODUCT_NAME_LINK_CLASSNAME}>
+                          {product.name}
+                        </Link>
+                      </TableCell>
+                      <TableCell className="truncate">{PRODUCT_TYPE_LABELS[product.product_type]}</TableCell>
+                      <TableCell className="truncate" title={product.category ?? undefined}>
+                        {product.category ?? '—'}
+                      </TableCell>
+                      <TableCell className="truncate" title={printTimeText}>
+                        {printTimeText}
+                      </TableCell>
+                      <TableCell className="truncate" title={weightText}>
+                        {weightText}
+                      </TableCell>
+                      <TableCell>{formatPrice(product.default_price)}</TableCell>
+                      <TableCell>
+                        <Switch
+                          checked={product.is_active}
+                          disabled={pendingToggleId === product.id}
+                          onCheckedChange={() => void handleToggleActive(product)}
+                          aria-label={`${product.is_active ? 'Desativar' : 'Ativar'} ${product.name}`}
+                          className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openPriceDialog(product)}
+                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                          >
+                            Alterar preço
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openCompositionDialog(product)}
+                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                          >
+                            Acessórios e Embalagem
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </div>
 
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Novo produto</DialogTitle>
             <DialogDescription>Preencha os dados para cadastrar um produto de Catálogo.</DialogDescription>

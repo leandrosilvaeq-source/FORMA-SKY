@@ -10,16 +10,27 @@
 import { supabase } from '@/lib/supabase'
 import { mapSupabaseError } from './errors'
 import { callEdgeFunction } from './edgeFunctionClient'
-import type { Product } from '@/types/domain'
+import type { Product, ProductType } from '@/types/domain'
 
+// units_per_plate deliberadamente ausente deste contrato: removido da
+// interface de "Novo produto" (decisão aprovada) — o backend continua
+// sempre recebendo null para esse parâmetro (a coluna/parâmetro da RPC
+// ainda existe, só não é mais preenchível por aqui; ver
+// supabase/functions/products/index.ts).
 export interface CreateProductInput {
   name: string
+  // products.product_type — migration 20260821090000_add_product_type.sql
+  // (ainda não aplicada). Sempre enviado (nunca omitido): o formulário
+  // sempre tem uma seleção (CATALOG por padrão para produtos novos).
+  product_type: ProductType
   default_price: number
   category?: string | null
   description?: string | null
-  default_print_time_minutes?: number | null
+  // Segundos inteiros (products.default_print_time_seconds) — substitui
+  // default_print_time_minutes (integer, minutos) desde a migration que
+  // renomeia a coluna e converte os valores legados (*60).
+  default_print_time_seconds?: number | null
   default_weight_grams?: number | null
-  units_per_plate?: number | null
   default_file_id?: string | null
   allows_personalization?: boolean | null
 }

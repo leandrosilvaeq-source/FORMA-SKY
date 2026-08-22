@@ -36,6 +36,23 @@ import {
   rejectIdentityFields,
 } from "../_shared/validate.ts";
 
+// Mesmos 3 valores técnicos de item_type (order_items,
+// supabase/migrations/20260814005328_create_order_items_table.sql) — nunca
+// reinventados, só reutilizados para classificar o PRODUTO no Catálogo.
+// requireEnum é uma cópia local do mesmo helper já usado em
+// orders/index.ts (nenhum módulo compartilhado de validação genérica de
+// enum existe ainda neste projeto — mesmo critério de "validador
+// específico de uma única rota" já aplicado a validateCompositionItems
+// abaixo).
+const PRODUCT_TYPES = ["CATALOG", "CUSTOM", "SPOT"] as const;
+
+function requireEnum<T extends string>(value: unknown, field: string, allowed: readonly T[]): T {
+  if (typeof value !== "string" || !(allowed as readonly string[]).includes(value)) {
+    throw new ValidationError(`Campo inválido: ${field} deve ser um de: ${allowed.join(", ")}.`);
+  }
+  return value as T;
+}
+
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
@@ -65,17 +82,32 @@ Deno.serve(async (req: Request) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /products -> create_product(p_name, p_category, p_description,
-//   p_default_price, p_default_print_time_minutes, p_default_weight_grams,
-//   p_units_per_plate, p_default_file_id, p_allows_personalization,
-//   p_changed_by)
+// POST /products -> create_product(p_name, p_product_type, p_category,
+//   p_description, p_default_price, p_default_print_time_seconds,
+//   p_default_weight_grams, p_units_per_plate, p_default_file_id,
+//   p_allows_personalization, p_changed_by)
 //
-// Nenhum dos 10 parâmetros da função tem DEFAULT no SQL — por isso todos são
+// Nenhum dos 11 parâmetros da função tem DEFAULT no SQL — por isso todos são
 // sempre enviados na chamada RPC, usando null explícito para os opcionais
 // não informados. `p_allows_personalization = null` é seguro: a própria
 // função faz `coalesce(p_allows_personalization, false)` internamente
 // (linha 1166 da migration) — não estamos inventando esse default na API,
 // só deixando a função aplicar o dela.
+//
+// p_default_print_time_seconds substitui p_default_print_time_minutes
+// (mesma posição/tipo integer — ver migration de renomeação da coluna,
+// que também renomeia este parâmetro via CREATE OR REPLACE FUNCTION,
+// preservando o mesmo número/tipo de argumentos).
+//
+// p_product_type: parâmetro novo (migration 20260821090000_add_product_type.sql,
+// ainda não aplicada) — sempre obrigatório aqui (nunca opcional/null), o
+// formulário sempre envia uma seleção (CATALOG por padrão).
+//
+// p_units_per_plate: nunca mais lido do corpo da requisição — removido da
+// interface de "Novo produto" (decisão aprovada), sempre null aqui. O
+// parâmetro continua existindo na assinatura da função (coluna não
+// descontinuada nesta rodada), então precisa ser passado explicitamente
+// (a função não tem DEFAULT para ele).
 // ---------------------------------------------------------------------------
 async function handleCreateProduct(req: Request): Promise<Response> {
   const operator = await resolveOperator(req);
@@ -85,18 +117,18 @@ async function handleCreateProduct(req: Request): Promise<Response> {
   const body = parseJsonBody(rawBody);
 
   const name = requireString(body.name, "name");
+  const productType = requireEnum(body.product_type, "product_type", PRODUCT_TYPES);
   const defaultPrice = requireNumber(body.default_price, "default_price", { min: 0 });
   const category = optionalString(body.category, "category");
   const description = optionalString(body.description, "description");
-  const defaultPrintTimeMinutes = optionalInteger(
-    body.default_print_time_minutes,
-    "default_print_time_minutes",
+  const defaultPrintTimeSeconds = optionalInteger(
+    body.default_print_time_seconds,
+    "default_print_time_seconds",
     { min: 0 },
   );
   const defaultWeightGrams = optionalNumber(body.default_weight_grams, "default_weight_grams", {
     min: 0,
   });
-  const unitsPerPlate = optionalInteger(body.units_per_plate, "units_per_plate", { min: 1 });
   const defaultFileId = optionalUuid(body.default_file_id, "default_file_id");
   const allowsPersonalization = optionalBoolean(
     body.allows_personalization,
@@ -106,12 +138,13 @@ async function handleCreateProduct(req: Request): Promise<Response> {
   const admin = getAdminClient();
   const { data, error } = await admin.rpc("create_product", {
     p_name: name,
+    p_product_type: productType,
     p_category: category,
     p_description: description,
     p_default_price: defaultPrice,
-    p_default_print_time_minutes: defaultPrintTimeMinutes,
+    p_default_print_time_seconds: defaultPrintTimeSeconds,
     p_default_weight_grams: defaultWeightGrams,
-    p_units_per_plate: unitsPerPlate,
+    p_units_per_plate: null,
     p_default_file_id: defaultFileId,
     p_allows_personalization: allowsPersonalization,
     p_changed_by: operator.userId,

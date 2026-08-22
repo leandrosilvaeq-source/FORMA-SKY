@@ -87,17 +87,38 @@ const SQLSTATE_MAP: Record<string, (message: string) => AppError> = {
   "23505": (message) => new BusinessRuleError(message), // unique_violation
 };
 
-// Mensagens conhecidas emitidas por RAISE EXCEPTION nas funções de
-// public.products (create_product / update_product_price), incluindo a
-// função interna assert_active_user() reutilizada por ambas. Todas chegam
-// com code = 'P0001'. Verificadas linha a linha contra as migrations
-// 20260814030351_create_order_business_functions.sql (assert_active_user,
-// create_product) e a mesma migration (update_product_price) antes de
-// escrever esta tabela — não há sobreposição de substring entre as duas
-// entradas abaixo, então não há ambiguidade real neste escopo.
+// Mensagens conhecidas emitidas por RAISE EXCEPTION em várias funções de
+// negócio (public.products: create_product/update_product_price;
+// public.orders: update_order/add_order_item/update_order_item/
+// remove_order_item/change_order_status/update_quote_order), incluindo a
+// função interna assert_active_user() reutilizada por todas. Todas chegam
+// com code = 'P0001'. Cada entrada nova foi conferida linha a linha contra
+// a migration que a declara (20260814030351_create_order_business_functions.sql,
+// 20260821014342_extend_order_summary_and_payment_method.sql,
+// <nova>_add_update_quote_order.sql) antes de ser adicionada aqui — sem
+// sobreposição de substring entre nenhuma das entradas abaixo, para nunca
+// haver ambiguidade de qual padrão casa primeiro.
 const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> = [
   ["não encontrado", (message) => new NotFoundError(message)],
   ["inválido ou inativo", (message) => new AuthorizationError(message)],
+  // update_order (Migration 15): bloqueio DELIVERED/CANCELLED e troca de
+  // customer_id fora de QUOTE/WAITING_APPROVAL.
+  ["não pode mais ser editado", (message) => new BusinessRuleError(message)],
+  ["não pode ser alterado após aprovação", (message) => new BusinessRuleError(message)],
+  // add_order_item/update_order_item/remove_order_item/
+  // register_custom_version (Migration 15): bloqueio a partir de
+  // IN_PRODUCTION — as 4 mensagens reais contêm todas "início da produção".
+  ["início da produção", (message) => new BusinessRuleError(message)],
+  // remove_order_item (Migration 15): não pode ficar sem nenhum item.
+  ["sem nenhum item", (message) => new BusinessRuleError(message)],
+  // remove_order_item (Migration 15) / update_quote_order (nova): item com
+  // histórico vinculado não pode ser removido/substituído.
+  ["histórico de versão/aprovação", (message) => new BusinessRuleError(message)],
+  // update_quote_order (nova): só QUOTE, só CATALOG, payment_method inválido.
+  ["só permite pedidos em QUOTE", (message) => new BusinessRuleError(message)],
+  ["só aceita itens CATALOG", (message) => new ValidationError(message)],
+  ["itens CUSTOM/SPOT", (message) => new BusinessRuleError(message)],
+  ["p_payment_method inválido", (message) => new ValidationError(message)],
 ];
 
 export function mapPgError(err: PgErrorLike): AppError {

@@ -29,7 +29,8 @@ const product = {
   category: 'Decoração',
   description: null,
   default_price: 10,
-  default_print_time_minutes: null,
+  product_type: 'CATALOG',
+  default_print_time_seconds: null,
   default_weight_grams: null,
   units_per_plate: null,
   default_file_id: null,
@@ -122,6 +123,95 @@ describe('ProductsPage', () => {
     expect(screen.queryByText('Não')).not.toBeInTheDocument()
     const toggle = screen.getByRole('switch', { name: 'Desativar Chaveiro' })
     expect(toggle).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('mostra o texto informativo atualizado da listagem, abaixo do título, na íntegra', () => {
+    renderPage()
+
+    expect(
+      screen.getByText(
+        'A listagem reúne todos os produtos de Catálogo e os produtos reutilizáveis. Produtos SPOT criados somente dentro de um pedido não aparecem aqui; um SPOT aparece quando é cadastrado como produto reutilizável.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('a listagem continua exibindo produtos CATALOG, CUSTOM e SPOT cadastrados (qualquer product_type registrado é reutilizável)', () => {
+    useProductsMock.mockReturnValue({
+      products: [
+        { ...product, id: '1', name: 'Chaveiro', product_type: 'CATALOG' },
+        { ...product, id: '2', name: 'Miniatura Personalizada Reutilizável', product_type: 'CUSTOM' },
+        { ...product, id: '3', name: 'Peça Spot Reutilizável', product_type: 'SPOT' },
+      ],
+      isLoading: false,
+      error: null,
+      refetch: refetchMock,
+      create: createMock,
+      changePrice: changePriceMock,
+      update: updateMock,
+    })
+    renderPage()
+
+    expect(screen.getByText('Chaveiro')).toBeInTheDocument()
+    expect(screen.getByText('Miniatura Personalizada Reutilizável')).toBeInTheDocument()
+    expect(screen.getByText('Peça Spot Reutilizável')).toBeInTheDocument()
+  })
+
+  describe('colunas Tipo, Tempo total de impressão e Peso total', () => {
+    it('exibe Tipo (Catálogo), Tempo total (HH:MM:SS) e Peso total (g) quando preenchidos', () => {
+      useProductsMock.mockReturnValue({
+        products: [{ ...product, product_type: 'CATALOG', default_print_time_seconds: 5400, default_weight_grams: 45 }],
+        isLoading: false,
+        error: null,
+        refetch: refetchMock,
+        create: createMock,
+        changePrice: changePriceMock,
+        update: updateMock,
+      })
+      renderPage()
+
+      expect(screen.getByRole('columnheader', { name: 'Tipo' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Tempo total de impressão' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Peso total' })).toBeInTheDocument()
+      const row = screen.getByRole('row', { name: /chaveiro/i })
+      expect(within(row).getByText('Catálogo')).toBeInTheDocument()
+      expect(within(row).getByText('01:30:00')).toBeInTheDocument()
+      expect(within(row).getByText('45 g')).toBeInTheDocument()
+    })
+
+    it.each([
+      ['Personalizado', 'CUSTOM'],
+      ['SPOT', 'SPOT'],
+    ] as const)('Tipo %s é exibido corretamente', (label, value) => {
+      useProductsMock.mockReturnValue({
+        products: [{ ...product, product_type: value }],
+        isLoading: false,
+        error: null,
+        refetch: refetchMock,
+        create: createMock,
+        changePrice: changePriceMock,
+        update: updateMock,
+      })
+      renderPage()
+
+      const row = screen.getByRole('row', { name: /chaveiro/i })
+      expect(within(row).getByText(label)).toBeInTheDocument()
+    })
+
+    it('Tempo total de impressão e Peso total ausentes mostram "Não informado"', () => {
+      useProductsMock.mockReturnValue({
+        products: [{ ...product, default_print_time_seconds: null, default_weight_grams: null }],
+        isLoading: false,
+        error: null,
+        refetch: refetchMock,
+        create: createMock,
+        changePrice: changePriceMock,
+        update: updateMock,
+      })
+      renderPage()
+
+      const row = screen.getByRole('row', { name: /chaveiro/i })
+      expect(within(row).getAllByText('Não informado')).toHaveLength(2)
+    })
   })
 
   describe('nome do produto como link para a Ficha Técnica', () => {
@@ -275,13 +365,16 @@ describe('ProductsPage', () => {
     expect(headerRow).not.toHaveClass('even:bg-white')
   })
 
-  it('opens the dialog, submits a new product and shows a success toast', async () => {
+  it('opens the dialog, submits a new product with the bank-style price and shows a success toast', async () => {
     const user = userEvent.setup()
     renderPage()
 
     await user.click(screen.getByRole('button', { name: /novo produto/i }))
     await user.type(screen.getByLabelText(/^nome$/i), 'Vaso')
-    await user.type(screen.getByLabelText(/^preço$/i), '25')
+    // Campo "bancário": dígitos entram pela direita como centavos —
+    // "2500" -> R$ 25,00 (ver ProductForm.test.tsx para a cobertura
+    // completa de digitação/Backspace/colagem).
+    await user.type(screen.getByLabelText(/^preço$/i), '2500')
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
     await waitFor(() =>
@@ -289,20 +382,38 @@ describe('ProductsPage', () => {
         expect.objectContaining({ name: 'Vaso', default_price: 25, allows_personalization: false }),
       ),
     )
+    const payload = createMock.mock.calls[0][0]
+    expect('units_per_plate' in payload).toBe(false)
     expect(toastMock.success).toHaveBeenCalledWith('Produto cadastrado.')
   })
 
-  it('does not call create when the price is invalid, shows an inline error instead', async () => {
+  it('does not call create when the price is never touched, shows an inline error instead', async () => {
     const user = userEvent.setup()
     renderPage()
 
     await user.click(screen.getByRole('button', { name: /novo produto/i }))
     await user.type(screen.getByLabelText(/^nome$/i), 'Vaso')
-    await user.type(screen.getByLabelText(/^preço$/i), '-5')
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
-    expect(await screen.findByText('O preço deve ser maior ou igual a 0.')).toBeInTheDocument()
+    expect(await screen.findByText('Informe o preço.')).toBeInTheDocument()
     expect(createMock).not.toHaveBeenCalled()
+  })
+
+  it('criação envia default_print_time_seconds (não minutos) quando o tempo de impressão é preenchido', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /novo produto/i }))
+    await user.type(screen.getByLabelText(/^nome$/i), 'Vaso')
+    await user.type(screen.getByLabelText(/^preço$/i), '2500')
+    await user.type(screen.getByLabelText(/tempo total de impressão/i), '1h30min')
+    await user.click(screen.getByRole('button', { name: /^salvar$/i }))
+
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ default_print_time_seconds: 5400 })),
+    )
+    const payload = createMock.mock.calls[0][0]
+    expect('default_print_time_minutes' in payload).toBe(false)
   })
 
   it('opens the price dialog and submits a new price for the product', async () => {

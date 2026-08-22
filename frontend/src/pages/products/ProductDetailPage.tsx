@@ -9,6 +9,7 @@ import { usePackaging } from '@/hooks/usePackaging'
 import { useProduct } from '@/hooks/useProduct'
 import { useProductComposition } from '@/hooks/useProductComposition'
 import { ApiError } from '@/lib/api/errors'
+import { formatSecondsToHHMMSS } from '@/lib/forms/durationField'
 import {
   calculateComponentsSubtotal,
   resolveAccessoryLines,
@@ -41,34 +42,6 @@ function formatGrams(grams: number, fractionDigits = 0): string {
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits,
   })} g`
-}
-
-// Sempre arredonda para minuto inteiro na exibição — usado tanto para o
-// tempo do plate (já inteiro no banco) quanto para o tempo por unidade
-// (fracionário, resultado de uma divisão só de exibição).
-function formatMinutesAsHoursMinutes(totalMinutes: number): string {
-  const rounded = Math.round(totalMinutes)
-  const hours = Math.floor(rounded / 60)
-  const minutes = rounded % 60
-  if (hours === 0) return `${minutes} min`
-  if (minutes === 0) return `${hours} h`
-  return `${hours} h ${minutes} min`
-}
-
-// units_per_plate já é `> 0` por constraint do banco quando não é null
-// (supabase/migrations/20260813205942_create_products_table.sql) — esta
-// checagem é defensiva, não corretiva: nunca divide por um valor
-// ausente/zero/negativo, mesmo que isso hoje não deva acontecer na prática.
-function hasValidUnitsPerPlate(unitsPerPlate: number | null): unitsPerPlate is number {
-  return unitsPerPlate !== null && Number.isFinite(unitsPerPlate) && unitsPerPlate > 0
-}
-
-// Valor por unidade só é calculável quando o valor do plate É conhecido E
-// units_per_plate é válido — nunca os dois casos juntos assumidos como 0.
-function perUnit(plateValue: number | null, unitsPerPlate: number | null): number | null {
-  if (plateValue === null) return null
-  if (!hasValidUnitsPerPlate(unitsPerPlate)) return null
-  return plateValue / unitsPerPlate
 }
 
 function ActiveBadge({ isActive }: { isActive: boolean }) {
@@ -199,9 +172,6 @@ function ComponentsSubtotalCard({ subtotal }: { subtotal: ComponentsSubtotal }) 
 }
 
 function ProductDetailContent({ product }: { product: Product }) {
-  const weightPerUnit = perUnit(product.default_weight_grams, product.units_per_plate)
-  const timePerUnit = perUnit(product.default_print_time_minutes, product.units_per_plate)
-
   const composition = useProductComposition(product.id)
   const accessoriesHook = useAccessories()
   const packagingHook = usePackaging()
@@ -253,34 +223,18 @@ function ProductDetailContent({ product }: { product: Product }) {
           <CardTitle>Produção</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          <p className="text-muted-foreground text-xs">
-            Peso e tempo abaixo são do plate completo. Os valores "por unidade" são estimativas
-            calculadas dividindo pelo número de unidades por plate — nunca gravadas no banco.
-          </p>
           <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
             <Field
-              label="Peso do plate"
+              label="Peso total do produto"
               value={product.default_weight_grams !== null ? formatGrams(product.default_weight_grams) : 'Não informado'}
             />
             <Field
-              label="Tempo de impressão do plate"
+              label="Tempo total de impressão"
               value={
-                product.default_print_time_minutes !== null
-                  ? formatMinutesAsHoursMinutes(product.default_print_time_minutes)
+                product.default_print_time_seconds !== null
+                  ? formatSecondsToHHMMSS(product.default_print_time_seconds)
                   : 'Não informado'
               }
-            />
-            <Field
-              label="Unidades por plate"
-              value={product.units_per_plate !== null ? String(product.units_per_plate) : 'Não informado'}
-            />
-            <Field
-              label="Peso estimado por unidade"
-              value={weightPerUnit !== null ? `${formatGrams(weightPerUnit, 2)} (estimado)` : 'Não calculável'}
-            />
-            <Field
-              label="Tempo estimado por unidade"
-              value={timePerUnit !== null ? `${formatMinutesAsHoursMinutes(timePerUnit)} (estimado)` : 'Não calculável'}
             />
           </div>
         </CardContent>

@@ -87,7 +87,8 @@ const products: Product[] = [
     category: null,
     description: null,
     default_price: 25,
-    default_print_time_minutes: null,
+    product_type: 'CATALOG',
+    default_print_time_seconds: null,
     default_weight_grams: null,
     units_per_plate: null,
     default_file_id: null,
@@ -102,12 +103,50 @@ const products: Product[] = [
     category: null,
     description: null,
     default_price: 40,
-    default_print_time_minutes: null,
+    product_type: 'CATALOG',
+    default_print_time_seconds: null,
     default_weight_grams: null,
     units_per_plate: null,
     default_file_id: null,
     allows_personalization: false,
     is_active: false,
+    created_at: '',
+    updated_at: '',
+  },
+  // Produto CUSTOM ativo, cadastrado como reutilizável (public.products) —
+  // não pode aparecer no seletor de item Catálogo: só product_type=CATALOG
+  // é oferecido ali, mesmo o produto estando ativo.
+  {
+    id: 'p3',
+    name: 'Miniatura Personalizada Reutilizável',
+    category: null,
+    description: null,
+    default_price: 60,
+    product_type: 'CUSTOM',
+    default_print_time_seconds: null,
+    default_weight_grams: null,
+    units_per_plate: null,
+    default_file_id: null,
+    allows_personalization: false,
+    is_active: true,
+    created_at: '',
+    updated_at: '',
+  },
+  // Produto SPOT ativo, cadastrado como reutilizável — mesmo motivo do
+  // CUSTOM acima: nunca aparece no seletor de item Catálogo.
+  {
+    id: 'p4',
+    name: 'Peça Spot Reutilizável',
+    category: null,
+    description: null,
+    default_price: 15,
+    product_type: 'SPOT',
+    default_print_time_seconds: null,
+    default_weight_grams: null,
+    units_per_plate: null,
+    default_file_id: null,
+    allows_personalization: false,
+    is_active: true,
     created_at: '',
     updated_at: '',
   },
@@ -323,6 +362,46 @@ describe('OrderForm', () => {
     }
   })
 
+  it('as 6 origens aparecem como cards verticais (ícone acima, nome abaixo), largura/altura uniformes', () => {
+    renderForm({ leadSources: allLeadSourcesScrambled })
+
+    const group = screen.getByRole('radiogroup', { name: 'Entrou em contato por' })
+    const options = within(group).getAllByRole('radio')
+    expect(options).toHaveLength(6)
+    for (const option of options) {
+      expect(option).toHaveClass('flex-col')
+      expect(option).toHaveClass('items-center')
+      expect(option).toHaveClass('w-20')
+      expect(option).toHaveClass('h-20')
+      // Ícone e nome, cada um em seu próprio nó dentro do card — disposição
+      // vertical (não lado a lado).
+      const icon = option.querySelector('svg')
+      const label = option.querySelector('span')
+      expect(icon).toBeInTheDocument()
+      expect(label).toBeInTheDocument()
+    }
+  })
+
+  it('o container de "Entrou em contato por" permite quebra responsiva (flex-wrap), sem overflow forçado', () => {
+    renderForm({ leadSources: allLeadSourcesScrambled })
+
+    const group = screen.getByRole('radiogroup', { name: 'Entrou em contato por' })
+    expect(group).toHaveClass('flex-wrap')
+  })
+
+  it('"Entrou em contato por" é seleção exclusiva: escolher uma origem desmarca a anterior', async () => {
+    const user = userEvent.setup()
+    renderForm()
+
+    await clickRadio(user, 'Entrou em contato por', 'Instagram')
+    expect(screen.getByRole('radio', { name: 'Instagram' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('radio', { name: 'WhatsApp' })).toHaveAttribute('aria-checked', 'false')
+
+    await clickRadio(user, 'Entrou em contato por', 'WhatsApp')
+    expect(screen.getByRole('radio', { name: 'WhatsApp' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('radio', { name: 'Instagram' })).toHaveAttribute('aria-checked', 'false')
+  })
+
   it('envia o lead_source_id da origem selecionada nos novos controles', async () => {
     const user = userEvent.setup()
     const { onSubmit } = renderForm()
@@ -368,6 +447,58 @@ describe('OrderForm', () => {
 
     expect(screen.queryByText('Produto descontinuado')).not.toBeInTheDocument()
     expect(await screen.findByRole('option', { name: 'Chaveiro' })).toBeInTheDocument()
+  })
+
+  describe('seletor de Produto só oferece product_type=CATALOG ativo (item Catálogo)', () => {
+    it('produto CATALOG ativo aparece no seletor', async () => {
+      const user = userEvent.setup()
+      renderForm()
+
+      await user.click(screen.getByRole('combobox', { name: 'Produto' }))
+
+      expect(await screen.findByRole('option', { name: 'Chaveiro' })).toBeInTheDocument()
+    })
+
+    it('produto CATALOG inativo não aparece no seletor', async () => {
+      const user = userEvent.setup()
+      renderForm()
+
+      await user.click(screen.getByRole('combobox', { name: 'Produto' }))
+      await screen.findByRole('option', { name: 'Chaveiro' })
+
+      expect(screen.queryByRole('option', { name: 'Produto descontinuado' })).not.toBeInTheDocument()
+    })
+
+    it('produto CUSTOM ativo (cadastrado como reutilizável) não aparece no seletor', async () => {
+      const user = userEvent.setup()
+      renderForm()
+
+      await user.click(screen.getByRole('combobox', { name: 'Produto' }))
+      await screen.findByRole('option', { name: 'Chaveiro' })
+
+      expect(screen.queryByRole('option', { name: 'Miniatura Personalizada Reutilizável' })).not.toBeInTheDocument()
+      expect(screen.queryByText('Miniatura Personalizada Reutilizável')).not.toBeInTheDocument()
+    })
+
+    it('produto SPOT ativo (cadastrado como reutilizável) não aparece no seletor', async () => {
+      const user = userEvent.setup()
+      renderForm()
+
+      await user.click(screen.getByRole('combobox', { name: 'Produto' }))
+      await screen.findByRole('option', { name: 'Chaveiro' })
+
+      expect(screen.queryByRole('option', { name: 'Peça Spot Reutilizável' })).not.toBeInTheDocument()
+      expect(screen.queryByText('Peça Spot Reutilizável')).not.toBeInTheDocument()
+    })
+  })
+
+  it('nenhuma opção Personalizado ou SPOT é habilitada no formulário de pedido (só Catálogo funcional)', () => {
+    renderForm()
+
+    expect(screen.getByLabelText('Catálogo')).not.toBeDisabled()
+    expect(screen.getByLabelText('Personalizado')).toBeDisabled()
+    expect(screen.getByLabelText('Spot')).toBeDisabled()
+    expect(screen.getAllByText('Em breve')).toHaveLength(2)
   })
 
   it('ao escolher um produto, preenche o preço unitário com default_price, mantendo o campo editável', async () => {
@@ -428,7 +559,44 @@ describe('OrderForm', () => {
     // Escopado à tabela: com 1 único item, o total da linha e o "Total do
     // pedido" no rodapé coincidem (R$ 75,00 nos dois lugares).
     expect(within(screen.getByRole('table')).getByText('R$ 75,00')).toBeInTheDocument()
-    expect(screen.getByText(/Total do pedido:/).closest('p')).toHaveTextContent('R$ 75,00')
+    expect(screen.getByText('Total do pedido').closest('div')).toHaveTextContent('R$ 75,00')
+  })
+
+  it('destaca o total do pedido no rodapé: fonte grande, peso forte, cor da paleta Forma, contagem de itens em texto secundário', () => {
+    renderForm()
+
+    const footer = screen.getByText('Total do pedido').closest('div') as HTMLElement
+    const valueEl = within(footer).getByText('R$ 0,00')
+    expect(valueEl).toHaveClass('text-brand-primary-dark')
+    expect(valueEl).toHaveClass('text-2xl')
+    expect(valueEl).toHaveClass('font-bold')
+
+    const itemCount = within(footer).getByText('1 item')
+    expect(itemCount).not.toHaveClass('text-2xl')
+  })
+
+  it('total do pedido soma o frete quando Correios/Transportadora está selecionado (mesma fórmula de total_receivable)', async () => {
+    const user = userEvent.setup()
+    renderForm()
+
+    await selectOption(user, 'Produto', 'Chaveiro')
+    await clickRadio(user, 'Forma de entrega', 'Correios')
+    await user.type(screen.getByLabelText('Frete'), '10')
+
+    // 1 item (Chaveiro, R$ 25,00) + frete R$ 10,00 = R$ 35,00.
+    expect(screen.getByText('Total do pedido').closest('div')).toHaveTextContent('R$ 35,00')
+  })
+
+  it('total do pedido volta a refletir só os itens quando a forma de entrega muda para "Em mãos" (frete ocultado)', async () => {
+    const user = userEvent.setup()
+    renderForm()
+
+    await selectOption(user, 'Produto', 'Chaveiro')
+    await clickRadio(user, 'Forma de entrega', 'Correios')
+    await user.type(screen.getByLabelText('Frete'), '10')
+    await clickRadio(user, 'Forma de entrega', 'Em mãos')
+
+    expect(screen.getByText('Total do pedido').closest('div')).toHaveTextContent('R$ 25,00')
   })
 
   it('adiciona e remove linhas de item, nunca deixando menos de 1', async () => {
@@ -610,6 +778,91 @@ describe('OrderForm', () => {
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
+  describe('Método de pagamento e Prazo de entrega', () => {
+    it('mostra os botões Pix, Dinheiro e Cartão, com "Não informado" selecionado por padrão (sem crédito/débito separados)', () => {
+      renderForm()
+
+      const group = screen.getByRole('radiogroup', { name: 'Método de pagamento' })
+      expect(within(group).getByRole('radio', { name: 'Pix' })).toBeInTheDocument()
+      expect(within(group).getByRole('radio', { name: 'Dinheiro' })).toBeInTheDocument()
+      expect(within(group).getByRole('radio', { name: 'Cartão' })).toBeInTheDocument()
+      expect(within(group).getByRole('radio', { name: 'Não informado' })).toHaveAttribute('aria-checked', 'true')
+      expect(within(group).queryByRole('radio', { name: /crédito/i })).not.toBeInTheDocument()
+      expect(within(group).queryByRole('radio', { name: /débito/i })).not.toBeInTheDocument()
+    })
+
+    it('método de pagamento é um grupo de seleção exclusiva: escolher um desmarca o anterior', async () => {
+      const user = userEvent.setup()
+      renderForm()
+
+      await clickRadio(user, 'Método de pagamento', 'Pix')
+      expect(screen.getByRole('radio', { name: 'Pix' })).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByRole('radio', { name: 'Não informado' })).toHaveAttribute('aria-checked', 'false')
+
+      await clickRadio(user, 'Método de pagamento', 'Cartão')
+      expect(screen.getByRole('radio', { name: 'Cartão' })).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByRole('radio', { name: 'Pix' })).toHaveAttribute('aria-checked', 'false')
+    })
+
+    it('cada opção de Método de pagamento mostra um ícone decorativo ao lado do nome, sem duplicar o nome acessível', () => {
+      renderForm()
+
+      const group = screen.getByRole('radiogroup', { name: 'Método de pagamento' })
+      for (const option of within(group).getAllByRole('radio')) {
+        expect(option.querySelector('svg[aria-hidden="true"]')).toBeInTheDocument()
+      }
+    })
+
+    it.each([
+      ['Pix', 'PIX'],
+      ['Dinheiro', 'DINHEIRO'],
+      ['Cartão', 'CARTAO'],
+    ])('envia payment_method=%s como %s no payload', async (label, value) => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
+
+      await fillMinimalValidOrder(user)
+      await clickRadio(user, 'Método de pagamento', label)
+      await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ payment_method: value }))
+    })
+
+    it('método de pagamento não escolhido envia payment_method: null — campo opcional, sem obrigatoriedade inventada (orders.payment_method é nullable e create_order() nunca exigiu o parâmetro)', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
+
+      await fillMinimalValidOrder(user)
+      await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ payment_method: null }))
+      // Sem mensagem de erro nenhuma — não deixar de escolher método de
+      // pagamento nunca bloqueia o envio.
+      expect(screen.queryByText(/método de pagamento/i, { selector: 'p' })).not.toBeInTheDocument()
+    })
+
+    it('Prazo de entrega vazio envia expected_delivery_date: null', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
+
+      await fillMinimalValidOrder(user)
+      await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ expected_delivery_date: null }))
+    })
+
+    it('Prazo de entrega preenchido envia a data no formato YYYY-MM-DD (mesmo formato de expected_delivery_date)', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
+
+      await fillMinimalValidOrder(user)
+      await user.type(screen.getByLabelText('Prazo de entrega'), '2026-09-15')
+      await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ expected_delivery_date: '2026-09-15' }))
+    })
+  })
+
   it('chama onCancel ao clicar em Cancelar', async () => {
     const user = userEvent.setup()
     const { onCancel } = renderForm()
@@ -617,5 +870,82 @@ describe('OrderForm', () => {
     await user.click(screen.getByRole('button', { name: /cancelar/i }))
 
     expect(onCancel).toHaveBeenCalled()
+  })
+
+  describe('modo de edição (mode="edit", initialValues, readOnly)', () => {
+    const editInitialValues = {
+      companyId: null,
+      customerId: 'c1',
+      leadSourceId: 'l1',
+      paymentMethod: 'PIX' as const,
+      deliveryMethod: 'Correios',
+      shippingCost: 15.5,
+      expectedDeliveryDate: '2026-08-25',
+      notes: 'Observação existente',
+      items: [{ productId: 'p1', quantity: 2, unitPrice: 25, personalizationFee: 0 }],
+    }
+
+    it('mostra nº do pedido, status e status financeiro somente leitura, e rotula o botão "Salvar alterações"', () => {
+      renderForm({
+        mode: 'edit',
+        orderNumber: 'FS-26-001',
+        orderStatusLabel: 'Orçamento',
+        paymentStatusLabel: 'Aguardando pagamento',
+        initialValues: editInitialValues,
+      })
+
+      expect(screen.getByText('FS-26-001')).toBeInTheDocument()
+      expect(screen.getByText('Orçamento')).toBeInTheDocument()
+      expect(screen.getByText('Aguardando pagamento')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Salvar alterações' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Salvar pedido' })).not.toBeInTheDocument()
+    })
+
+    it('modo create não mostra o bloco de informações somente leitura', () => {
+      renderForm()
+
+      expect(screen.queryByText('Nº do pedido')).not.toBeInTheDocument()
+    })
+
+    it('pré-preenche cabeçalho e item a partir de initialValues (B2C)', () => {
+      renderForm({ mode: 'edit', initialValues: editInitialValues })
+
+      expect(screen.getByRole('radio', { name: 'B2C' })).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByRole('combobox', { name: 'Cliente/Contato' })).toHaveTextContent('Ana Cliente')
+      expect(screen.getByRole('radio', { name: 'Instagram' })).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByRole('radio', { name: 'Pix' })).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByRole('radio', { name: 'Correios' })).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByLabelText('Frete')).toHaveValue('15.5')
+      expect(screen.getByLabelText('Prazo de entrega')).toHaveValue('2026-08-25')
+      expect(screen.getByLabelText('Observações')).toHaveValue('Observação existente')
+      expect(screen.getByRole('combobox', { name: 'Produto' })).toHaveTextContent('Chaveiro')
+      expect(screen.getByLabelText('Quantidade')).toHaveValue('2')
+      expect(screen.getByLabelText('Preço unitário')).toHaveValue('25')
+    })
+
+    it('pré-preenche em B2B quando initialValues.companyId está presente', () => {
+      renderForm({ mode: 'edit', initialValues: { ...editInitialValues, companyId: 'e1' } })
+
+      expect(screen.getByRole('radio', { name: 'B2B' })).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByRole('combobox', { name: 'Empresa' })).toHaveTextContent('Empresa A')
+    })
+
+    it('readOnly desabilita todos os controles, oculta "Salvar alterações" e mostra a mensagem de bloqueio', () => {
+      renderForm({
+        mode: 'edit',
+        initialValues: editInitialValues,
+        readOnly: true,
+        readOnlyMessage: 'Este pedido está em "Aprovado" — não pode ser totalmente editado.',
+      })
+
+      expect(screen.getByText('Este pedido está em "Aprovado" — não pode ser totalmente editado.')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /salvar alterações/i })).not.toBeInTheDocument()
+      expect(screen.getByRole('combobox', { name: 'Cliente/Contato' })).toBeDisabled()
+      expect(screen.getByLabelText('Quantidade')).toBeDisabled()
+      expect(screen.getByLabelText('Preço unitário')).toBeDisabled()
+      expect(screen.getByRole('button', { name: /adicionar item/i })).toBeDisabled()
+      expect(screen.getByRole('radio', { name: 'B2C' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /cancelar/i })).not.toBeDisabled()
+    })
   })
 })

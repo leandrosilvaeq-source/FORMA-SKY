@@ -61,6 +61,12 @@ export interface CreateOrderInput {
   items: OrderItemInput[]
   company_id?: string | null
   lead_source_id?: string | null
+  // Opcional, igual aos demais campos abaixo — orders.payment_method é
+  // nullable e, diferente do PUT, o POST nunca exigiu presença de chave
+  // (create_order() sempre aceitou os campos opcionais ausentes = null).
+  // Omitido do payload = não informado no momento da criação; nunca
+  // enviado como '' (string vazia).
+  payment_method?: PaymentMethod | null
   expected_delivery_date?: string | null
   delivery_method?: string | null
   shipping_cost?: number | null
@@ -82,6 +88,26 @@ export interface UpdateOrderInput {
   shipping_cost: number | null
   discount_value: number | null
   notes: string | null
+}
+
+// PUT /orders/:id/full -> update_quote_order(). Edição completa atômica de
+// cabeçalho + itens, numa única chamada — nunca create_order, nunca
+// update_order + add/update/remove_order_item em sequência. Só aceita a
+// operação quando o pedido está em QUOTE e todos os itens (atuais e
+// enviados) são CATALOG; a Edge Function e a RPC recusam qualquer outro
+// caso. items reaproveita o mesmo formato de OrderItemInput (create_order),
+// já que a RPC substitui o conjunto inteiro de order_items do pedido.
+export interface UpdateQuoteOrderInput {
+  customer_id: string
+  items: OrderItemInput[]
+  company_id?: string | null
+  lead_source_id?: string | null
+  payment_method?: PaymentMethod | null
+  expected_delivery_date?: string | null
+  delivery_method?: string | null
+  shipping_cost?: number | null
+  discount_value?: number | null
+  notes?: string | null
 }
 
 export async function listOrderSummaries(): Promise<OrderSummary[]> {
@@ -116,6 +142,11 @@ export async function createOrder(input: CreateOrderInput): Promise<{ id: string
 // PUT /orders/:id -> update_order.
 export async function updateOrder(orderId: string, input: UpdateOrderInput): Promise<void> {
   await callEdgeFunction<{ success: true }>('orders', `/${orderId}`, 'PUT', input)
+}
+
+// PUT /orders/:id/full -> update_quote_order.
+export async function updateQuoteOrder(orderId: string, input: UpdateQuoteOrderInput): Promise<{ id: string }> {
+  return callEdgeFunction<{ id: string }>('orders', `/${orderId}/full`, 'PUT', input)
 }
 
 // POST /order-status/:orderId -> change_order_status

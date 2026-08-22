@@ -125,8 +125,17 @@ begin
       raise exception 'fixture ausente: user_id (setup 0.1 falhou)';
     end if;
 
+    -- create_product agora tem 11 parâmetros: p_product_type foi
+    -- adicionado como 2º argumento pela migration
+    -- 20260821090000_add_product_type.sql (já aplicada). O 5º argumento
+    -- (antes p_default_print_time_minutes) passou a ser
+    -- p_default_print_time_seconds pela migration
+    -- 20260821070000_rename_default_print_time_to_seconds.sql — o valor
+    -- literal 120 não é usado por nenhuma asserção deste arquivo (só
+    -- product_id/default_price desta fixture são verificados em outras
+    -- seções), então não precisou ser reescalado.
     v_product_id := public.create_product(
-      'Produto Teste Integração', 'teste', 'produto criado pelo script de integração',
+      'Produto Teste Integração', 'CATALOG', 'teste', 'produto criado pelo script de integração',
       100.00, 120, 25.50, 4, null, false, v_user_id
     );
 
@@ -1662,7 +1671,10 @@ declare
     'register_approval(uuid,text,timestamptz,uuid,uuid,uuid,text)',
     'register_payment(uuid,text,numeric,text,timestamptz,uuid,text)',
     'register_custom_version(uuid,text,uuid,text,text,uuid)',
-    'create_product(text,text,text,numeric,integer,numeric,integer,uuid,boolean,uuid)',
+    -- 11 parâmetros desde a migration 20260821090000_add_product_type.sql
+    -- (p_product_type acrescentado como 2º argumento) — assinatura antiga
+    -- de 10 parâmetros não existe mais.
+    'create_product(text,text,text,text,numeric,integer,numeric,integer,uuid,boolean,uuid)',
     'update_product_price(uuid,numeric,uuid,text,timestamptz)',
     'set_product_composition(uuid,jsonb,jsonb,uuid)'
   ];
@@ -2650,6 +2662,1065 @@ begin
       values ('11', '11.4 detecção de contador abaixo da maior sequência emitida (pré-validação 1.7 da migration, contador restaurado)', 'FAIL', sqlerrm);
   end;
 end $$;
+
+-- =============================================================================
+-- SEÇÃO 12 — as duas sobrecargas de create_order() (10 e 11 parâmetros) e
+-- agregação de itens em vw_order_summary (migration
+-- 20260821014342_extend_order_summary_and_payment_method.sql — AINDA NÃO
+-- APLICADA no momento em que esta seção foi escrita; os testes abaixo só
+-- devem passar depois que a migration for aplicada no ambiente onde este
+-- arquivo rodar).
+-- =============================================================================
+
+-- 12.1 Chamada ANTIGA, com exatamente 10 argumentos posicionais: resolve
+-- exclusivamente para a função preservada da Migration 17 (que não tem
+-- parâmetro payment_method) — prova que a compatibilidade retroativa
+-- continua funcionando sem nenhuma alteração de comportamento.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_payment_method text;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+    if v_user_id is null or v_customer_id is null or v_product_id is null then
+      raise exception 'fixture ausente (setup/seção 1 falhou)';
+    end if;
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste chamada antiga (10 parâmetros)',
+      jsonb_build_array(
+        jsonb_build_object(
+          'item_type', 'CATALOG', 'product_id', v_product_id,
+          'item_name', 'Item Catálogo Chamada Antiga', 'quantity', 1, 'unit_price', 20.00
+        )
+      ),
+      v_user_id
+    );
+
+    select payment_method into v_payment_method from public.orders where id = v_order_id;
+
+    if v_payment_method is not null then
+      raise exception 'a função de 10 parâmetros não deveria gravar payment_method (nem tem esse parâmetro), veio %', v_payment_method;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.1 chamada antiga com 10 parâmetros continua funcionando, resolve exclusivamente para a função preservada (payment_method sempre null)', 'PASS', 'order_id=' || v_order_id);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.1 chamada antiga com 10 parâmetros continua funcionando, resolve exclusivamente para a função preservada (payment_method sempre null)', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 12.2 Chamada NOVA, com 11 argumentos posicionais e payment_method=PIX.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_payment_method text;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste payment_method PIX (11 parâmetros)',
+      jsonb_build_array(
+        jsonb_build_object(
+          'item_type', 'CATALOG', 'product_id', v_product_id,
+          'item_name', 'Item Catálogo PIX', 'quantity', 1, 'unit_price', 50.00
+        )
+      ),
+      v_user_id,
+      'PIX'
+    );
+
+    select payment_method into v_payment_method from public.orders where id = v_order_id;
+
+    if v_payment_method <> 'PIX' then
+      raise exception 'payment_method deveria ser PIX, veio %', v_payment_method;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.2 create_order (11 parâmetros) aceita payment_method=PIX e persiste no mesmo INSERT (criação atômica)', 'PASS', 'order_id=' || v_order_id);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.2 create_order (11 parâmetros) aceita payment_method=PIX e persiste no mesmo INSERT (criação atômica)', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 12.3 Chamada NOVA com payment_method=null ENVIADO EXPLICITAMENTE (não
+-- omitido — a sobrecarga de 11 parâmetros não tem DEFAULT, então só
+-- existe a forma explícita).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_payment_method text;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste payment_method null explícito (11 parâmetros)',
+      jsonb_build_array(
+        jsonb_build_object(
+          'item_type', 'CATALOG', 'product_id', v_product_id,
+          'item_name', 'Item Catálogo Método Null', 'quantity', 1, 'unit_price', 30.00
+        )
+      ),
+      v_user_id,
+      null
+    );
+
+    select payment_method into v_payment_method from public.orders where id = v_order_id;
+
+    if v_payment_method is not null then
+      raise exception 'payment_method deveria ser null (enviado explicitamente), veio %', v_payment_method;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.3 create_order (11 parâmetros) com payment_method=null explícito persiste null — nenhuma obrigatoriedade inventada', 'PASS', 'order_id=' || v_order_id);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.3 create_order (11 parâmetros) com payment_method=null explícito persiste null — nenhuma obrigatoriedade inventada', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 12.4 Caso de falha esperada: payment_method fora de
+-- PIX/DINHEIRO/CARTAO/null é rejeitado pela VALIDAÇÃO EXPLÍCITA dentro da
+-- função nova, antes de qualquer INSERT (a CHECK de orders.payment_method
+-- continua existindo como defesa adicional, mas não é ela quem dispara
+-- aqui — a função rejeita antes de chegar lá).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_status text;
+  v_details text;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste payment_method inválido (11 parâmetros)',
+      jsonb_build_array(
+        jsonb_build_object(
+          'item_type', 'CATALOG', 'product_id', v_product_id,
+          'item_name', 'Item Catálogo Método Inválido', 'quantity', 1, 'unit_price', 10.00
+        )
+      ),
+      v_user_id,
+      'BOLETO'
+    );
+
+    v_status := 'FAIL';
+    v_details := 'create_order (11 parâmetros) aceitou payment_method=BOLETO (não deveria)';
+  exception when others then
+    if sqlerrm like '%p_payment_method inválido%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'esperada mensagem de validação de p_payment_method, veio outra exceção: ' || sqlerrm;
+    end if;
+  end;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('12', '12.4 create_order (11 parâmetros) rejeita payment_method inválido (BOLETO) com mensagem clara, antes do INSERT', v_status, v_details);
+end $$;
+
+-- 12.5 Exatamente duas sobrecargas de create_order (10 e 11 parâmetros) —
+-- nenhuma ambígua, nenhuma extra/inesperada.
+do $$
+declare
+  v_count_10 integer;
+  v_count_11 integer;
+begin
+  begin
+    select count(*) into v_count_10
+      from pg_proc
+      where pronamespace = 'public'::regnamespace and proname = 'create_order' and pronargs = 10;
+    select count(*) into v_count_11
+      from pg_proc
+      where pronamespace = 'public'::regnamespace and proname = 'create_order' and pronargs = 11;
+
+    if v_count_10 <> 1 or v_count_11 <> 1 then
+      raise exception 'esperado exatamente 1 função de 10 e 1 de 11 parâmetros, encontrado 10=%, 11=%', v_count_10, v_count_11;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.5 exatamente duas sobrecargas de create_order (10 e 11 parâmetros), sem ambiguidade possível', 'PASS', '10=' || v_count_10 || ' 11=' || v_count_11);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.5 exatamente duas sobrecargas de create_order (10 e 11 parâmetros), sem ambiguidade possível', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 12.6 Permissões: anon/authenticated sem EXECUTE em NENHUMA das duas
+-- sobrecargas; só service_role com EXECUTE nas duas.
+do $$
+declare
+  v_anon_10 boolean;
+  v_anon_11 boolean;
+  v_authenticated_10 boolean;
+  v_authenticated_11 boolean;
+  v_service_role_10 boolean;
+  v_service_role_11 boolean;
+begin
+  begin
+    select has_function_privilege('anon', 'public.create_order(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid)', 'EXECUTE') into v_anon_10;
+    select has_function_privilege('anon', 'public.create_order(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid,text)', 'EXECUTE') into v_anon_11;
+    select has_function_privilege('authenticated', 'public.create_order(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid)', 'EXECUTE') into v_authenticated_10;
+    select has_function_privilege('authenticated', 'public.create_order(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid,text)', 'EXECUTE') into v_authenticated_11;
+    select has_function_privilege('service_role', 'public.create_order(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid)', 'EXECUTE') into v_service_role_10;
+    select has_function_privilege('service_role', 'public.create_order(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid,text)', 'EXECUTE') into v_service_role_11;
+
+    if v_anon_10 or v_anon_11 or v_authenticated_10 or v_authenticated_11 or not v_service_role_10 or not v_service_role_11 then
+      raise exception 'permissões inesperadas: anon(10=%,11=%) authenticated(10=%,11=%) service_role(10=%,11=%)',
+        v_anon_10, v_anon_11, v_authenticated_10, v_authenticated_11, v_service_role_10, v_service_role_11;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.6 permissões: anon/authenticated sem EXECUTE em nenhuma sobrecarga; service_role com EXECUTE nas duas', 'PASS', 'ok');
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.6 permissões: anon/authenticated sem EXECUTE em nenhuma sobrecarga; service_role com EXECUTE nas duas', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 12.7 item_types em ordem EXPLÍCITA CATALOG→CUSTOM→SPOT (CASE), mesmo
+-- com os itens criados em ordem embaralhada (SPOT primeiro) — prova que a
+-- ordem não depende implicitamente da coincidência alfabética.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_item_types text[];
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste ordem explícita de item_types',
+      jsonb_build_array(
+        jsonb_build_object(
+          'item_type', 'SPOT', 'item_name', 'Item Spot Primeiro', 'quantity', 1, 'unit_price', 10.00,
+          'spot_details', jsonb_build_object('source_reference', 'teste ordem')
+        ),
+        jsonb_build_object(
+          'item_type', 'CATALOG', 'product_id', v_product_id,
+          'item_name', 'Item Catálogo Segundo', 'quantity', 1, 'unit_price', 10.00
+        ),
+        jsonb_build_object(
+          'item_type', 'CUSTOM', 'item_name', 'Item Custom Terceiro', 'quantity', 1, 'unit_price', 10.00,
+          'custom_details', jsonb_build_object('current_version', 'v1.0')
+        )
+      ),
+      v_user_id,
+      null
+    );
+
+    select item_types into v_item_types from public.vw_order_summary where order_id = v_order_id;
+
+    if v_item_types <> array['CATALOG', 'CUSTOM', 'SPOT'] then
+      raise exception 'item_types deveria ser {CATALOG,CUSTOM,SPOT} mesmo com criação em ordem embaralhada, veio %', v_item_types;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.7 item_types em ordem explícita CATALOG→CUSTOM→SPOT (CASE), independente da ordem de criação (SPOT criado primeiro)', 'PASS', 'item_types=' || array_to_string(v_item_types, ','));
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.7 item_types em ordem explícita CATALOG→CUSTOM→SPOT (CASE), independente da ordem de criação (SPOT criado primeiro)', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 12.8 item_names usa order_items.id como desempate quando created_at é
+-- forçado a ser idêntico entre dois itens — prova a ordenação
+-- determinística exigida (created_at, id), não só created_at sozinho.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_item1_id uuid;
+  v_item2_id uuid;
+  v_item_names text[];
+  v_expected_first text;
+  v_expected_second text;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste desempate created_at/id',
+      jsonb_build_array(
+        jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item Empate A', 'quantity', 1, 'unit_price', 10.00),
+        jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item Empate B', 'quantity', 1, 'unit_price', 10.00)
+      ),
+      v_user_id,
+      null
+    );
+
+    select id into v_item1_id from public.order_items where order_id = v_order_id and item_name = 'Item Empate A';
+    select id into v_item2_id from public.order_items where order_id = v_order_id and item_name = 'Item Empate B';
+
+    -- Força created_at idêntico nas duas linhas — o único critério de
+    -- desempate que resta é order_items.id.
+    update public.order_items set created_at = timestamptz '2026-01-01 00:00:00+00' where id in (v_item1_id, v_item2_id);
+
+    if v_item1_id < v_item2_id then
+      v_expected_first := 'Item Empate A';
+      v_expected_second := 'Item Empate B';
+    else
+      v_expected_first := 'Item Empate B';
+      v_expected_second := 'Item Empate A';
+    end if;
+
+    select item_names into v_item_names from public.vw_order_summary where order_id = v_order_id;
+
+    if v_item_names <> array[v_expected_first, v_expected_second] then
+      raise exception 'esperado item_names em ordem de id como desempate (%, %), veio %', v_expected_first, v_expected_second, v_item_names;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.8 item_names usa order_items.id como desempate quando created_at é idêntico', 'PASS', 'ordem=' || array_to_string(v_item_names, ','));
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.8 item_names usa order_items.id como desempate quando created_at é idêntico', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 12.9 Agregação geral: 2 itens CATALOG + 1 CUSTOM — item_types
+-- deduplicado (só 2 valores); item_names com os 3, na ordem de criação.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_item_types text[];
+  v_item_names text[];
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste agregação de itens',
+      jsonb_build_array(
+        jsonb_build_object(
+          'item_type', 'CATALOG', 'product_id', v_product_id,
+          'item_name', 'Item Catálogo Um', 'quantity', 1, 'unit_price', 10.00
+        ),
+        jsonb_build_object(
+          'item_type', 'CATALOG', 'product_id', v_product_id,
+          'item_name', 'Item Catálogo Dois', 'quantity', 1, 'unit_price', 10.00
+        ),
+        jsonb_build_object(
+          'item_type', 'CUSTOM', 'item_name', 'Item Personalizado Três', 'quantity', 1, 'unit_price', 10.00,
+          'custom_details', jsonb_build_object('current_version', 'v1.0')
+        )
+      ),
+      v_user_id,
+      null
+    );
+
+    select item_types, item_names into v_item_types, v_item_names
+      from public.vw_order_summary
+      where order_id = v_order_id;
+
+    -- 2 itens CATALOG + 1 CUSTOM: item_types deve deduplicar para só 2
+    -- valores, em ordem explícita CATALOG→CUSTOM — nunca 3 valores.
+    if v_item_types <> array['CATALOG', 'CUSTOM'] then
+      raise exception 'item_types deveria ser {CATALOG,CUSTOM} (deduplicado, ordem explícita), veio %', v_item_types;
+    end if;
+    -- item_names NUNCA deduplica: os 3 itens aparecem, na ordem de criação.
+    if v_item_names <> array['Item Catálogo Um', 'Item Catálogo Dois', 'Item Personalizado Três'] then
+      raise exception 'item_names deveria preservar a ordem de criação dos 3 itens, veio %', v_item_names;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.9 vw_order_summary.item_types deduplicado em ordem explícita; item_names preserva ordem de criação (3 itens: 2 CATALOG + 1 CUSTOM)', 'PASS', 'order_id=' || v_order_id);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.9 vw_order_summary.item_types deduplicado em ordem explícita; item_names preserva ordem de criação (3 itens: 2 CATALOG + 1 CUSTOM)', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 12.10 delivery_method repassado pela view.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_delivery_method text;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, 'Transportadora', 15.00, 0, 'pedido teste delivery_method na view',
+      jsonb_build_array(
+        jsonb_build_object(
+          'item_type', 'CATALOG', 'product_id', v_product_id,
+          'item_name', 'Item Catálogo Entrega', 'quantity', 1, 'unit_price', 10.00
+        )
+      ),
+      v_user_id,
+      null
+    );
+
+    select delivery_method into v_delivery_method from public.vw_order_summary where order_id = v_order_id;
+
+    if v_delivery_method <> 'Transportadora' then
+      raise exception 'delivery_method deveria ser Transportadora, veio %', v_delivery_method;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.10 vw_order_summary.delivery_method repassa o valor gravado em orders.delivery_method', 'PASS', 'order_id=' || v_order_id);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('12', '12.10 vw_order_summary.delivery_method repassa o valor gravado em orders.delivery_method', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- =============================================================================
+-- SEÇÃO 13 — update_quote_order() (migration
+-- 20260821031143_add_update_quote_order.sql — AINDA NÃO APLICADA no momento
+-- em que esta seção foi escrita; os testes abaixo só devem passar depois
+-- que a migration for aplicada no ambiente onde este arquivo rodar).
+-- Edição atômica completa (cabeçalho + itens) de pedidos QUOTE/CATALOG.
+-- =============================================================================
+
+-- 13.1 Atualização atômica de cabeçalho + itens numa única chamada: troca
+-- notes/delivery_method/shipping_cost/payment_method do cabeçalho e
+-- substitui o item único por 2 itens novos, tudo na mesma chamada de
+-- update_quote_order.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_lead_source_id uuid;
+  v_order_id uuid;
+  v_notes text;
+  v_delivery_method text;
+  v_shipping_cost numeric;
+  v_payment_method text;
+  v_item_count integer;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+    select id into v_lead_source_id from public.lead_sources where is_active limit 1;
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste 13.1 (antes da edição)',
+      jsonb_build_array(
+        jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item Original', 'quantity', 1, 'unit_price', 10.00)
+      ),
+      v_user_id
+    );
+
+    perform public.update_quote_order(
+      v_order_id, v_customer_id, null, v_lead_source_id, 'PIX', null, 'Correios', 20.00, 0, 'observação atualizada 13.1',
+      jsonb_build_array(
+        jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item Novo A', 'quantity', 2, 'unit_price', 15.00),
+        jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item Novo B', 'quantity', 1, 'unit_price', 5.00)
+      ),
+      v_user_id
+    );
+
+    select notes, delivery_method, shipping_cost, payment_method into v_notes, v_delivery_method, v_shipping_cost, v_payment_method
+      from public.orders where id = v_order_id;
+    select count(*) into v_item_count from public.order_items where order_id = v_order_id;
+
+    if v_notes <> 'observação atualizada 13.1' or v_delivery_method <> 'Correios' or v_shipping_cost <> 20.00
+       or v_payment_method <> 'PIX' or v_item_count <> 2 then
+      raise exception 'cabeçalho/itens não refletem a edição atômica: notes=%, delivery_method=%, shipping_cost=%, payment_method=%, item_count=%',
+        v_notes, v_delivery_method, v_shipping_cost, v_payment_method, v_item_count;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('13', '13.1 update_quote_order atualiza cabeçalho e substitui o conjunto de itens numa única chamada atômica', 'PASS', 'order_id=' || v_order_id);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('13', '13.1 update_quote_order atualiza cabeçalho e substitui o conjunto de itens numa única chamada atômica', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 13.2 order_number nunca é alterado pela edição.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_order_number_before text;
+  v_order_number_after text;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste 13.2',
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.2', 'quantity', 1, 'unit_price', 10.00)),
+      v_user_id
+    );
+    select order_number into v_order_number_before from public.orders where id = v_order_id;
+
+    perform public.update_quote_order(
+      v_order_id, v_customer_id, null, null, null, null, null, 0, 0, 'edição 13.2',
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.2 editado', 'quantity', 3, 'unit_price', 12.00)),
+      v_user_id
+    );
+    select order_number into v_order_number_after from public.orders where id = v_order_id;
+
+    if v_order_number_before <> v_order_number_after then
+      raise exception 'order_number mudou: antes=%, depois=%', v_order_number_before, v_order_number_after;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('13', '13.2 update_quote_order preserva order_number', 'PASS', v_order_number_before);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('13', '13.2 update_quote_order preserva order_number', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 13.3 order_status e payment_status nunca são alterados pela edição.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_status text;
+  v_payment_status text;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste 13.3',
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.3', 'quantity', 1, 'unit_price', 10.00)),
+      v_user_id
+    );
+
+    perform public.update_quote_order(
+      v_order_id, v_customer_id, null, null, 'DINHEIRO', null, null, 0, 0, 'edição 13.3',
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.3 editado', 'quantity', 1, 'unit_price', 10.00)),
+      v_user_id
+    );
+
+    select order_status, payment_status into v_status, v_payment_status from public.orders where id = v_order_id;
+
+    if v_status <> 'QUOTE' or v_payment_status <> 'WAITING_PAYMENT' then
+      raise exception 'status deveria continuar QUOTE/WAITING_PAYMENT, veio order_status=%, payment_status=%', v_status, v_payment_status;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('13', '13.3 update_quote_order preserva order_status e payment_status', 'PASS', 'order_status=' || v_status || ' payment_status=' || v_payment_status);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('13', '13.3 update_quote_order preserva order_status e payment_status', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 13.4 subtotal/total_value são recalculados a partir do NOVO conjunto de
+-- itens, na mesma chamada.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_subtotal numeric;
+  v_total numeric;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste 13.4',
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.4', 'quantity', 1, 'unit_price', 10.00)),
+      v_user_id
+    );
+
+    -- 2 itens: 3×20,00 + 1×5,00 = 65,00.
+    perform public.update_quote_order(
+      v_order_id, v_customer_id, null, null, null, null, null, 0, 0, null,
+      jsonb_build_array(
+        jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.4 A', 'quantity', 3, 'unit_price', 20.00),
+        jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.4 B', 'quantity', 1, 'unit_price', 5.00)
+      ),
+      v_user_id
+    );
+
+    select subtotal, total_value into v_subtotal, v_total from public.orders where id = v_order_id;
+
+    if v_subtotal <> 65.00 or v_total <> 65.00 then
+      raise exception 'subtotal/total_value deveriam ser 65.00, veio subtotal=%, total_value=%', v_subtotal, v_total;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('13', '13.4 update_quote_order recalcula subtotal/total_value a partir do novo conjunto de itens', 'PASS', 'subtotal=' || v_subtotal);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('13', '13.4 update_quote_order recalcula subtotal/total_value a partir do novo conjunto de itens', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 13.5 Rollback completo quando um item no MEIO da lista é inválido: nem o
+-- cabeçalho nem os itens originais podem ser afetados.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_notes_before text;
+  v_notes_after text;
+  v_item_count_after integer;
+  v_item_name_after text;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+  select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+  v_order_id := public.create_order(
+    v_customer_id, null, null, null, null, 0, 0, 'notes originais 13.5',
+    jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item Original 13.5', 'quantity', 1, 'unit_price', 10.00)),
+    v_user_id
+  );
+  select notes into v_notes_before from public.orders where id = v_order_id;
+
+  begin
+    perform public.update_quote_order(
+      v_order_id, v_customer_id, null, null, null, null, null, 0, 0, 'notes NUNCA deveriam persistir 13.5',
+      jsonb_build_array(
+        jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item Válido', 'quantity', 1, 'unit_price', 10.00),
+        jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item Inválido', 'quantity', 1, 'unit_price', -5.00)
+      ),
+      v_user_id
+    );
+    v_status := 'FAIL';
+    v_details := 'update_quote_order aceitou item com unit_price negativo (não deveria)';
+  exception when others then
+    select notes into v_notes_after from public.orders where id = v_order_id;
+    select count(*), max(item_name) into v_item_count_after, v_item_name_after
+      from public.order_items where order_id = v_order_id;
+
+    if v_notes_after <> v_notes_before or v_item_count_after <> 1 or v_item_name_after <> 'Item Original 13.5' then
+      v_status := 'FAIL';
+      v_details := format('exceção ocorreu, mas dados não voltaram ao estado original: notes=%s, item_count=%s, item_name=%s', v_notes_after, v_item_count_after, v_item_name_after);
+    else
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    end if;
+  end;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('13', '13.5 rollback completo quando um item do meio da lista viola CHECK (unit_price negativo) — cabeçalho e itens originais preservados', v_status, v_details);
+end $$;
+
+-- 13.6 Rejeita pedidos fora de QUOTE.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_status text;
+  v_details text;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste 13.6',
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.6', 'quantity', 1, 'unit_price', 10.00)),
+      v_user_id
+    );
+    -- Força o status para fora de QUOTE só para exercitar a guarda de
+    -- update_quote_order — não passa pelo fluxo de negócio real de
+    -- aprovação (fora de escopo deste teste específico).
+    update public.orders set order_status = 'APPROVED' where id = v_order_id;
+
+    perform public.update_quote_order(
+      v_order_id, v_customer_id, null, null, null, null, null, 0, 0, null,
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.6 editado', 'quantity', 1, 'unit_price', 10.00)),
+      v_user_id
+    );
+
+    v_status := 'FAIL';
+    v_details := 'update_quote_order aceitou um pedido fora de QUOTE (não deveria)';
+  exception when others then
+    if sqlerrm like '%só permite pedidos em QUOTE%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'esperada mensagem de bloqueio por status, veio outra exceção: ' || sqlerrm;
+    end if;
+  end;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('13', '13.6 update_quote_order rejeita pedidos fora de QUOTE', v_status, v_details);
+end $$;
+
+-- 13.7a Rejeita pedidos com item CUSTOM/SPOT já existente.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_status text;
+  v_details text;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste 13.7a (SPOT existente)',
+      jsonb_build_array(
+        jsonb_build_object('item_type', 'SPOT', 'item_name', 'Item Spot 13.7a', 'quantity', 1, 'unit_price', 10.00,
+          'spot_details', jsonb_build_object('source_reference', 'teste 13.7a'))
+      ),
+      v_user_id
+    );
+
+    perform public.update_quote_order(
+      v_order_id, v_customer_id, null, null, null, null, null, 0, 0, null,
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.7a novo', 'quantity', 1, 'unit_price', 10.00)),
+      v_user_id
+    );
+
+    v_status := 'FAIL';
+    v_details := 'update_quote_order aceitou um pedido com item SPOT existente (não deveria)';
+  exception when others then
+    if sqlerrm like '%não pode ser usada em pedidos com itens CUSTOM/SPOT existentes%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'esperada mensagem de bloqueio por item SPOT existente, veio outra exceção: ' || sqlerrm;
+    end if;
+  end;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('13', '13.7a update_quote_order rejeita pedidos com item CUSTOM/SPOT já existente', v_status, v_details);
+end $$;
+
+-- 13.7b Rejeita item CUSTOM/SPOT enviado no payload, mesmo com o pedido
+-- hoje só-CATALOG.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_status text;
+  v_details text;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste 13.7b',
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.7b', 'quantity', 1, 'unit_price', 10.00)),
+      v_user_id
+    );
+
+    perform public.update_quote_order(
+      v_order_id, v_customer_id, null, null, null, null, null, 0, 0, null,
+      jsonb_build_array(jsonb_build_object('item_type', 'CUSTOM', 'item_name', 'Item Custom no payload', 'quantity', 1, 'unit_price', 10.00)),
+      v_user_id
+    );
+
+    v_status := 'FAIL';
+    v_details := 'update_quote_order aceitou item CUSTOM no payload (não deveria)';
+  exception when others then
+    if sqlerrm like '%só aceita itens CATALOG%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'esperada mensagem de bloqueio por item não-CATALOG no payload, veio outra exceção: ' || sqlerrm;
+    end if;
+  end;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('13', '13.7b update_quote_order rejeita item CUSTOM/SPOT enviado no payload', v_status, v_details);
+end $$;
+
+-- 13.8 Rejeita payload sem itens (array vazio).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_status text;
+  v_details text;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste 13.8',
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.8', 'quantity', 1, 'unit_price', 10.00)),
+      v_user_id
+    );
+
+    perform public.update_quote_order(
+      v_order_id, v_customer_id, null, null, null, null, null, 0, 0, null,
+      '[]'::jsonb,
+      v_user_id
+    );
+
+    v_status := 'FAIL';
+    v_details := 'update_quote_order aceitou um payload sem itens (não deveria)';
+  exception when others then
+    if sqlerrm like '%exige ao menos um item%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'esperada mensagem de bloqueio por payload vazio, veio outra exceção: ' || sqlerrm;
+    end if;
+  end;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('13', '13.8 update_quote_order rejeita payload sem itens (array vazio)', v_status, v_details);
+end $$;
+
+-- 13.9 Rejeita payment_method inválido.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_status text;
+  v_details text;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste 13.9',
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.9', 'quantity', 1, 'unit_price', 10.00)),
+      v_user_id
+    );
+
+    perform public.update_quote_order(
+      v_order_id, v_customer_id, null, null, 'BOLETO', null, null, 0, 0, null,
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.9 editado', 'quantity', 1, 'unit_price', 10.00)),
+      v_user_id
+    );
+
+    v_status := 'FAIL';
+    v_details := 'update_quote_order aceitou payment_method=BOLETO (não deveria)';
+  exception when others then
+    if sqlerrm like '%p_payment_method inválido%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'esperada mensagem de validação de p_payment_method, veio outra exceção: ' || sqlerrm;
+    end if;
+  end;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('13', '13.9 update_quote_order rejeita payment_method inválido (BOLETO)', v_status, v_details);
+end $$;
+
+-- 13.10 Rejeita valores negativos/inválidos (quantity <= 0, unit_price < 0)
+-- via CHECK constraint de order_items — nenhuma validação duplicada na
+-- função, mas o resultado (rejeição) deve se manter.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_status text;
+  v_details text;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'pedido teste 13.10',
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.10', 'quantity', 1, 'unit_price', 10.00)),
+      v_user_id
+    );
+
+    perform public.update_quote_order(
+      v_order_id, v_customer_id, null, null, null, null, null, 0, 0, null,
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.10 negativo', 'quantity', -1, 'unit_price', 10.00)),
+      v_user_id
+    );
+
+    v_status := 'FAIL';
+    v_details := 'update_quote_order aceitou quantity negativa (não deveria)';
+  exception when others then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  end;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('13', '13.10 update_quote_order rejeita quantity/unit_price inválidos (CHECK de order_items)', v_status, v_details);
+end $$;
+
+-- 13.11 Permissões e search_path seguros: anon/authenticated sem EXECUTE;
+-- só service_role. search_path vazio.
+do $$
+declare
+  v_anon_can_execute boolean;
+  v_authenticated_can_execute boolean;
+  v_service_role_can_execute boolean;
+  v_search_path_raw text;
+begin
+  begin
+    select has_function_privilege('anon', 'public.update_quote_order(uuid,uuid,uuid,uuid,text,date,text,numeric,numeric,text,jsonb,uuid)', 'EXECUTE') into v_anon_can_execute;
+    select has_function_privilege('authenticated', 'public.update_quote_order(uuid,uuid,uuid,uuid,text,date,text,numeric,numeric,text,jsonb,uuid)', 'EXECUTE') into v_authenticated_can_execute;
+    select has_function_privilege('service_role', 'public.update_quote_order(uuid,uuid,uuid,uuid,text,date,text,numeric,numeric,text,jsonb,uuid)', 'EXECUTE') into v_service_role_can_execute;
+
+    select setting into v_search_path_raw
+      from pg_proc, unnest(proconfig) as setting
+      where pronamespace = 'public'::regnamespace and proname = 'update_quote_order'
+        and setting like 'search_path=%';
+
+    if v_anon_can_execute or v_authenticated_can_execute or not v_service_role_can_execute then
+      raise exception 'permissões inesperadas: anon=%, authenticated=%, service_role=%', v_anon_can_execute, v_authenticated_can_execute, v_service_role_can_execute;
+    end if;
+    if v_search_path_raw is null or trim(both '"' from substring(v_search_path_raw from 13)) <> '' then
+      raise exception 'search_path deveria ser vazio, veio: %', v_search_path_raw;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('13', '13.11 update_quote_order: anon/authenticated sem EXECUTE, só service_role; search_path vazio', 'PASS', 'ok');
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('13', '13.11 update_quote_order: anon/authenticated sem EXECUTE, só service_role; search_path vazio', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 13.12 Dependência inesperada (approval vinculado a um item atual) bloqueia
+-- a substituição de itens e provoca rollback total — nenhuma exclusão em
+-- cascata é introduzida.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_item_id uuid;
+  v_item_count_after integer;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_fixtures where key = 'customer_id';
+  select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+
+  v_order_id := public.create_order(
+    v_customer_id, null, null, null, null, 0, 0, 'pedido teste 13.12 (item com approval vinculado)',
+    jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.12 com approval', 'quantity', 1, 'unit_price', 10.00)),
+    v_user_id
+  );
+  select id into v_item_id from public.order_items where order_id = v_order_id;
+
+  -- Vínculo deliberadamente "fora do fluxo normal" (approvals hoje só
+  -- deveria existir para itens CUSTOM/SPOT) — exatamente o cenário que a
+  -- checagem explícita da função precisa capturar, mesmo sem depender do
+  -- item_type sozinho.
+  insert into public.approvals (order_item_id, approval_type, approved_at, created_by)
+    values (v_item_id, 'OTHER', now(), v_user_id);
+
+  begin
+    perform public.update_quote_order(
+      v_order_id, v_customer_id, null, null, null, null, null, 0, 0, null,
+      jsonb_build_array(jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id, 'item_name', 'Item 13.12 substituto', 'quantity', 1, 'unit_price', 10.00)),
+      v_user_id
+    );
+    v_status := 'FAIL';
+    v_details := 'update_quote_order substituiu um item com approval vinculado (não deveria)';
+  exception when others then
+    if sqlerrm like '%histórico de versão/aprovação vinculado%' then
+      select count(*) into v_item_count_after from public.order_items where id = v_item_id;
+      if v_item_count_after <> 1 then
+        v_status := 'FAIL';
+        v_details := 'exceção correta ocorreu, mas o item original não sobreviveu ao rollback (item_count=' || v_item_count_after || ')';
+      else
+        v_status := 'PASS';
+        v_details := sqlerrm;
+      end if;
+    else
+      v_status := 'FAIL';
+      v_details := 'esperada mensagem de bloqueio por dependência, veio outra exceção: ' || sqlerrm;
+    end if;
+  end;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('13', '13.12 update_quote_order recusa substituir item com approval vinculado, com rollback total (sem cascata)', v_status, v_details);
+end $$;
+
+-- =============================================================================
+-- RESULTADO FINAL + ROLLBACK
+-- =============================================================================
 
 -- =============================================================================
 -- RESULTADO FINAL + ROLLBACK

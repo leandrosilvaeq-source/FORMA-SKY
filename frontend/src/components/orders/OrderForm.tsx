@@ -1,5 +1,18 @@
 import { Fragment, useId, useState, type ComponentType, type FormEvent, type ReactNode } from 'react'
-import { EllipsisIcon, HandIcon, MinusIcon, PackageIcon, PlusIcon, Trash2Icon, TruckIcon, UsersIcon } from 'lucide-react'
+import {
+  BanknoteIcon,
+  CircleDashedIcon,
+  CreditCardIcon,
+  EllipsisIcon,
+  HandIcon,
+  MinusIcon,
+  PackageIcon,
+  PlusIcon,
+  QrCodeIcon,
+  Trash2Icon,
+  TruckIcon,
+  UsersIcon,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -8,7 +21,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { cn } from '@/lib/utils'
 import { parseNumberField } from '@/lib/forms/numberField'
 import type { CreateOrderInput, OrderItemInput } from '@/lib/api/orders'
-import type { Company, Customer, LeadSource, Product } from '@/types/domain'
+import type { Company, Customer, LeadSource, PaymentMethod, Product } from '@/types/domain'
 
 type SaleType = 'B2C' | 'B2B'
 type DeliveryMethod = 'Em mãos' | 'Correios' | 'Transportadora'
@@ -19,6 +32,35 @@ const SALE_TYPE_ITEMS: Array<{ label: string; value: SaleType }> = [
 ]
 
 const DELIVERY_METHODS: DeliveryMethod[] = ['Em mãos', 'Correios', 'Transportadora']
+
+function isKnownDeliveryMethod(value: string | null): value is DeliveryMethod {
+  return value === 'Em mãos' || value === 'Correios' || value === 'Transportadora'
+}
+
+// Rótulos aprovados — nomes reais de orders.payment_method (CHECK em
+// supabase/migrations/20260813221340_create_orders_table.sql, reafirmada
+// sem alteração pela migration que adiciona o parâmetro a create_order() e
+// pela validação equivalente em update_quote_order(), migration
+// 20260821031143). Sem valor separado para crédito/débito: "CARTAO"/"Cartão"
+// é o único valor de cartão previsto no projeto
+// (docs/01_ESPECIFICACAO_FUNCIONAL.md, docs/03_MODELO_BANCO_DADOS.md). Não
+// existe "Transferência"/"Outro" no contrato — não inventados aqui.
+// "Não informado" (value: null) é a opção padrão — a coluna é nullable e
+// create_order()/update_quote_order() nunca exigem o campo.
+//
+// Ícone por método: mesmo tratamento de "Entrou em contato por" (ícone com
+// cor fixa própria, independente do estado selecionado — a seleção é
+// comunicada só pela borda/fundo do botão, nunca recolorindo o ícone).
+// Nenhum destes 4 métodos tem uma cor de marca oficial documentada no
+// projeto (ao contrário de Instagram/WhatsApp/Facebook/TikTok em "Entrou em
+// contato por"), então todos usam a mesma cor genérica --brand-primary,
+// igual ao tratamento já dado a "Indicação"/"Outros" naquele grupo.
+const PAYMENT_METHOD_ITEMS: Array<{ label: string; value: PaymentMethod | null; Icon: IconComponent }> = [
+  { label: 'Não informado', value: null, Icon: CircleDashedIcon },
+  { label: 'Pix', value: 'PIX', Icon: QrCodeIcon },
+  { label: 'Dinheiro', value: 'DINHEIRO', Icon: BanknoteIcon },
+  { label: 'Cartão', value: 'CARTAO', Icon: CreditCardIcon },
+]
 
 // Ordem de exibição aprovada — nomes reais de public.lead_sources
 // (supabase/migrations/20260813194021_create_lookup_tables.sql). Só
@@ -214,7 +256,48 @@ function computeRowTotal(row: ItemRow): number {
   return q * p + f
 }
 
+// Valores para pré-preencher o formulário em modo edição — usados só por
+// OrderEditForm.tsx, que resolve os dados via getOrder()/listOrderItems()
+// antes de montar este componente (nunca montado antes dos dados estarem
+// prontos, então este componente nunca precisa reagir a initialValues
+// mudando depois do primeiro render).
+export interface OrderFormInitialItem {
+  productId: string
+  quantity: number
+  unitPrice: number
+  personalizationFee: number
+}
+
+export interface OrderFormInitialValues {
+  companyId: string | null
+  customerId: string | null
+  leadSourceId: string | null
+  paymentMethod: PaymentMethod | null
+  // Texto livre no banco (sem CHECK) — só os 3 valores conhecidos viram
+  // seleção real; qualquer outro valor gravado por fora desta UI aparece
+  // como "nenhuma forma selecionada" aqui (mesma limitação já aceita na
+  // criação, não resolvida nesta rodada).
+  deliveryMethod: string | null
+  shippingCost: number | null
+  expectedDeliveryDate: string | null
+  notes: string | null
+  items: OrderFormInitialItem[]
+}
+
 interface OrderFormProps {
+  mode?: 'create' | 'edit'
+  // Só usados/mostrados quando mode === 'edit' — informação somente
+  // leitura, nunca um campo editável.
+  orderNumber?: string
+  orderStatusLabel?: string
+  paymentStatusLabel?: string
+  initialValues?: OrderFormInitialValues
+  // Quando true, todo o formulário fica somente leitura: nenhum controle
+  // é editável e o botão de salvar não aparece — usado quando o pedido em
+  // edição está fora do escopo suportado (não-QUOTE ou com item
+  // Personalizado/Spot).
+  readOnly?: boolean
+  readOnlyMessage?: string
   customers: Customer[]
   companies: Company[]
   leadSources: LeadSource[]
@@ -226,6 +309,13 @@ interface OrderFormProps {
 }
 
 export function OrderForm({
+  mode = 'create',
+  orderNumber,
+  orderStatusLabel,
+  paymentStatusLabel,
+  initialValues,
+  readOnly = false,
+  readOnlyMessage,
   customers,
   companies,
   leadSources,
@@ -235,13 +325,30 @@ export function OrderForm({
   onSubmit,
   onCancel,
 }: OrderFormProps) {
-  const [saleType, setSaleType] = useState<SaleType>('B2C')
-  const [customerId, setCustomerId] = useState<string | null>(null)
-  const [companyId, setCompanyId] = useState<string | null>(null)
-  const [leadSourceId, setLeadSourceId] = useState<string | null>(null)
-  const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod | ''>('')
-  const [shippingCost, setShippingCost] = useState('')
-  const [items, setItems] = useState<ItemRow[]>([emptyRow()])
+  const [saleType, setSaleType] = useState<SaleType>(initialValues?.companyId ? 'B2B' : 'B2C')
+  const [customerId, setCustomerId] = useState<string | null>(initialValues?.customerId ?? null)
+  const [companyId, setCompanyId] = useState<string | null>(initialValues?.companyId ?? null)
+  const [leadSourceId, setLeadSourceId] = useState<string | null>(initialValues?.leadSourceId ?? null)
+  const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod | ''>(
+    isKnownDeliveryMethod(initialValues?.deliveryMethod ?? null) ? (initialValues!.deliveryMethod as DeliveryMethod) : '',
+  )
+  const [shippingCost, setShippingCost] = useState(
+    initialValues?.shippingCost != null && initialValues.shippingCost !== 0 ? String(initialValues.shippingCost) : '',
+  )
+  const [expectedDeliveryDate, setExpectedDeliveryDate] = useState(initialValues?.expectedDeliveryDate ?? '')
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(initialValues?.paymentMethod ?? null)
+  const [notes, setNotes] = useState(initialValues?.notes ?? '')
+  const [items, setItems] = useState<ItemRow[]>(() =>
+    initialValues && initialValues.items.length > 0
+      ? initialValues.items.map((item) => ({
+          key: nextRowKey(),
+          productId: item.productId,
+          quantity: String(item.quantity),
+          unitPrice: String(item.unitPrice),
+          personalizationFee: item.personalizationFee ? String(item.personalizationFee) : '',
+        }))
+      : [emptyRow()],
+  )
 
   const [headerErrors, setHeaderErrors] = useState<Record<string, string>>({})
   const [itemErrors, setItemErrors] = useState<Record<string, string>>({})
@@ -249,7 +356,18 @@ export function OrderForm({
   // Só ativos podem ser escolhidos para um pedido novo — nenhum destes
   // filtros muta customers/companies/leadSources/products (props originais
   // preservados intactos, só as listas locais de opção são reduzidas).
-  const activeProducts = products.filter((product) => product.is_active)
+  //
+  // product_type === 'CATALOG' (comparação estrita, sem fallback): o
+  // seletor de item Catálogo só pode oferecer produtos de Catálogo de
+  // verdade — nunca um produto CUSTOM/SPOT cadastrado como reutilizável
+  // (ver ProductForm.tsx/ProductsPage.tsx). Os fluxos de pedido
+  // Personalizado e SPOT continuam não habilitados; este filtro é só uma
+  // proteção para não oferecer, na tabela de itens Catálogo, um produto
+  // que tecnicamente não é Catálogo. Nenhum fallback silencioso: um
+  // produto sem product_type (nunca deveria ocorrer após a migration ser
+  // aplicada, já que a coluna é NOT NULL) fica de fora, nunca é tratado
+  // como CATALOG por omissão.
+  const activeProducts = products.filter((product) => product.is_active && product.product_type === 'CATALOG')
   const activeCustomers = customers.filter((customer) => customer.is_active)
   const activeCompanies = companies.filter((company) => company.is_active)
   const activeLeadSources = sortLeadSourcesForDisplay(leadSources.filter((source) => source.is_active))
@@ -277,19 +395,24 @@ export function OrderForm({
   const leadSourceSectionNumber = sectionNumber++
   const itemsSectionNumber = sectionNumber++
   const deliverySectionNumber = sectionNumber++
+  const shippingSectionNumber = showShipping ? sectionNumber++ : null
+  const deliveryDateSectionNumber = sectionNumber++
+  const paymentMethodSectionNumber = sectionNumber++
   // Última seção numerada — nenhum incremento necessário depois desta.
-  const shippingSectionNumber = showShipping ? sectionNumber : null
+  const notesSectionNumber = sectionNumber
 
   // Ao sair de B2B, limpa companyId — garante que uma empresa escolhida
   // antes não fique "fantasma" no estado se o usuário voltar para B2B
   // depois. customerId nunca é tocado aqui: continua obrigatório e válido
   // nos dois modos, sem relação alguma com o tipo de venda.
   function handleSaleTypeChange(value: SaleType) {
+    if (readOnly) return
     setSaleType(value)
     if (value === 'B2C') setCompanyId(null)
   }
 
   function handleDeliveryMethodChange(value: DeliveryMethod) {
+    if (readOnly) return
     setDeliveryMethod(value)
     // Ao voltar para "Em mãos", limpa o valor de frete do estado — o
     // submit já força shipping_cost: null quando o campo está escondido,
@@ -299,20 +422,25 @@ export function OrderForm({
   }
 
   function handleLeadSourceToggle(id: string) {
+    if (readOnly) return
     setLeadSourceId((current) => (current === id ? null : id))
   }
 
   function addItemRow() {
+    if (readOnly) return
     setItems((rows) => [...rows, emptyRow()])
   }
   function removeItemRow(key: string) {
+    if (readOnly) return
     setItems((rows) => (rows.length > 1 ? rows.filter((row) => row.key !== key) : rows))
   }
   function updateItemRow(key: string, patch: Partial<ItemRow>) {
+    if (readOnly) return
     setItems((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch } : row)))
   }
 
   function incrementQuantity(key: string) {
+    if (readOnly) return
     setItems((rows) =>
       rows.map((row) => {
         if (row.key !== key) return row
@@ -323,6 +451,7 @@ export function OrderForm({
     )
   }
   function decrementQuantity(key: string) {
+    if (readOnly) return
     setItems((rows) =>
       rows.map((row) => {
         if (row.key !== key) return row
@@ -393,6 +522,7 @@ export function OrderForm({
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (readOnly) return
 
     const newHeaderErrors: Record<string, string> = {}
     if (!customerId) newHeaderErrors.customer_id = 'Selecione um cliente.'
@@ -424,27 +554,64 @@ export function OrderForm({
       company_id: saleType === 'B2B' ? companyId : null,
       // lead_source_id OMITIDO quando não escolhido (não enviado como null)
       // — deixa create_order() aplicar sua própria herança de
-      // customers.acquisition_source_id, sem replicar essa regra aqui.
+      // customers.acquisition_source_id, sem replicar essa regra aqui. Em
+      // modo edição, o mesmo omitido = null é interpretado por
+      // update_quote_order() como "sem origem", sem herança nenhuma (só
+      // create_order tem essa lógica) — comportamento aceito para esta
+      // primeira versão.
       ...(leadSourceId ? { lead_source_id: leadSourceId } : {}),
-      // Prazo de entrega, Desconto e Observações não fazem parte do
-      // desenho aprovado desta rodada — omitidos com segurança (campos
-      // opcionais no contrato real, sem consequência de negócio).
-      expected_delivery_date: null,
+      // payment_method: "Não informado" é value: null no Select — enviado
+      // como null explícito (nunca omitido), igual ao padrão já usado para
+      // company_id/shipping_cost acima.
+      payment_method: paymentMethod,
+      // Prazo de entrega: campo vazio ('') vira null, igual ao padrão já
+      // usado para os demais campos opcionais deste formulário.
+      expected_delivery_date: expectedDeliveryDate ? expectedDeliveryDate : null,
       delivery_method: deliveryMethod ? deliveryMethod : null,
       // Força null quando Frete está escondido (Em mãos ou nenhuma forma
       // de entrega escolhida ainda), mesma garantia de company_id acima —
       // nunca confia só no estado local shippingCost já ter sido limpo.
       shipping_cost: showShipping ? (shippingCostField.value ?? null) : null,
+      // Desconto não faz parte do desenho aprovado desta rodada (não
+      // existe no formulário de criação) — omitido com segurança.
       discount_value: null,
-      notes: null,
+      notes: notes.trim() ? notes.trim() : null,
       items: validatedItems,
     })
   }
 
-  const orderTotal = items.reduce((sum, row) => sum + computeRowTotal(row), 0)
+  // Preview do valor total a pagar pelo cliente — mesma fórmula de
+  // vw_order_summary.total_receivable (subtotal - desconto + frete,
+  // migration 20260814040037): orders.total_value sozinho NÃO inclui
+  // shipping_cost (recalculate_order_financials() só calcula
+  // subtotal - discount_value), então somar aqui é necessário para o
+  // destaque do rodapé não subestimar o valor real cobrado quando há
+  // frete. Desconto não existe como campo neste formulário (sempre 0).
+  const itemsTotal = items.reduce((sum, row) => sum + computeRowTotal(row), 0)
+  const shippingPreview = showShipping ? Number.parseFloat(shippingCost) || 0 : 0
+  const orderTotal = itemsTotal + shippingPreview
 
   return (
     <form className="flex flex-col gap-2" onSubmit={handleSubmit}>
+      {mode === 'edit' && (
+        <div className="grid grid-cols-3 gap-3 text-sm">
+          <div className="flex flex-col gap-1">
+            <span className="text-muted-foreground text-xs">Nº do pedido</span>
+            <span className="font-medium">{orderNumber}</span>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-muted-foreground text-xs">Status</span>
+            <span className="font-medium">{orderStatusLabel}</span>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-muted-foreground text-xs">Status financeiro</span>
+            <span className="font-medium">{paymentStatusLabel}</span>
+          </div>
+        </div>
+      )}
+
+      {readOnly && readOnlyMessage && <p className="text-muted-foreground text-sm">{readOnlyMessage}</p>}
+
       <SectionRow number={saleTypeSectionNumber} label="Tipo de venda">
         <div role="radiogroup" aria-label="Tipo de venda" className="border-input inline-flex rounded-md border p-0.5">
           {SALE_TYPE_ITEMS.map((item) => (
@@ -453,9 +620,10 @@ export function OrderForm({
               type="button"
               role="radio"
               aria-checked={saleType === item.value}
+              disabled={readOnly}
               onClick={() => handleSaleTypeChange(item.value)}
               className={cn(
-                'focus-visible:ring-brand-accent rounded-sm px-4 py-1 text-sm font-medium transition-colors outline-none focus-visible:ring-2',
+                'focus-visible:ring-brand-accent rounded-sm px-4 py-1 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50',
                 saleType === item.value
                   ? 'bg-brand-primary text-brand-primary-foreground'
                   : 'text-muted-foreground hover:bg-muted hover:text-foreground',
@@ -473,6 +641,7 @@ export function OrderForm({
             <input
               type="checkbox"
               checked
+              disabled={readOnly}
               aria-label="Catálogo"
               className="accent-brand-primary size-4 rounded"
               // Único tipo funcional nesta rodada: sempre marcado, nunca
@@ -505,8 +674,8 @@ export function OrderForm({
 
       {saleType === 'B2B' && (
         <SectionRow number={companySectionNumber as number} label="Empresa" error={headerErrors.company_id}>
-          <Select items={companyItems} value={companyId} onValueChange={(value) => setCompanyId(value)}>
-            <SelectTrigger aria-label="Empresa" size="sm" className="w-full">
+          <Select items={companyItems} value={companyId} onValueChange={(value) => !readOnly && setCompanyId(value)}>
+            <SelectTrigger aria-label="Empresa" size="sm" className="w-full" disabled={readOnly}>
               <SelectValue placeholder="Selecione a empresa" />
             </SelectTrigger>
             <SelectContent>
@@ -521,8 +690,8 @@ export function OrderForm({
       )}
 
       <SectionRow number={customerSectionNumber} label="Cliente/Contato" error={headerErrors.customer_id}>
-        <Select items={customerItems} value={customerId} onValueChange={(value) => setCustomerId(value)}>
-          <SelectTrigger aria-label="Cliente/Contato" size="sm" className="w-full">
+        <Select items={customerItems} value={customerId} onValueChange={(value) => !readOnly && setCustomerId(value)}>
+          <SelectTrigger aria-label="Cliente/Contato" size="sm" className="w-full" disabled={readOnly}>
             <SelectValue placeholder="Selecione o cliente ou contato" />
           </SelectTrigger>
           <SelectContent>
@@ -536,7 +705,15 @@ export function OrderForm({
       </SectionRow>
 
       <SectionRow number={leadSourceSectionNumber} label="Entrou em contato por:">
-        <div role="radiogroup" aria-label="Entrou em contato por" className="flex flex-wrap gap-1">
+        {/* Cards verticais (ícone grande em cima, nome embaixo, conteúdo
+            centralizado) — mesma referência de tamanho de ícone (size-8)
+            adotada por "Forma de entrega" e "Método de pagamento" abaixo.
+            w-20/h-20 fixos mantêm largura/altura uniformes entre os 6
+            cards; flex-wrap deixa quebrar para a linha seguinte em telas
+            estreitas, sem overflow horizontal — o rótulo "4. Entrou em
+            contato por:" continua à esquerda via SectionRow (mesmo layout
+            flex-wrap já usado por todas as seções). */}
+        <div role="radiogroup" aria-label="Entrou em contato por" className="flex flex-wrap gap-2">
           {activeLeadSources.map((source) => {
             const { Icon, className: iconClassName } = LEAD_SOURCE_ICONS[source.name] ?? DEFAULT_LEAD_SOURCE_ICON
             // Rótulo visível abreviado só para "Indicação / boca a boca" (o
@@ -546,23 +723,25 @@ export function OrderForm({
             // banco (source.id, usado em handleLeadSourceToggle/payload)
             // continuam intocados.
             const displayLabel = LEAD_SOURCE_SHORT_LABELS[source.name] ?? source.name
+            const selected = leadSourceId === source.id
             return (
               <button
                 key={source.id}
                 type="button"
                 role="radio"
-                aria-checked={leadSourceId === source.id}
+                aria-checked={selected}
                 aria-label={source.name}
+                disabled={readOnly}
                 onClick={() => handleLeadSourceToggle(source.id)}
                 className={cn(
-                  'focus-visible:ring-brand-accent inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-2',
-                  leadSourceId === source.id
+                  'focus-visible:ring-brand-accent flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-lg border p-1.5 text-center transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50',
+                  selected
                     ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
-                    : 'border-input text-muted-foreground hover:bg-muted hover:text-foreground',
+                    : 'border-input bg-muted/30 text-muted-foreground hover:bg-muted hover:text-foreground',
                 )}
               >
-                <Icon className={cn('size-5 shrink-0', iconClassName)} />
-                {displayLabel}
+                <Icon className={cn('size-8 shrink-0', iconClassName)} />
+                <span className="line-clamp-1 text-xs leading-tight font-medium">{displayLabel}</span>
               </button>
             )
           })}
@@ -577,6 +756,7 @@ export function OrderForm({
             variant="outline"
             size="xs"
             onClick={addItemRow}
+            disabled={readOnly}
             className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
           >
             <PlusIcon /> Adicionar item
@@ -608,7 +788,7 @@ export function OrderForm({
                         value={row.productId}
                         onValueChange={(value) => handleProductChange(row.key, value)}
                       >
-                        <SelectTrigger aria-label="Produto" size="sm" className="w-full min-w-40">
+                        <SelectTrigger aria-label="Produto" size="sm" className="w-full min-w-40" disabled={readOnly}>
                           <SelectValue placeholder="Selecione um produto" />
                         </SelectTrigger>
                         <SelectContent>
@@ -631,6 +811,7 @@ export function OrderForm({
                           aria-label="Preço unitário"
                           value={row.unitPrice}
                           onChange={(event) => updateItemRow(row.key, { unitPrice: event.target.value })}
+                          disabled={readOnly}
                         />
                       </div>
                     </TableCell>
@@ -642,6 +823,7 @@ export function OrderForm({
                           size="icon-xs"
                           aria-label="Diminuir quantidade"
                           onClick={() => decrementQuantity(row.key)}
+                          disabled={readOnly}
                         >
                           <MinusIcon />
                         </Button>
@@ -651,6 +833,7 @@ export function OrderForm({
                           aria-label="Quantidade"
                           value={row.quantity}
                           onChange={(event) => updateItemRow(row.key, { quantity: event.target.value })}
+                          disabled={readOnly}
                         />
                         <Button
                           type="button"
@@ -658,6 +841,7 @@ export function OrderForm({
                           size="icon-xs"
                           aria-label="Aumentar quantidade"
                           onClick={() => incrementQuantity(row.key)}
+                          disabled={readOnly}
                         >
                           <PlusIcon />
                         </Button>
@@ -671,6 +855,7 @@ export function OrderForm({
                         placeholder="0,00"
                         value={row.personalizationFee}
                         onChange={(event) => updateItemRow(row.key, { personalizationFee: event.target.value })}
+                        disabled={readOnly}
                       />
                     </TableCell>
                     <TableCell className="p-1.5 text-sm font-medium">{formatCurrency(computeRowTotal(row))}</TableCell>
@@ -680,7 +865,7 @@ export function OrderForm({
                         variant="ghost"
                         size="icon-xs"
                         onClick={() => removeItemRow(row.key)}
-                        disabled={items.length === 1}
+                        disabled={items.length === 1 || readOnly}
                         aria-label="Remover item"
                       >
                         <Trash2Icon />
@@ -702,7 +887,11 @@ export function OrderForm({
       </div>
 
       <SectionRow number={deliverySectionNumber} label="Forma de entrega">
-        <div role="radiogroup" aria-label="Forma de entrega" className="flex flex-wrap gap-1.5">
+        {/* Ícone size-8, mesma referência visual dos novos cards de "Entrou
+            em contato por" (item 4) — só o tamanho do ícone muda; o botão
+            continua no formato pílula horizontal (sem texto abaixo do
+            ícone), conforme aprovado. */}
+        <div role="radiogroup" aria-label="Forma de entrega" className="flex flex-wrap gap-2">
           {DELIVERY_METHODS.map((method) => {
             const Icon = DELIVERY_METHOD_ICONS[method]
             return (
@@ -711,15 +900,16 @@ export function OrderForm({
                 type="button"
                 role="radio"
                 aria-checked={deliveryMethod === method}
+                disabled={readOnly}
                 onClick={() => handleDeliveryMethodChange(method)}
                 className={cn(
-                  'focus-visible:ring-brand-accent inline-flex items-center gap-1.5 rounded-md border px-3 py-1 text-sm font-medium transition-colors outline-none focus-visible:ring-2',
+                  'focus-visible:ring-brand-accent inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50',
                   deliveryMethod === method
                     ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
                     : 'border-input text-muted-foreground hover:bg-muted hover:text-foreground',
                 )}
               >
-                <Icon className="size-3.5 shrink-0" />
+                <Icon className="text-brand-primary size-8 shrink-0" />
                 {method}
               </button>
             )
@@ -739,32 +929,91 @@ export function OrderForm({
               aria-label="Frete"
               value={shippingCost}
               onChange={(event) => setShippingCost(event.target.value)}
+              disabled={readOnly}
             />
           </div>
         </SectionRow>
       )}
 
+      <SectionRow number={deliveryDateSectionNumber} label="Prazo de entrega">
+        <Input
+          type="date"
+          className="h-7 w-40"
+          aria-label="Prazo de entrega"
+          value={expectedDeliveryDate}
+          onChange={(event) => setExpectedDeliveryDate(event.target.value)}
+          disabled={readOnly}
+        />
+      </SectionRow>
+
+      <SectionRow number={paymentMethodSectionNumber} label="Método de pagamento">
+        {/* Mesmo tratamento de tamanho de ícone (size-8) de "Forma de
+            entrega" e dos novos cards de "Entrou em contato por". */}
+        <div role="radiogroup" aria-label="Método de pagamento" className="flex flex-wrap gap-2">
+          {PAYMENT_METHOD_ITEMS.map((item) => (
+            <button
+              key={item.value ?? 'none'}
+              type="button"
+              role="radio"
+              aria-checked={paymentMethod === item.value}
+              disabled={readOnly}
+              onClick={() => !readOnly && setPaymentMethod(item.value)}
+              className={cn(
+                'focus-visible:ring-brand-accent inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50',
+                paymentMethod === item.value
+                  ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
+                  : 'border-input text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              <item.Icon className="text-brand-primary size-8 shrink-0" />
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </SectionRow>
+
+      <SectionRow number={notesSectionNumber} label="Observações">
+        <textarea
+          aria-label="Observações"
+          className="border-input focus-visible:border-ring focus-visible:ring-ring/50 min-h-16 w-full rounded-md border bg-transparent p-2 text-sm outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50"
+          value={notes}
+          onChange={(event) => setNotes(event.target.value)}
+          disabled={readOnly}
+        />
+      </SectionRow>
+
       {submitError && <p className="text-destructive text-sm">{submitError}</p>}
 
       <DialogFooter className="flex-row flex-wrap items-center justify-between gap-3 p-3 sm:justify-between">
-        <p className="text-sm">
-          <span className="font-medium">Total do pedido:</span> {formatCurrency(orderTotal)}
-          <span className="text-muted-foreground">
-            {' '}
-            · {items.length} {items.length === 1 ? 'item' : 'itens'}
+        {/* Mesmo tratamento visual do valor destacado da Ficha Técnica do
+            Produto (ComponentsSubtotalCard, ProductDetailPage.tsx): valor em
+            fonte grande/peso forte na cor --brand-primary-dark, rótulo e
+            contagem de itens em texto secundário menor — o valor é
+            deliberadamente o elemento de maior destaque do rodapé, sem
+            competir com os botões (bloco próprio, à esquerda; botões à
+            direita via justify-between). */}
+        <div className="flex flex-col gap-0.5">
+          <span className="text-muted-foreground text-xs font-medium">Total do pedido</span>
+          <span className="text-brand-primary-dark text-2xl leading-none font-bold">
+            {formatCurrency(orderTotal)}
           </span>
-        </p>
+          <span className="text-muted-foreground text-xs">
+            {items.length} {items.length === 1 ? 'item' : 'itens'}
+          </span>
+        </div>
         <div className="flex gap-2">
           <Button type="button" variant="outline" onClick={onCancel} disabled={isSubmitting}>
             Cancelar
           </Button>
-          <Button
-            type="submit"
-            disabled={isSubmitting}
-            className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
-          >
-            {isSubmitting ? 'Salvando...' : 'Salvar pedido'}
-          </Button>
+          {!readOnly && (
+            <Button
+              type="submit"
+              disabled={isSubmitting}
+              className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
+            >
+              {isSubmitting ? 'Salvando...' : mode === 'edit' ? 'Salvar alterações' : 'Salvar pedido'}
+            </Button>
+          )}
         </div>
       </DialogFooter>
     </form>

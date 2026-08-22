@@ -46,10 +46,11 @@ describe('products api', () => {
   it('createProduct writes through the products Edge Function, not a direct insert', async () => {
     callEdgeFunctionMock.mockResolvedValue({ id: 'abc' })
 
-    const result = await createProduct({ name: 'Chaveiro', default_price: 10 })
+    const result = await createProduct({ name: 'Chaveiro', product_type: 'CATALOG', default_price: 10 })
 
     expect(callEdgeFunctionMock).toHaveBeenCalledWith('products', '', 'POST', {
       name: 'Chaveiro',
+      product_type: 'CATALOG',
       default_price: 10,
     })
     expect(fromMock).not.toHaveBeenCalled()
