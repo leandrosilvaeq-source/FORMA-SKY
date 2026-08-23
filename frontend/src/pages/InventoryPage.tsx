@@ -267,6 +267,32 @@ function InventoryAreaPanel({
         <StatusFilter value={statusFilter} onChange={setStatusFilter} ariaLabel={statusFilterAriaLabel} />
       </div>
 
+      {/* Contador de resultados + "Limpar filtros": só aparece quando há
+          algo para contar/limpar — nunca junto do estado de carregamento
+          nem quando o cadastro mestre está completamente vazio (o texto
+          "Nenhum X cadastrado." já comunica isso sozinho, sem precisar de
+          um "0 resultados" redundante ao lado). "Limpar filtros" só reseta
+          o filtro de Status (statusFilter) — a busca já tem seu próprio
+          controle dedicado ("Limpar busca", built-in no SearchAutocomplete
+          acima), então os dois nunca se sobrepõem. */}
+      {!isLoading && items.length > 0 && (
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <p className="text-muted-foreground text-sm" aria-live="polite">
+            {sortedItems.length} {sortedItems.length === 1 ? 'resultado' : 'resultados'}
+          </p>
+          {statusFilter !== 'all' && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setStatusFilter('all')}
+              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+            >
+              Limpar filtros
+            </Button>
+          )}
+        </div>
+      )}
+
       <div className="mt-3">
         {isLoading ? (
           <div role="status" className="flex flex-col gap-2">

@@ -372,6 +372,37 @@ describe('InventoryPage', () => {
     expect(list[1].name).toBe('Abelha')
   })
 
+  it('mostra o contador de resultados e o atualiza conforme a busca', async () => {
+    const user = userEvent.setup()
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2' }), accessoryFixture({ id: 'a2', name: 'Parafuso' })])
+    renderPage('acessorios')
+
+    expect(screen.getByText('2 resultados')).toBeInTheDocument()
+
+    await user.type(screen.getByRole('combobox', { name: 'Buscar acessórios' }), 'Ímã')
+    expect(screen.getByText('1 resultado')).toBeInTheDocument()
+  })
+
+  it('botão "Limpar filtros" só aparece com filtro de status ativo e restaura "Todos"', async () => {
+    const user = userEvent.setup()
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Ímã ativo', is_active: true }),
+      accessoryFixture({ id: 'a2', name: 'Ímã inativo', is_active: false }),
+    ])
+    renderPage('acessorios')
+
+    expect(screen.queryByRole('button', { name: 'Limpar filtros' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('radio', { name: 'Ativos' }))
+    expect(screen.getByRole('button', { name: 'Limpar filtros' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Limpar filtros' }))
+
+    expect(screen.getByRole('radio', { name: 'Todos' })).toHaveAttribute('aria-checked', 'true')
+    expect(within(getTable()).getByText('Ímã inativo')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Limpar filtros' })).not.toBeInTheDocument()
+  })
+
   it('ordenação por Custo trata valores nulos de forma determinística (sempre ao final)', async () => {
     const user = userEvent.setup()
     mockAccessories([
@@ -420,5 +451,159 @@ describe('InventoryPage', () => {
     renderPage('embalagens')
     const packagingSearch = screen.getByRole('combobox', { name: 'Buscar embalagens' })
     expect(packagingSearch).toHaveValue('')
+  })
+})
+
+// Cobertura dedicada da área Embalagens (/estoque/embalagens) — mesmo
+// componente compartilhado de Acessórios (InventoryAreaPanel), mas
+// verificada aqui explicitamente item a item, sem depender só das
+// asserções cruzadas acima.
+describe('InventoryPage — área Embalagens (/estoque/embalagens)', () => {
+  it('renderiza a página com título "Estoque" e a aba "Embalagens" ativa', () => {
+    mockPackaging([packagingFixture()])
+    renderPage('embalagens')
+
+    expect(screen.getByRole('heading', { name: 'Estoque' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Embalagens' })).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('estado de carregamento usa role="status" e não mostra a tabela', () => {
+    mockPackaging([], { isLoading: true })
+    renderPage('embalagens')
+
+    expect(screen.getByRole('status')).toBeInTheDocument()
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  })
+
+  it('estado de erro usa role="alert" e permite tentar novamente', async () => {
+    const user = userEvent.setup()
+    const refetch = vi.fn()
+    mockPackaging([], { error: new ApiError('database', 500, 'Falha ao carregar embalagens.'), refetch })
+    renderPage('embalagens')
+
+    const alert = screen.getByRole('alert')
+    expect(within(alert).getByText('Falha ao carregar embalagens.')).toBeInTheDocument()
+
+    await user.click(within(alert).getByRole('button', { name: 'Tentar novamente' }))
+    expect(refetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('lista vazia mostra "Nenhuma embalagem cadastrada."', () => {
+    mockPackaging([])
+    renderPage('embalagens')
+
+    expect(screen.getByRole('status')).toHaveTextContent('Nenhuma embalagem cadastrada.')
+  })
+
+  it('exibe os registros de embalagens carregados', () => {
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M' }), packagingFixture({ id: 'k2', name: 'Sacola Kraft' })])
+    renderPage('embalagens')
+
+    expect(within(getTable()).getByText('Caixa M')).toBeInTheDocument()
+    expect(within(getTable()).getByText('Sacola Kraft')).toBeInTheDocument()
+  })
+
+  it('busca rápida filtra por nome, ignorando maiúsculas/minúsculas e espaços de borda', async () => {
+    const user = userEvent.setup()
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M' }), packagingFixture({ id: 'k2', name: 'Sacola Kraft' })])
+    renderPage('embalagens')
+
+    await user.type(screen.getByRole('combobox', { name: 'Buscar embalagens' }), '  caixa  ')
+
+    expect(within(getTable()).getByText('Caixa M')).toBeInTheDocument()
+    expect(within(getTable()).queryByText('Sacola Kraft')).not.toBeInTheDocument()
+  })
+
+  it('busca sem correspondência mostra "Nenhum resultado encontrado."', async () => {
+    const user = userEvent.setup()
+    mockPackaging([packagingFixture({ name: 'Caixa M' })])
+    renderPage('embalagens')
+
+    await user.type(screen.getByRole('combobox', { name: 'Buscar embalagens' }), 'não existe')
+
+    expect(screen.getByText('Nenhum resultado encontrado.')).toBeInTheDocument()
+    expect(screen.queryByText('Nenhuma embalagem cadastrada.')).not.toBeInTheDocument()
+  })
+
+  it('filtros Todos/Ativos/Inativos filtram corretamente e "Limpar filtros" restaura "Todos"', async () => {
+    const user = userEvent.setup()
+    mockPackaging([
+      packagingFixture({ id: 'k1', name: 'Caixa ativa', is_active: true }),
+      packagingFixture({ id: 'k2', name: 'Caixa inativa', is_active: false }),
+    ])
+    renderPage('embalagens')
+
+    const filterGroup = screen.getByRole('radiogroup', { name: 'Filtrar embalagens por status' })
+    expect(within(filterGroup).getByRole('radio', { name: 'Todos' })).toHaveAttribute('aria-checked', 'true')
+
+    await user.click(within(filterGroup).getByRole('radio', { name: 'Ativos' }))
+    expect(within(getTable()).getByText('Caixa ativa')).toBeInTheDocument()
+    expect(within(getTable()).queryByText('Caixa inativa')).not.toBeInTheDocument()
+
+    await user.click(within(filterGroup).getByRole('radio', { name: 'Inativos' }))
+    expect(within(getTable()).getByText('Caixa inativa')).toBeInTheDocument()
+    expect(within(getTable()).queryByText('Caixa ativa')).not.toBeInTheDocument()
+
+    expect(screen.getByRole('button', { name: 'Limpar filtros' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Limpar filtros' }))
+
+    expect(within(filterGroup).getByRole('radio', { name: 'Todos' })).toHaveAttribute('aria-checked', 'true')
+    expect(within(getTable()).getByText('Caixa ativa')).toBeInTheDocument()
+    expect(within(getTable()).getByText('Caixa inativa')).toBeInTheDocument()
+  })
+
+  it('ordenação por Nome alterna crescente e decrescente', async () => {
+    const user = userEvent.setup()
+    mockPackaging([
+      packagingFixture({ id: 'k1', name: 'Sacola Kraft' }),
+      packagingFixture({ id: 'k2', name: 'Caixa M' }),
+    ])
+    renderPage('embalagens')
+
+    await applySort(user, 'Nome', 'Ordenar crescente')
+    expect(getVisibleNamesInOrder()).toEqual(['Caixa M', 'Sacola Kraft'])
+
+    await applySort(user, 'Nome', 'Ordenar decrescente')
+    expect(getVisibleNamesInOrder()).toEqual(['Sacola Kraft', 'Caixa M'])
+  })
+
+  it('tamanho vazio é exibido como "Não se aplica"', () => {
+    mockPackaging([packagingFixture({ size: null })])
+    renderPage('embalagens')
+
+    expect(within(getTable()).getByText('Não se aplica')).toBeInTheDocument()
+  })
+
+  it('custo nulo é exibido como "Não informado", nunca R$ 0,00', () => {
+    mockPackaging([packagingFixture({ unit_cost: null })])
+    renderPage('embalagens')
+
+    expect(within(getTable()).getByText('Não informado')).toBeInTheDocument()
+    expect(within(getTable()).queryByText(formatBRL(0))).not.toBeInTheDocument()
+  })
+
+  it('custo existente é formatado em moeda brasileira', () => {
+    mockPackaging([packagingFixture({ unit_cost: 7.9 })])
+    renderPage('embalagens')
+
+    expect(within(getTable()).getByText(formatBRL(7.9))).toBeInTheDocument()
+  })
+
+  it('Ativo é só um badge informativo: sem coluna Ações, sem checkbox de seleção, sem botões de editar/ativar/desativar/excluir', () => {
+    mockPackaging([
+      packagingFixture({ id: 'k1', is_active: true }),
+      packagingFixture({ id: 'k2', name: 'Sacola Kraft', is_active: false }),
+    ])
+    renderPage('embalagens')
+
+    expect(within(getTableBody()).getByText('Ativo')).toBeInTheDocument()
+    expect(within(getTableBody()).getByText('Inativo')).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: /ações/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /editar/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^ativar/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /desativar/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /excluir/i })).not.toBeInTheDocument()
   })
 })
