@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { listPackaging } from '@/lib/api/packaging'
+import { PT_BR_COLLATOR } from '@/components/dataTable/sorting'
+import { createPackaging, listPackaging, type CreatePackagingInput } from '@/lib/api/packaging'
 import { ApiError } from '@/lib/api/errors'
 import type { Packaging } from '@/types/domain'
 
@@ -8,6 +9,7 @@ interface UsePackagingResult {
   isLoading: boolean
   error: ApiError | null
   refetch: () => void
+  create: (input: CreatePackagingInput) => Promise<Packaging>
 }
 
 function toApiError(err: unknown): ApiError {
@@ -49,5 +51,14 @@ export function usePackaging(): UsePackagingResult {
 
   const refetch = useCallback(() => setRequestId((id) => id + 1), [])
 
-  return { packaging, isLoading, error, refetch }
+  // Mesmo raciocínio de useAccessories.create: createPackaging já devolve a
+  // linha completa, inserida localmente e reordenada por nome (mesmo
+  // collator pt-BR de sorting.ts) em vez de um refetch inteiro.
+  const create = useCallback(async (input: CreatePackagingInput) => {
+    const created = await createPackaging(input)
+    setPackaging((current) => [...current, created].sort((a, b) => PT_BR_COLLATOR.compare(a.name, b.name)))
+    return created
+  }, [])
+
+  return { packaging, isLoading, error, refetch, create }
 }

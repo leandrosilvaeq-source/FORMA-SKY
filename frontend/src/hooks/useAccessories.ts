@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { listAccessories } from '@/lib/api/accessories'
+import { PT_BR_COLLATOR } from '@/components/dataTable/sorting'
+import { createAccessory, listAccessories, type CreateAccessoryInput } from '@/lib/api/accessories'
 import { ApiError } from '@/lib/api/errors'
 import type { Accessory } from '@/types/domain'
 
@@ -8,6 +9,7 @@ interface UseAccessoriesResult {
   isLoading: boolean
   error: ApiError | null
   refetch: () => void
+  create: (input: CreateAccessoryInput) => Promise<Accessory>
 }
 
 function toApiError(err: unknown): ApiError {
@@ -49,5 +51,17 @@ export function useAccessories(): UseAccessoriesResult {
 
   const refetch = useCallback(() => setRequestId((id) => id + 1), [])
 
-  return { accessories, isLoading, error, refetch }
+  // createAccessory (Edge Function -> create_accessory) já devolve a linha
+  // completa — diferente de createProduct (só {id}), não precisamos de um
+  // refetch inteiro: inserimos localmente e reordenamos por nome com o
+  // mesmo collator pt-BR usado em sorting.ts, preservando a mesma ordem
+  // alfabética que um refetch real traria (listAccessories já ordena por
+  // nome no banco).
+  const create = useCallback(async (input: CreateAccessoryInput) => {
+    const created = await createAccessory(input)
+    setAccessories((current) => [...current, created].sort((a, b) => PT_BR_COLLATOR.compare(a.name, b.name)))
+    return created
+  }, [])
+
+  return { accessories, isLoading, error, refetch, create }
 }

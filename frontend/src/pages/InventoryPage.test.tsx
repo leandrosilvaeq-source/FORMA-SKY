@@ -1,19 +1,21 @@
-import { describe, expect, it, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
 import type { Accessory, Packaging } from '@/types/domain'
 
-const { useAccessoriesMock, usePackagingMock, useAuthMock } = vi.hoisted(() => ({
+const { useAccessoriesMock, usePackagingMock, useAuthMock, toastMock } = vi.hoisted(() => ({
   useAccessoriesMock: vi.fn(),
   usePackagingMock: vi.fn(),
   useAuthMock: vi.fn(),
+  toastMock: { success: vi.fn(), error: vi.fn() },
 }))
 
 vi.mock('@/hooks/useAccessories', () => ({ useAccessories: useAccessoriesMock }))
 vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
+vi.mock('sonner', () => ({ toast: toastMock }))
 
 import { InventoryPage } from './InventoryPage'
 
@@ -53,25 +55,27 @@ function packagingFixture(overrides: Partial<Packaging> = {}): Packaging {
 
 function mockAccessories(
   list: Accessory[],
-  overrides: Partial<{ isLoading: boolean; error: unknown; refetch: ReturnType<typeof vi.fn> }> = {},
+  overrides: Partial<{ isLoading: boolean; error: unknown; refetch: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> }> = {},
 ) {
   useAccessoriesMock.mockReturnValue({
     accessories: list,
     isLoading: overrides.isLoading ?? false,
     error: overrides.error ?? null,
     refetch: overrides.refetch ?? vi.fn(),
+    create: overrides.create ?? vi.fn().mockResolvedValue(accessoryFixture()),
   })
 }
 
 function mockPackaging(
   list: Packaging[],
-  overrides: Partial<{ isLoading: boolean; error: unknown; refetch: ReturnType<typeof vi.fn> }> = {},
+  overrides: Partial<{ isLoading: boolean; error: unknown; refetch: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> }> = {},
 ) {
   usePackagingMock.mockReturnValue({
     packaging: list,
     isLoading: overrides.isLoading ?? false,
     error: overrides.error ?? null,
     refetch: overrides.refetch ?? vi.fn(),
+    create: overrides.create ?? vi.fn().mockResolvedValue(packagingFixture()),
   })
 }
 
@@ -120,6 +124,11 @@ function getVisibleNamesInOrder(): string[] {
 }
 
 describe('InventoryPage', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+  })
+
   it('mostra o título "Estoque" e uma descrição curta', () => {
     mockAccessories([accessoryFixture()])
     renderPage('acessorios')
@@ -459,6 +468,11 @@ describe('InventoryPage', () => {
 // verificada aqui explicitamente item a item, sem depender só das
 // asserções cruzadas acima.
 describe('InventoryPage — área Embalagens (/estoque/embalagens)', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+  })
+
   it('renderiza a página com título "Estoque" e a aba "Embalagens" ativa', () => {
     mockPackaging([packagingFixture()])
     renderPage('embalagens')
@@ -605,5 +619,187 @@ describe('InventoryPage — área Embalagens (/estoque/embalagens)', () => {
     expect(screen.queryByRole('button', { name: /^ativar/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /desativar/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /excluir/i })).not.toBeInTheDocument()
+  })
+})
+
+// Cadastro de novos itens (criação) — o próprio InventoryItemForm.test.tsx
+// já cobre campos/opções/validações em isolamento; os testes abaixo cobrem
+// só a integração com a página (botão certo por área, abrir/fechar,
+// payload exato enviado a create(), sucesso/erro/duplo-envio).
+describe('InventoryPage — cadastro de novos itens', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+  })
+
+  it('exibe "Novo acessório" na área Acessórios, nunca "Nova embalagem"', () => {
+    mockAccessories([accessoryFixture()])
+    renderPage('acessorios')
+
+    expect(screen.getByRole('button', { name: 'Novo acessório' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Nova embalagem' })).not.toBeInTheDocument()
+  })
+
+  it('exibe "Nova embalagem" na área Embalagens, nunca "Novo acessório"', () => {
+    mockPackaging([packagingFixture()])
+    renderPage('embalagens')
+
+    expect(screen.getByRole('button', { name: 'Nova embalagem' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Novo acessório' })).not.toBeInTheDocument()
+  })
+
+  it('abre o formulário de novo acessório e fecha ao cancelar, sem chamar create()', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn()
+    mockAccessories([accessoryFixture()], { create })
+    renderPage('acessorios')
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Novo acessório' }))
+    expect(screen.getByRole('dialog', { name: 'Novo acessório' })).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Nome'), 'Ímã que não deve ser salvo')
+    await user.click(screen.getByRole('button', { name: 'Cancelar' }))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('abre o formulário de nova embalagem com título e descrição próprios', async () => {
+    const user = userEvent.setup()
+    mockPackaging([packagingFixture()])
+    renderPage('embalagens')
+
+    await user.click(screen.getByRole('button', { name: 'Nova embalagem' }))
+
+    expect(screen.getByRole('dialog', { name: 'Nova embalagem' })).toBeInTheDocument()
+    expect(screen.getByText('Preencha os dados para cadastrar uma nova embalagem.')).toBeInTheDocument()
+  })
+
+  it('envia o payload exato para um novo acessório (trim aplicado, sem is_active/material/unit_cost/current_stock)', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn().mockResolvedValue(accessoryFixture())
+    mockAccessories([], { create })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Novo acessório' }))
+    await user.type(screen.getByLabelText('Nome'), '  Parafuso M3  ')
+    await user.click(screen.getByRole('radio', { name: 'M' }))
+    await user.type(screen.getByLabelText('Variante'), '  prata  ')
+    await user.type(screen.getByLabelText('Estoque mínimo'), '8')
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith({
+        name: 'Parafuso M3',
+        size: 'M',
+        variant: 'prata',
+        minimum_stock: 8,
+      }),
+    )
+    // Nenhuma chave além dessas 4 é enviada — nem is_active, nem
+    // material/unit_cost/current_stock, que não existem no formulário.
+    expect(Object.keys(create.mock.calls[0][0])).toEqual(['name', 'size', 'variant', 'minimum_stock'])
+  })
+
+  it('envia o payload exato para uma nova embalagem', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn().mockResolvedValue(packagingFixture())
+    mockPackaging([], { create })
+    renderPage('embalagens')
+
+    await user.click(screen.getByRole('button', { name: 'Nova embalagem' }))
+    await user.type(screen.getByLabelText('Nome'), 'Caixa G')
+    await user.click(screen.getByRole('radio', { name: 'G' }))
+    await user.type(screen.getByLabelText('Estoque mínimo'), '2')
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith({
+        name: 'Caixa G',
+        size: 'G',
+        variant: null,
+        minimum_stock: 2,
+      }),
+    )
+  })
+
+  it('sucesso fecha o diálogo e mostra um toast de confirmação', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn().mockResolvedValue(accessoryFixture({ id: 'a-new', name: 'Ímã novo' }))
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Parafuso' })], { create })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Novo acessório' }))
+    await user.type(screen.getByLabelText('Nome'), 'Ímã novo')
+    await user.type(screen.getByLabelText('Estoque mínimo'), '1')
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(toastMock.success).toHaveBeenCalledWith('Acessório cadastrado.')
+  })
+
+  it('erro de validação mantém o diálogo aberto, preserva os valores e mostra a mensagem dentro do formulário (nunca toast)', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn().mockRejectedValue(new ApiError('validation', 400, 'Campo inválido: name.'))
+    mockAccessories([], { create })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Novo acessório' }))
+    await user.type(screen.getByLabelText('Nome'), 'Ímã 6x2')
+    await user.type(screen.getByLabelText('Estoque mínimo'), '1')
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+
+    expect(await screen.findByText('Campo inválido: name.')).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByLabelText('Nome')).toHaveValue('Ímã 6x2')
+    expect(screen.getByLabelText('Estoque mínimo')).toHaveValue('1')
+    expect(toastMock.error).not.toHaveBeenCalled()
+  })
+
+  it('falha de autenticação (401) é tratada via toast, sem fechar o diálogo nem perder os valores', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn().mockRejectedValue(new ApiError('authorization', 401, 'Sessão expirada. Faça login novamente.'))
+    mockAccessories([], { create })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Novo acessório' }))
+    await user.type(screen.getByLabelText('Nome'), 'Ímã 6x2')
+    await user.type(screen.getByLabelText('Estoque mínimo'), '1')
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Sessão expirada. Faça login novamente.'))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByLabelText('Nome')).toHaveValue('Ímã 6x2')
+  })
+
+  it('impede submissão duplicada: o botão fica desabilitado durante o envio e não reenvia', async () => {
+    const user = userEvent.setup()
+    let resolveCreate: (value: Accessory) => void = () => {}
+    const create = vi.fn(
+      () =>
+        new Promise<Accessory>((resolve) => {
+          resolveCreate = resolve
+        }),
+    )
+    mockAccessories([], { create })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Novo acessório' }))
+    await user.type(screen.getByLabelText('Nome'), 'Ímã 6x2')
+    await user.type(screen.getByLabelText('Estoque mínimo'), '1')
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+
+    const savingButton = await screen.findByRole('button', { name: 'Salvando...' })
+    expect(savingButton).toBeDisabled()
+    expect(create).toHaveBeenCalledTimes(1)
+
+    // Botão desabilitado: um segundo clique não reenvia.
+    await user.click(savingButton)
+    expect(create).toHaveBeenCalledTimes(1)
+
+    resolveCreate(accessoryFixture())
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 })

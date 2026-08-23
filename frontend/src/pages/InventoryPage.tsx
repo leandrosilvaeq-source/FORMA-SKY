@@ -1,10 +1,13 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
+import { InventoryItemForm, type InventoryItemFormValues } from '@/components/inventory/InventoryItemForm'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table'
 import { useAccessories } from '@/hooks/useAccessories'
@@ -13,11 +16,12 @@ import { ApiError } from '@/lib/api/errors'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
 import { cn } from '@/lib/utils'
 
-// Módulo 3 (Estoque), Incremento 4 — somente consulta e navegação.
-// Criação/edição/exclusão/ativação continuam fora de escopo desta rodada
-// (Incrementos futuros consumirão createAccessory/updateAccessory/
-// deleteAccessory e os equivalentes de packaging, já implementados no
-// backend nos Incrementos 2/3, mas ainda não conectados a nenhuma tela).
+// Módulo 3 (Estoque). Incremento 4: somente consulta e navegação. Este
+// incremento acrescenta CRIAÇÃO de novos acessórios/embalagens (via
+// create_accessory/create_packaging, já implementados e testados nos
+// Incrementos 2/3) — edição, ativação/desativação e exclusão continuam
+// fora de escopo, propositalmente sem nenhum campo Ativo no formulário de
+// criação (novo registro nasce ativo pelo default do banco).
 
 function toErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message
@@ -186,6 +190,8 @@ interface InventoryAreaPanelProps {
   listboxId: string
   listboxAriaLabel: string
   statusFilterAriaLabel: string
+  createButtonLabel: string
+  onOpenCreateDialog: () => void
 }
 
 // Painel completo de uma área (busca + filtro + ordenação + tabela +
@@ -207,6 +213,8 @@ function InventoryAreaPanel({
   listboxId,
   listboxAriaLabel,
   statusFilterAriaLabel,
+  createButtonLabel,
+  onOpenCreateDialog,
 }: InventoryAreaPanelProps) {
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all')
@@ -251,20 +259,28 @@ function InventoryAreaPanel({
       )}
 
       <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <SearchAutocomplete
-          className="max-w-xs"
-          value={searchTerm}
-          onValueChange={setSearchTerm}
-          suggestions={suggestions}
-          onSelect={setSearchTerm}
-          ariaLabel={searchAriaLabel}
-          placeholder={searchPlaceholder}
-          clearLabel="Limpar busca"
-          listboxId={listboxId}
-          listboxAriaLabel={listboxAriaLabel}
-          noResultsText={searchNoSuggestionsText}
-        />
-        <StatusFilter value={statusFilter} onChange={setStatusFilter} ariaLabel={statusFilterAriaLabel} />
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <SearchAutocomplete
+            className="max-w-xs"
+            value={searchTerm}
+            onValueChange={setSearchTerm}
+            suggestions={suggestions}
+            onSelect={setSearchTerm}
+            ariaLabel={searchAriaLabel}
+            placeholder={searchPlaceholder}
+            clearLabel="Limpar busca"
+            listboxId={listboxId}
+            listboxAriaLabel={listboxAriaLabel}
+            noResultsText={searchNoSuggestionsText}
+          />
+          <StatusFilter value={statusFilter} onChange={setStatusFilter} ariaLabel={statusFilterAriaLabel} />
+        </div>
+        <Button
+          onClick={onOpenCreateDialog}
+          className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark shrink-0"
+        >
+          {createButtonLabel}
+        </Button>
       </div>
 
       {/* Contador de resultados + "Limpar filtros": só aparece quando há
@@ -443,8 +459,43 @@ function InventoryPageShell({ area, children }: { area: InventoryArea; children:
 // evita disparar useAccessories/usePackaging ao mesmo tempo quando só uma
 // das duas áreas está de fato montada (as duas sub-rotas nunca renderizam
 // simultaneamente).
+// Diálogo de criação: mesmo padrão de CustomersPage/ProductsPage/
+// CompaniesPage — erro de validação (ApiError.type === 'validation') fica
+// visível dentro do formulário (o diálogo permanece aberto, valores
+// preenchidos preservados); qualquer outro erro (autenticação, servidor)
+// vira toast, também sem fechar o diálogo. O diálogo só fecha em caso de
+// sucesso, e a listagem já reflete o novo item imediatamente (o hook
+// insere localmente, sem precisar de refetch).
 function AccessoriesInventoryPage() {
-  const { accessories, isLoading, error, refetch } = useAccessories()
+  const { accessories, isLoading, error, refetch, create } = useAccessories()
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
+  const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+
+  function openCreateDialog() {
+    setCreateError(null)
+    setIsCreateDialogOpen(true)
+  }
+
+  async function handleCreateSubmit(values: InventoryItemFormValues) {
+    setIsSubmittingCreate(true)
+    setCreateError(null)
+    try {
+      await create(values)
+      toast.success('Acessório cadastrado.')
+      setIsCreateDialogOpen(false)
+    } catch (err) {
+      const message = toErrorMessage(err)
+      if (err instanceof ApiError && err.type === 'validation') {
+        setCreateError(message)
+      } else {
+        toast.error(message)
+      }
+    } finally {
+      setIsSubmittingCreate(false)
+    }
+  }
+
   return (
     <InventoryPageShell area="acessorios">
       <InventoryAreaPanel
@@ -460,13 +511,59 @@ function AccessoriesInventoryPage() {
         listboxId="inventory-accessories-search-listbox"
         listboxAriaLabel="Sugestões de acessório"
         statusFilterAriaLabel="Filtrar acessórios por status"
+        createButtonLabel="Novo acessório"
+        onOpenCreateDialog={openCreateDialog}
       />
+
+      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Novo acessório</DialogTitle>
+            <DialogDescription>Preencha os dados para cadastrar um novo acessório.</DialogDescription>
+          </DialogHeader>
+          <InventoryItemForm
+            idPrefix="accessory"
+            isSubmitting={isSubmittingCreate}
+            submitError={createError}
+            onSubmit={(values) => void handleCreateSubmit(values)}
+            onCancel={() => setIsCreateDialogOpen(false)}
+          />
+        </DialogContent>
+      </Dialog>
     </InventoryPageShell>
   )
 }
 
 function PackagingInventoryPage() {
-  const { packaging, isLoading, error, refetch } = usePackaging()
+  const { packaging, isLoading, error, refetch, create } = usePackaging()
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
+  const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+
+  function openCreateDialog() {
+    setCreateError(null)
+    setIsCreateDialogOpen(true)
+  }
+
+  async function handleCreateSubmit(values: InventoryItemFormValues) {
+    setIsSubmittingCreate(true)
+    setCreateError(null)
+    try {
+      await create(values)
+      toast.success('Embalagem cadastrada.')
+      setIsCreateDialogOpen(false)
+    } catch (err) {
+      const message = toErrorMessage(err)
+      if (err instanceof ApiError && err.type === 'validation') {
+        setCreateError(message)
+      } else {
+        toast.error(message)
+      }
+    } finally {
+      setIsSubmittingCreate(false)
+    }
+  }
+
   return (
     <InventoryPageShell area="embalagens">
       <InventoryAreaPanel
@@ -482,7 +579,25 @@ function PackagingInventoryPage() {
         listboxId="inventory-packaging-search-listbox"
         listboxAriaLabel="Sugestões de embalagem"
         statusFilterAriaLabel="Filtrar embalagens por status"
+        createButtonLabel="Nova embalagem"
+        onOpenCreateDialog={openCreateDialog}
       />
+
+      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Nova embalagem</DialogTitle>
+            <DialogDescription>Preencha os dados para cadastrar uma nova embalagem.</DialogDescription>
+          </DialogHeader>
+          <InventoryItemForm
+            idPrefix="packaging"
+            isSubmitting={isSubmittingCreate}
+            submitError={createError}
+            onSubmit={(values) => void handleCreateSubmit(values)}
+            onCancel={() => setIsCreateDialogOpen(false)}
+          />
+        </DialogContent>
+      </Dialog>
     </InventoryPageShell>
   )
 }
