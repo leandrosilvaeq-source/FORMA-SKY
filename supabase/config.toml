@@ -397,6 +397,9 @@ deno_version = 2
 [functions.products]
 verify_jwt = false
 
+[functions.accessories]
+verify_jwt = false
+
 [functions.orders]
 verify_jwt = false
 

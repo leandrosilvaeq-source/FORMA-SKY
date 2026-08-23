@@ -1980,8 +1980,11 @@ end $$;
 
 -- =============================================================================
 -- SEÇÃO 10 — accessories/packaging/composição padrão de produtos
--- Migrations 18 (create_accessories_packaging_and_composition_tables) e 19
--- (create_product_composition_function).
+-- Migrations 18 (create_accessories_packaging_and_composition_tables), 19
+-- (create_product_composition_function) e 20260822120000
+-- (create_accessory_write_functions — Módulo 3, Incremento 2: backend
+-- protegido de Acessórios, revoga INSERT/UPDATE direto de accessories a
+-- authenticated e cria create_accessory/update_accessory/delete_accessory).
 -- =============================================================================
 
 -- 10.0 Setup: fixtures de accessories/packaging (via role de dono da
@@ -2028,9 +2031,13 @@ begin
   end;
 end $$;
 
--- 10.1 [SET ROLE real] authenticated consegue INSERT direto em accessories
--- (grant liberado — cadastro mestre é CRUD simples, sem escrita atômica
--- acoplada, ao contrário de products).
+-- 10.1 [SET ROLE real] authenticated NÃO consegue mais INSERT direto em
+-- accessories — revogado por
+-- 20260822120000_create_accessory_write_functions.sql (Módulo 3,
+-- Incremento 2: toda escrita passa a exigir a Edge Function `accessories`
+-- via create_accessory). Substitui o teste original desta seção (Migration
+-- 18), que esperava o INSERT direto como permitido — comportamento
+-- deliberadamente revertido nesta etapa.
 do $$
 declare
   v_auth_user_id_text text;
@@ -2051,24 +2058,75 @@ begin
       true
     );
 
-    insert into public.accessories (name) values ('Acessório inserido por authenticated');
-    v_status := 'PASS';
-    v_details := 'INSERT direto em accessories permitido a authenticated, como esperado';
-  exception when others then
+    insert into public.accessories (name) values ('Não deveria ser inserido por authenticated');
     v_status := 'FAIL';
-    v_details := 'INSERT deveria ter sido permitido: ' || sqlerrm;
+    v_details := 'INSERT direto em accessories foi permitido a authenticated (não deveria mais)';
+  exception when insufficient_privilege then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
   end;
 
   reset role;
   reset "request.jwt.claims";
 
   insert into zz_test_results(section, test_name, status, details)
-    values ('10', '10.1 [SET ROLE real] authenticated consegue INSERT direto em accessories', v_status, v_details);
+    values ('10', '10.1 [SET ROLE real] authenticated não consegue mais INSERT direto em accessories', v_status, v_details);
 exception when others then
   reset role;
   reset "request.jwt.claims";
   insert into zz_test_results(section, test_name, status, details)
-    values ('10', '10.1 [SET ROLE real] authenticated consegue INSERT direto em accessories', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+    values ('10', '10.1 [SET ROLE real] authenticated não consegue mais INSERT direto em accessories', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.1b [SET ROLE real] authenticated NÃO consegue mais UPDATE direto de
+-- accessories.name — revogado pela mesma migration do Incremento 2
+-- (anteriormente permitido, ver Migration 18 e o teste 10.9e original).
+do $$
+declare
+  v_auth_user_id_text text;
+  v_accessory_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value into v_auth_user_id_text from zz_fixtures where key = 'auth_user_id';
+  select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_id_1';
+
+  begin
+    if v_auth_user_id_text is null or v_accessory_id is null then
+      raise exception 'fixture ausente: auth_user_id/accessory_id_1';
+    end if;
+
+    set local role authenticated;
+    perform set_config(
+      'request.jwt.claims',
+      json_build_object('sub', v_auth_user_id_text, 'role', 'authenticated')::text,
+      true
+    );
+
+    update public.accessories set name = 'Não deveria ser alterado' where id = v_accessory_id;
+    v_status := 'FAIL';
+    v_details := 'UPDATE de name como authenticated foi permitido (não deveria mais)';
+  exception when insufficient_privilege then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+  reset "request.jwt.claims";
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.1b [SET ROLE real] authenticated não consegue mais UPDATE direto de accessories.name', v_status, v_details);
+exception when others then
+  reset role;
+  reset "request.jwt.claims";
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.1b [SET ROLE real] authenticated não consegue mais UPDATE direto de accessories.name', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
 end $$;
 
 -- 10.2 [SET ROLE real] authenticated NÃO consegue UPDATE de current_stock
@@ -2436,8 +2494,8 @@ begin
       'DELETE=' || has_table_privilege('authenticated', 'public.product_packaging', 'DELETE'));
 
     insert into zz_test_results(section, test_name, status, details)
-    values ('10', '10.9e authenticated TEM UPDATE em accessories.name (coluna não reservada)',
-      case when has_column_privilege('authenticated', 'public.accessories', 'name', 'UPDATE') then 'PASS' else 'FAIL' end,
+    values ('10', '10.9e authenticated NÃO tem mais UPDATE em accessories.name (revogado no Incremento 2 — ver 10.18c; expectativa invertida em relação ao teste original da Migration 18)',
+      case when has_column_privilege('authenticated', 'public.accessories', 'name', 'UPDATE') then 'FAIL' else 'PASS' end,
       'UPDATE(name)=' || has_column_privilege('authenticated', 'public.accessories', 'name', 'UPDATE'));
 
     insert into zz_test_results(section, test_name, status, details)
@@ -2453,6 +2511,706 @@ begin
     insert into zz_test_results(section, test_name, status, details)
       values ('10', '10.9 checagens de privilégio em accessories/packaging/product_accessories/product_packaging', 'FAIL', sqlerrm);
   end;
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 10.10 a 10.18 — Módulo 3, Incremento 2 (backend protegido de Acessórios,
+-- 20260822120000_create_accessory_write_functions.sql).
+-- ---------------------------------------------------------------------------
+
+-- 10.10 [SET ROLE real] service_role executa create_accessory; is_active
+-- assume o default (true) quando omitido; material/unit_cost/current_stock
+-- nunca são tocados por esta function (permanecem null/null/0).
+do $$
+declare
+  v_user_id uuid;
+  v_row public.accessories;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role service_role;
+
+    v_row := public.create_accessory(
+      'Acessório criado via create_accessory (teste)', 'M', 'azul', 3, null, v_user_id
+    );
+
+    if v_row.id is null then
+      raise exception 'create_accessory não retornou um id';
+    end if;
+    if v_row.is_active is distinct from true then
+      raise exception 'is_active deveria assumir o default true, veio %', v_row.is_active;
+    end if;
+    if v_row.material is not null then
+      raise exception 'material deveria continuar null (nunca setado por create_accessory), veio %', v_row.material;
+    end if;
+    if v_row.unit_cost is not null then
+      raise exception 'unit_cost deveria continuar null, veio %', v_row.unit_cost;
+    end if;
+    if v_row.current_stock <> 0 then
+      raise exception 'current_stock deveria continuar 0 (default da tabela), veio %', v_row.current_stock;
+    end if;
+
+    insert into zz_fixtures(key, value) values ('accessory_id_created', v_row.id::text)
+      on conflict (key) do update set value = excluded.value;
+
+    v_status := 'PASS';
+    v_details := 'id=' || v_row.id || ' is_active=' || v_row.is_active || ' current_stock=' || v_row.current_stock;
+  exception when others then
+    v_status := 'FAIL';
+    v_details := sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.10 [SET ROLE real] service_role executa create_accessory (defaults corretos, material/unit_cost/current_stock nunca tocados)', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.10 [SET ROLE real] service_role executa create_accessory (defaults corretos, material/unit_cost/current_stock nunca tocados)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.11 [SET ROLE real] authenticated NÃO consegue executar create_accessory
+-- diretamente (EXECUTE só concedido a service_role).
+do $$
+declare
+  v_auth_user_id_text text;
+  v_user_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value into v_auth_user_id_text from zz_fixtures where key = 'auth_user_id';
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role authenticated;
+    perform set_config(
+      'request.jwt.claims',
+      json_build_object('sub', v_auth_user_id_text, 'role', 'authenticated')::text,
+      true
+    );
+
+    perform public.create_accessory('Não deveria ser criado', null, null, null, null, v_user_id);
+    v_status := 'FAIL';
+    v_details := 'create_accessory foi executado por authenticated (não deveria)';
+  exception when insufficient_privilege then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+  reset "request.jwt.claims";
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.11 [SET ROLE real] authenticated não consegue executar create_accessory diretamente', v_status, v_details);
+exception when others then
+  reset role;
+  reset "request.jwt.claims";
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.11 [SET ROLE real] authenticated não consegue executar create_accessory diretamente', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.12 [SET ROLE real] anon NÃO consegue executar create_accessory.
+do $$
+declare
+  v_user_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role anon;
+    perform public.create_accessory('Não deveria ser criado (anon)', null, null, null, null, v_user_id);
+    v_status := 'FAIL';
+    v_details := 'create_accessory foi executado por anon (não deveria)';
+  exception when insufficient_privilege then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.12 [SET ROLE real] anon não consegue executar create_accessory diretamente', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.12 [SET ROLE real] anon não consegue executar create_accessory diretamente', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.13 [SET ROLE real] service_role executa update_accessory: chave
+-- ausente preserva o valor atual — inclusive o size legado 'M3' de
+-- accessory_id_2 (fora do enum PP/P/M/G/GG, fixture da 10.0), nunca tocado
+-- porque o patch só envia minimum_stock.
+do $$
+declare
+  v_user_id uuid;
+  v_accessory_id uuid;
+  v_row public.accessories;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_id_2';
+
+  begin
+    set local role service_role;
+
+    v_row := public.update_accessory(
+      v_accessory_id,
+      jsonb_build_object('minimum_stock', 7),
+      v_user_id
+    );
+
+    if v_row.size is distinct from 'M3' then
+      raise exception 'size legado deveria ser preservado (M3), veio %', v_row.size;
+    end if;
+    if v_row.minimum_stock <> 7 then
+      raise exception 'minimum_stock deveria ser 7, veio %', v_row.minimum_stock;
+    end if;
+
+    v_status := 'PASS';
+    v_details := 'size preservado=' || v_row.size || ' minimum_stock=' || v_row.minimum_stock;
+  exception when others then
+    v_status := 'FAIL';
+    v_details := sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.13 [SET ROLE real] update_accessory preserva size legado quando a chave não é enviada', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.13 [SET ROLE real] update_accessory preserva size legado quando a chave não é enviada', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.14 [SET ROLE real] update_accessory rejeita novo size fora do enum
+-- quando a chave É enviada explicitamente (diferente de 10.13, onde a
+-- chave ausente preserva o valor legado sem revalidar).
+do $$
+declare
+  v_user_id uuid;
+  v_accessory_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_id_2';
+
+  begin
+    set local role service_role;
+    perform public.update_accessory(v_accessory_id, jsonb_build_object('size', 'XG'), v_user_id);
+    v_status := 'FAIL';
+    v_details := 'size=XG deveria ter sido rejeitado (fora do enum PP/P/M/G/GG)';
+  exception when others then
+    if sqlerrm like '%size inválido%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'erro inesperado: ' || sqlerrm;
+    end if;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.14 [SET ROLE real] update_accessory rejeita novo size fora do enum PP/P/M/G/GG', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.14 [SET ROLE real] update_accessory rejeita novo size fora do enum PP/P/M/G/GG', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.15 [SET ROLE real] delete_accessory exclui fisicamente um acessório
+-- nunca utilizado (sem vínculo em product_accessories) — accessory_id_created,
+-- criado na 10.10.
+do $$
+declare
+  v_user_id uuid;
+  v_accessory_id uuid;
+  v_status text;
+  v_details text;
+  v_count integer;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_id_created';
+
+  begin
+    set local role service_role;
+    perform public.delete_accessory(v_accessory_id, v_user_id);
+
+    select count(*) into v_count from public.accessories where id = v_accessory_id;
+    if v_count <> 0 then
+      raise exception 'acessório deveria ter sido excluído fisicamente, ainda encontrado';
+    end if;
+
+    v_status := 'PASS';
+    v_details := 'acessório sem vínculo excluído com sucesso';
+  exception when others then
+    v_status := 'FAIL';
+    v_details := sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.15 [SET ROLE real] delete_accessory exclui fisicamente um acessório nunca utilizado', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.15 [SET ROLE real] delete_accessory exclui fisicamente um acessório nunca utilizado', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.16 [SET ROLE real] delete_accessory bloqueia exclusão de acessório
+-- vinculado a product_accessories (accessory_id_1, composição criada nas
+-- 10.3/10.4) e não remove o vínculo nem executa cascata.
+do $$
+declare
+  v_user_id uuid;
+  v_accessory_id uuid;
+  v_status text;
+  v_details text;
+  v_link_count_before integer;
+  v_link_count_after integer;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_id_1';
+
+  select count(*) into v_link_count_before from public.product_accessories where accessory_id = v_accessory_id;
+
+  begin
+    set local role service_role;
+    perform public.delete_accessory(v_accessory_id, v_user_id);
+    v_status := 'FAIL';
+    v_details := 'delete_accessory deveria ter sido bloqueado (acessório vinculado a um produto)';
+  exception when others then
+    if sqlerrm like '%vinculado a um produto e não pode ser excluído%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'erro inesperado: ' || sqlerrm;
+    end if;
+  end;
+
+  reset role;
+
+  select count(*) into v_link_count_after from public.product_accessories where accessory_id = v_accessory_id;
+
+  if v_status = 'PASS' and (v_link_count_before = 0 or v_link_count_after <> v_link_count_before) then
+    v_status := 'FAIL';
+    v_details := 'vínculo em product_accessories não deveria ser alterado (antes=' || v_link_count_before || ' depois=' || v_link_count_after || ')';
+  end if;
+
+  if v_status = 'PASS' and not exists (select 1 from public.accessories where id = v_accessory_id) then
+    v_status := 'FAIL';
+    v_details := 'acessório não deveria ter sido excluído (bloqueio deveria impedir o DELETE)';
+  end if;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.16 [SET ROLE real] delete_accessory bloqueia exclusão vinculada a product_accessories, sem cascata', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.16 [SET ROLE real] delete_accessory bloqueia exclusão vinculada a product_accessories, sem cascata', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.17 [SET ROLE real] authenticated NÃO consegue executar delete_accessory
+-- diretamente (EXECUTE só concedido a service_role).
+do $$
+declare
+  v_auth_user_id_text text;
+  v_user_id uuid;
+  v_accessory_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value into v_auth_user_id_text from zz_fixtures where key = 'auth_user_id';
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_id_1';
+
+  begin
+    set local role authenticated;
+    perform set_config(
+      'request.jwt.claims',
+      json_build_object('sub', v_auth_user_id_text, 'role', 'authenticated')::text,
+      true
+    );
+
+    perform public.delete_accessory(v_accessory_id, v_user_id);
+    v_status := 'FAIL';
+    v_details := 'delete_accessory foi executado por authenticated (não deveria)';
+  exception when insufficient_privilege then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+  reset "request.jwt.claims";
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.17 [SET ROLE real] authenticated não consegue executar delete_accessory diretamente', v_status, v_details);
+exception when others then
+  reset role;
+  reset "request.jwt.claims";
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.17 [SET ROLE real] authenticated não consegue executar delete_accessory diretamente', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.18 Grants: accessories perde INSERT/UPDATE de authenticated (mantém
+-- SELECT, sem DELETE); create_accessory/update_accessory/delete_accessory
+-- só têm EXECUTE concedido a service_role.
+do $$
+begin
+  begin
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.18a authenticated mantém SELECT em accessories',
+      case when has_table_privilege('authenticated', 'public.accessories', 'SELECT') then 'PASS' else 'FAIL' end,
+      'SELECT=' || has_table_privilege('authenticated', 'public.accessories', 'SELECT'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.18b authenticated NÃO tem mais INSERT em accessories',
+      case when has_table_privilege('authenticated', 'public.accessories', 'INSERT') then 'FAIL' else 'PASS' end,
+      'INSERT=' || has_table_privilege('authenticated', 'public.accessories', 'INSERT'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.18c authenticated NÃO tem mais UPDATE em accessories.name',
+      case when has_column_privilege('authenticated', 'public.accessories', 'name', 'UPDATE') then 'FAIL' else 'PASS' end,
+      'UPDATE(name)=' || has_column_privilege('authenticated', 'public.accessories', 'name', 'UPDATE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.18d authenticated não tem DELETE em accessories',
+      case when has_table_privilege('authenticated', 'public.accessories', 'DELETE') then 'FAIL' else 'PASS' end,
+      'DELETE=' || has_table_privilege('authenticated', 'public.accessories', 'DELETE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.18e anon não tem DELETE em accessories',
+      case when has_table_privilege('anon', 'public.accessories', 'DELETE') then 'FAIL' else 'PASS' end,
+      'DELETE=' || has_table_privilege('anon', 'public.accessories', 'DELETE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.18f service_role tem EXECUTE em create_accessory',
+      case when has_function_privilege('service_role', 'public.create_accessory(text, text, text, integer, boolean, uuid)', 'EXECUTE') then 'PASS' else 'FAIL' end,
+      'EXECUTE=' || has_function_privilege('service_role', 'public.create_accessory(text, text, text, integer, boolean, uuid)', 'EXECUTE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.18g authenticated NÃO tem EXECUTE em create_accessory',
+      case when has_function_privilege('authenticated', 'public.create_accessory(text, text, text, integer, boolean, uuid)', 'EXECUTE') then 'FAIL' else 'PASS' end,
+      'EXECUTE=' || has_function_privilege('authenticated', 'public.create_accessory(text, text, text, integer, boolean, uuid)', 'EXECUTE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.18h service_role tem EXECUTE em update_accessory',
+      case when has_function_privilege('service_role', 'public.update_accessory(uuid, jsonb, uuid)', 'EXECUTE') then 'PASS' else 'FAIL' end,
+      'EXECUTE=' || has_function_privilege('service_role', 'public.update_accessory(uuid, jsonb, uuid)', 'EXECUTE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.18i authenticated NÃO tem EXECUTE em update_accessory',
+      case when has_function_privilege('authenticated', 'public.update_accessory(uuid, jsonb, uuid)', 'EXECUTE') then 'FAIL' else 'PASS' end,
+      'EXECUTE=' || has_function_privilege('authenticated', 'public.update_accessory(uuid, jsonb, uuid)', 'EXECUTE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.18j service_role tem EXECUTE em delete_accessory',
+      case when has_function_privilege('service_role', 'public.delete_accessory(uuid, uuid)', 'EXECUTE') then 'PASS' else 'FAIL' end,
+      'EXECUTE=' || has_function_privilege('service_role', 'public.delete_accessory(uuid, uuid)', 'EXECUTE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.18k authenticated NÃO tem EXECUTE em delete_accessory',
+      case when has_function_privilege('authenticated', 'public.delete_accessory(uuid, uuid)', 'EXECUTE') then 'FAIL' else 'PASS' end,
+      'EXECUTE=' || has_function_privilege('authenticated', 'public.delete_accessory(uuid, uuid)', 'EXECUTE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.18l anon NÃO tem EXECUTE em delete_accessory',
+      case when has_function_privilege('anon', 'public.delete_accessory(uuid, uuid)', 'EXECUTE') then 'FAIL' else 'PASS' end,
+      'EXECUTE=' || has_function_privilege('anon', 'public.delete_accessory(uuid, uuid)', 'EXECUTE'));
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('10', '10.18 checagens de privilégio nas novas functions protegidas de Acessórios', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 10.19 a 10.25 — invariantes de defesa em profundidade adicionadas na
+-- rodada corretiva do Incremento 2 (create_accessory/update_accessory
+-- chamadas diretamente como service_role, fora da Edge Function — que já
+-- valida tudo isso antes, mas as RPCs SECURITY DEFINER não podem depender
+-- só dela).
+-- ---------------------------------------------------------------------------
+
+-- 10.19 [SET ROLE real] create_accessory rejeita nome vazio mesmo chamada
+-- diretamente (NOT NULL sozinho não barra '').
+do $$
+declare
+  v_user_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role service_role;
+    perform public.create_accessory('   ', null, null, null, null, v_user_id);
+    v_status := 'FAIL';
+    v_details := 'nome vazio (só espaços) deveria ter sido rejeitado';
+  exception when others then
+    if sqlerrm like '%name não pode ser vazio%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'erro inesperado: ' || sqlerrm;
+    end if;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.19 [SET ROLE real] create_accessory rejeita nome vazio (chamada direta, fora da Edge Function)', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.19 [SET ROLE real] create_accessory rejeita nome vazio (chamada direta, fora da Edge Function)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.20 [SET ROLE real] create_accessory rejeita minimum_stock negativo
+-- (CHECK da tabela, Migration 18 — não uma checagem redundante da function).
+do $$
+declare
+  v_user_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role service_role;
+    perform public.create_accessory('Acessório com estoque negativo', null, null, -1, null, v_user_id);
+    v_status := 'FAIL';
+    v_details := 'minimum_stock=-1 deveria ter sido rejeitado pela CHECK (minimum_stock >= 0)';
+  exception when check_violation then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.20 [SET ROLE real] create_accessory rejeita minimum_stock negativo (CHECK da tabela)', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.20 [SET ROLE real] create_accessory rejeita minimum_stock negativo (CHECK da tabela)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.21 [SET ROLE real] update_accessory rejeita nome vazio.
+do $$
+declare
+  v_user_id uuid;
+  v_accessory_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_id_2';
+
+  begin
+    set local role service_role;
+    perform public.update_accessory(v_accessory_id, jsonb_build_object('name', '   '), v_user_id);
+    v_status := 'FAIL';
+    v_details := 'nome vazio (só espaços) deveria ter sido rejeitado';
+  exception when others then
+    if sqlerrm like '%name não pode ser vazio%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'erro inesperado: ' || sqlerrm;
+    end if;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.21 [SET ROLE real] update_accessory rejeita nome vazio', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.21 [SET ROLE real] update_accessory rejeita nome vazio', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.22 [SET ROLE real] update_accessory rejeita is_active null explícito
+-- (coluna NOT NULL) quando a chave é enviada com valor JSON null.
+do $$
+declare
+  v_user_id uuid;
+  v_accessory_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_id_2';
+
+  begin
+    set local role service_role;
+    perform public.update_accessory(v_accessory_id, jsonb_build_object('is_active', null), v_user_id);
+    v_status := 'FAIL';
+    v_details := 'is_active=null deveria ter sido rejeitado (coluna NOT NULL)';
+  exception when not_null_violation then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.22 [SET ROLE real] update_accessory rejeita is_active null explícito (NOT NULL)', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.22 [SET ROLE real] update_accessory rejeita is_active null explícito (NOT NULL)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.23 [SET ROLE real] update_accessory rejeita minimum_stock negativo
+-- (CHECK da tabela).
+do $$
+declare
+  v_user_id uuid;
+  v_accessory_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_id_2';
+
+  begin
+    set local role service_role;
+    perform public.update_accessory(v_accessory_id, jsonb_build_object('minimum_stock', -3), v_user_id);
+    v_status := 'FAIL';
+    v_details := 'minimum_stock=-3 deveria ter sido rejeitado pela CHECK (minimum_stock >= 0)';
+  exception when check_violation then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.23 [SET ROLE real] update_accessory rejeita minimum_stock negativo (CHECK da tabela)', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.23 [SET ROLE real] update_accessory rejeita minimum_stock negativo (CHECK da tabela)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.24 [SET ROLE real] update_accessory rejeita p_patch nulo e '{}' — nunca
+-- vira um UPDATE vazio silencioso.
+do $$
+declare
+  v_user_id uuid;
+  v_accessory_id uuid;
+  v_status text;
+  v_details text;
+  v_null_rejected boolean := false;
+  v_empty_rejected boolean := false;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_id_2';
+
+  set local role service_role;
+
+  begin
+    perform public.update_accessory(v_accessory_id, null, v_user_id);
+  exception when others then
+    if sqlerrm like '%p_patch vazio%' then
+      v_null_rejected := true;
+    end if;
+  end;
+
+  begin
+    perform public.update_accessory(v_accessory_id, '{}'::jsonb, v_user_id);
+  exception when others then
+    if sqlerrm like '%p_patch vazio%' then
+      v_empty_rejected := true;
+    end if;
+  end;
+
+  reset role;
+
+  if v_null_rejected and v_empty_rejected then
+    v_status := 'PASS';
+    v_details := 'p_patch nulo e {} rejeitados corretamente';
+  else
+    v_status := 'FAIL';
+    v_details := 'null_rejected=' || v_null_rejected || ' empty_rejected=' || v_empty_rejected;
+  end if;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.24 [SET ROLE real] update_accessory rejeita p_patch nulo e vazio ({})', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.24 [SET ROLE real] update_accessory rejeita p_patch nulo e vazio ({})', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.25 [SET ROLE real] update_accessory rejeita chave desconhecida em
+-- p_patch — não é só silenciosamente removida por jsonb_whitelist.
+do $$
+declare
+  v_user_id uuid;
+  v_accessory_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_id_2';
+
+  begin
+    set local role service_role;
+    perform public.update_accessory(v_accessory_id, jsonb_build_object('material', 'titânio'), v_user_id);
+    v_status := 'FAIL';
+    v_details := 'chave desconhecida (material) deveria ter sido rejeitada, não silenciosamente ignorada';
+  exception when others then
+    if sqlerrm like '%chave(s) não suportada(s)%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'erro inesperado: ' || sqlerrm;
+    end if;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.25 [SET ROLE real] update_accessory rejeita chave desconhecida em p_patch (não silenciosamente removida)', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.25 [SET ROLE real] update_accessory rejeita chave desconhecida em p_patch (não silenciosamente removida)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
 end $$;
 
 -- =============================================================================

@@ -15,7 +15,9 @@ import { ApiError, type ApiErrorType } from './errors'
 const FUNCTIONS_BASE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`
 const PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 
-// As 6 Edge Functions do Módulo 1 (supabase/config.toml [functions.*]).
+// As 6 Edge Functions do Módulo 1 + `accessories` (Módulo 3, Incremento 2 —
+// backend protegido do cadastro mestre de Acessórios, docs/05_ROADMAP_MODULOS.md
+// §9) (supabase/config.toml [functions.*]).
 export type EdgeFunctionName =
   | 'products'
   | 'orders'
@@ -23,6 +25,7 @@ export type EdgeFunctionName =
   | 'order-status'
   | 'payments'
   | 'order-approvals'
+  | 'accessories'
 
 type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
 

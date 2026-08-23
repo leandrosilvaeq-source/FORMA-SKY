@@ -90,14 +90,17 @@ const SQLSTATE_MAP: Record<string, (message: string) => AppError> = {
 // Mensagens conhecidas emitidas por RAISE EXCEPTION em várias funções de
 // negócio (public.products: create_product/update_product_price;
 // public.orders: update_order/add_order_item/update_order_item/
-// remove_order_item/change_order_status/update_quote_order), incluindo a
-// função interna assert_active_user() reutilizada por todas. Todas chegam
-// com code = 'P0001'. Cada entrada nova foi conferida linha a linha contra
-// a migration que a declara (20260814030351_create_order_business_functions.sql,
+// remove_order_item/change_order_status/update_quote_order;
+// public.accessories: create_accessory/update_accessory/delete_accessory),
+// incluindo a função interna assert_active_user() reutilizada por todas.
+// Todas chegam com code = 'P0001'. Cada entrada nova foi conferida linha a
+// linha contra a migration que a declara (20260814030351_create_order_business_functions.sql,
 // 20260821014342_extend_order_summary_and_payment_method.sql,
-// <nova>_add_update_quote_order.sql) antes de ser adicionada aqui — sem
-// sobreposição de substring entre nenhuma das entradas abaixo, para nunca
-// haver ambiguidade de qual padrão casa primeiro.
+// 20260821031143_add_update_quote_order.sql,
+// 20260822120000_create_accessory_write_functions.sql) antes de ser
+// adicionada aqui — sem sobreposição de substring entre nenhuma das
+// entradas abaixo, para nunca haver ambiguidade de qual padrão casa
+// primeiro.
 const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> = [
   ["não encontrado", (message) => new NotFoundError(message)],
   ["inválido ou inativo", (message) => new AuthorizationError(message)],
@@ -119,6 +122,24 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
   ["só aceita itens CATALOG", (message) => new ValidationError(message)],
   ["itens CUSTOM/SPOT", (message) => new BusinessRuleError(message)],
   ["p_payment_method inválido", (message) => new ValidationError(message)],
+  // create_accessory/update_accessory (Migration 20260822120000):
+  // invariantes de defesa em profundidade (a Edge Function já valida tudo
+  // isso antes de chamar a RPC — estas mensagens só aparecem se a RPC for
+  // chamada diretamente, fora da Edge Function). São erros de entrada
+  // inválida (400), não de conflito de estado (409) — mapeadas para
+  // ValidationError, nunca para o fallback genérico de BusinessRuleError.
+  ["accessories.size inválido", (message) => new ValidationError(message)],
+  ["accessories.name não pode ser vazio", (message) => new ValidationError(message)],
+  ["update_accessory: chave(s) não suportada(s)", (message) => new ValidationError(message)],
+  ["update_accessory: p_patch vazio", (message) => new ValidationError(message)],
+  // delete_accessory (Migration 20260822120000): bloqueio de exclusão
+  // física quando há vínculo em product_accessories — orienta desativação
+  // em vez de excluir, nunca remove o vínculo nem executa cascata. Marcador
+  // estável ACCESSORY_IN_USE: (rodada corretiva — não depende só da frase
+  // completa em português permanecer igual); a mensagem devolvida ao
+  // cliente é a mesma exceção sem o prefixo do marcador, preservando o
+  // texto amigável já pensado para a interface.
+  ["ACCESSORY_IN_USE:", (message) => new BusinessRuleError(message.replace(/^ACCESSORY_IN_USE:\s*/, ""))],
 ];
 
 export function mapPgError(err: PgErrorLike): AppError {
