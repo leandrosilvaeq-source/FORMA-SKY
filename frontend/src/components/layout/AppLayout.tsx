@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { to: '/produtos', label: 'Produtos' },
   { to: '/empresas', label: 'Empresas' },
   { to: '/pedidos', label: 'Pedidos' },
+  { to: '/estoque', label: 'Estoque' },
 ]
 
 export function AppLayout({ children }: { children: ReactNode }) {

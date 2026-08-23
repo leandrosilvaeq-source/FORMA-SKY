@@ -13,9 +13,10 @@ import type { Session } from '@supabase/supabase-js'
 // ProtectedRoute, e "/rota-que-nao-existe" sem sessão cai em /login — um
 // fato de integração que NotFoundPage.test.tsx, sozinho, não consegue
 // provar (ele nunca toca App.tsx).
-const { getSessionMock, onAuthStateChangeMock } = vi.hoisted(() => ({
+const { getSessionMock, onAuthStateChangeMock, fromMock } = vi.hoisted(() => ({
   getSessionMock: vi.fn(),
   onAuthStateChangeMock: vi.fn(),
+  fromMock: vi.fn(),
 }))
 
 vi.mock('@/lib/supabase', () => ({
@@ -26,8 +27,23 @@ vi.mock('@/lib/supabase', () => ({
       signInWithPassword: vi.fn(),
       signOut: vi.fn(),
     },
+    from: fromMock,
   },
 }))
+
+// Estoque (Incremento 4) lê accessories/packaging via supabase-js direto
+// (useAccessories/usePackaging, sem Edge Function) — precisa de um mock
+// mínimo de `from` para as rotas /estoque/* não quebrarem ao montar
+// App.tsx real. Sempre resolve vazio: o suficiente para provar que a rota
+// e o roteamento funcionam, sem testar o conteúdo da listagem em si (já
+// coberto por InventoryPage.test.tsx com os hooks mockados diretamente).
+function mockEmptySupabaseFrom() {
+  const builder: Record<string, unknown> = {}
+  const chain = () => builder
+  builder.select = vi.fn(chain)
+  builder.order = vi.fn(() => Promise.resolve({ data: [], error: null }))
+  fromMock.mockReturnValue(builder)
+}
 
 // App.tsx renderiza <Toaster/> de verdade (nenhum outro teste de página
 // monta isso — todos mockam só a função `toast`). O componente real da
@@ -42,6 +58,7 @@ import App from './App'
 function renderAppAt(path: string, session: Session | null) {
   getSessionMock.mockResolvedValue({ data: { session } })
   onAuthStateChangeMock.mockReturnValue({ data: { subscription: { unsubscribe: vi.fn() } } })
+  mockEmptySupabaseFrom()
 
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -83,5 +100,51 @@ describe('App — rota coringa (integração real de roteamento)', () => {
     expect(await screen.findByLabelText(/e-mail/i)).toBeInTheDocument()
     expect(screen.getByText('Forma Sky')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Página não encontrada' })).not.toBeInTheDocument()
+  })
+})
+
+// Módulo 3 — Estoque (Incremento 4): prova de integração real de roteamento
+// que InventoryPage.test.tsx (hooks mockados diretamente) não consegue
+// provar sozinho — que /estoque de fato redireciona via App.tsx real, e que
+// as duas sub-rotas resolvem para a área correta a partir da URL.
+describe('App — rotas de Estoque (integração real de roteamento)', () => {
+  it('sessão autenticada em /estoque redireciona para /estoque/acessorios (área Acessórios ativa)', async () => {
+    renderAppAt('/estoque', { user: { email: 'op@formasky.com' } } as Session)
+
+    expect(await screen.findByRole('heading', { name: 'Estoque' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Acessórios' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Embalagens' })).not.toHaveAttribute('aria-current')
+    expect(screen.getByRole('link', { name: 'Estoque' })).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('acesso direto a /estoque/acessorios abre a área Acessórios', async () => {
+    renderAppAt('/estoque/acessorios', { user: { email: 'op@formasky.com' } } as Session)
+
+    expect(await screen.findByRole('heading', { name: 'Estoque' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Acessórios' })).toHaveAttribute('aria-current', 'page')
+    expect(await screen.findByText('Nenhum acessório cadastrado.')).toBeInTheDocument()
+  })
+
+  it('acesso direto a /estoque/embalagens abre a área Embalagens', async () => {
+    renderAppAt('/estoque/embalagens', { user: { email: 'op@formasky.com' } } as Session)
+
+    expect(await screen.findByRole('heading', { name: 'Estoque' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Embalagens' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Acessórios' })).not.toHaveAttribute('aria-current')
+    expect(await screen.findByText('Nenhuma embalagem cadastrada.')).toBeInTheDocument()
+  })
+
+  it('sessão ausente em /estoque é redirecionada para /login', async () => {
+    renderAppAt('/estoque', null)
+
+    expect(await screen.findByLabelText(/e-mail/i)).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Estoque' })).not.toBeInTheDocument()
+  })
+
+  it('sessão ausente em /estoque/acessorios é redirecionada para /login', async () => {
+    renderAppAt('/estoque/acessorios', null)
+
+    expect(await screen.findByLabelText(/e-mail/i)).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Estoque' })).not.toBeInTheDocument()
   })
 })

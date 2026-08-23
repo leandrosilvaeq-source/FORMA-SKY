@@ -1,4 +1,4 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from '@/context/AuthContext'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Toaster } from '@/components/ui/sonner'
@@ -9,6 +9,7 @@ import { ProductsPage } from '@/pages/products/ProductsPage'
 import { ProductDetailPage } from '@/pages/products/ProductDetailPage'
 import { CompaniesPage } from '@/pages/companies/CompaniesPage'
 import { OrdersPage } from '@/pages/orders/OrdersPage'
+import { InventoryPage } from '@/pages/InventoryPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
 
 function App() {
@@ -62,6 +63,36 @@ function App() {
           element={
             <ProtectedRoute>
               <OrdersPage />
+            </ProtectedRoute>
+          }
+        />
+        {/* Módulo 3 — Estoque (Incremento 4: somente consulta e navegação).
+            /estoque sozinho não é uma área de verdade — redireciona para a
+            primeira aba (Acessórios), sempre dentro de ProtectedRoute para
+            que sessão ausente caia em /login antes de qualquer redirect
+            interno. replace evita empilhar /estoque no histórico a cada
+            visita. */}
+        <Route
+          path="/estoque"
+          element={
+            <ProtectedRoute>
+              <Navigate to="/estoque/acessorios" replace />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/estoque/acessorios"
+          element={
+            <ProtectedRoute>
+              <InventoryPage area="acessorios" />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/estoque/embalagens"
+          element={
+            <ProtectedRoute>
+              <InventoryPage area="embalagens" />
             </ProtectedRoute>
           }
         />

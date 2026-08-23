@@ -56,6 +56,13 @@ describe('AppLayout', () => {
     expect(screen.getByRole('link', { name: 'Pedidos' })).toHaveAttribute('aria-current', 'page')
   })
 
+  it('marca "Estoque" como módulo ativo na rota /estoque', () => {
+    renderAt('/estoque')
+
+    expect(screen.getByRole('link', { name: 'Estoque' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Pedidos' })).not.toHaveAttribute('aria-current')
+  })
+
   it('marca "Produtos" como ativo numa sub-rota interna (/produtos/novo)', () => {
     renderAt('/produtos/novo')
 
@@ -68,16 +75,34 @@ describe('AppLayout', () => {
     expect(screen.getByRole('link', { name: 'Pedidos' })).toHaveAttribute('aria-current', 'page')
   })
 
+  it('marca "Estoque" como ativo na sub-rota /estoque/acessorios', () => {
+    renderAt('/estoque/acessorios')
+
+    expect(screen.getByRole('link', { name: 'Estoque' })).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('marca "Estoque" como ativo na sub-rota /estoque/embalagens', () => {
+    renderAt('/estoque/embalagens')
+
+    expect(screen.getByRole('link', { name: 'Estoque' })).toHaveAttribute('aria-current', 'page')
+  })
+
   it('não marca "Produtos" como ativo numa rota parecida mas de outro módulo (/produtos-antigos)', () => {
     renderAt('/produtos-antigos')
 
     expect(screen.getByRole('link', { name: 'Produtos' })).not.toHaveAttribute('aria-current')
   })
 
+  it('não marca "Estoque" como ativo numa rota parecida mas de outro módulo (/estoque-antigo)', () => {
+    renderAt('/estoque-antigo')
+
+    expect(screen.getByRole('link', { name: 'Estoque' })).not.toHaveAttribute('aria-current')
+  })
+
   it('nenhum módulo fica marcado como ativo fora das rotas de módulo (ex.: home)', () => {
     renderAt('/')
 
-    for (const label of ['Clientes', 'Produtos', 'Empresas', 'Pedidos']) {
+    for (const label of ['Clientes', 'Produtos', 'Empresas', 'Pedidos', 'Estoque']) {
       expect(screen.getByRole('link', { name: label })).not.toHaveAttribute('aria-current')
     }
   })

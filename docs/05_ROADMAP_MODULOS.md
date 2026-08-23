@@ -190,13 +190,35 @@ módulos já existentes.
 
 ---
 
-# 9. Módulo 3 — Estoque e Inventário: plano de cadastro mestre (aprovado, implementação não iniciada)
+# 9. Módulo 3 — Estoque e Inventário: plano de cadastro mestre (em implementação)
 
 Planejamento aprovado em 2026-08-22 para a interface de cadastro mestre de `accessories`/
 `packaging` (Bloco 1, Migration 18) — cobre definição funcional e regras de negócio do cadastro
-mestre; **implementação (backend/frontend) ainda não iniciada**. Plano dividido em 8 incrementos
-(Incremento 1 = esta documentação). Cadastro oficial (incluindo a composição da Petlink) segue
-não liberado até a interface estar implementada e validada — ver gatilho pendente em §6.
+mestre. Plano dividido em 8 incrementos (Incremento 1 = esta documentação). Cadastro oficial
+(incluindo a composição da Petlink) segue não liberado até a interface estar completa (leitura +
+escrita) e validada em produção — ver gatilho pendente em §6.
+
+**Progresso registrado em 2026-08-23** (implementado e testado localmente, nada deployado/liberado
+ainda):
+
+- **Incremento 2** — backend protegido de Acessórios (`create_accessory`/`update_accessory`/
+  `delete_accessory`, Edge Function `accessories`) implementado e testado localmente (Deno +
+  Vitest); migration criada, **não aplicada remotamente**.
+- **Incremento 3** — mesmo backend espelhado para Embalagens (`create_packaging`/
+  `update_packaging`/`delete_packaging`, Edge Function `packaging`); mesma situação (local,
+  testado, não aplicado remotamente).
+- **Incremento 4** — listagem de Estoque no frontend (`/estoque`, `/estoque/acessorios`,
+  `/estoque/embalagens`, `InventoryPage.tsx`): consulta, busca, filtro por status e ordenação para
+  as duas áreas (Acessórios e Embalagens), reaproveitando o padrão visual já aprovado em
+  Clientes/Produtos/Empresas/Pedidos. **Somente leitura nesta etapa** — nenhuma criação, edição,
+  exclusão ou ativação/desativação está disponível na tela. A coluna "Ativo" desta listagem é
+  **só um indicador informativo** (badge de texto "Ativo"/"Inativo"), não um controle interativo;
+  não existe coluna de ações (editar/excluir) nesta etapa. Validação manual da área
+  `/estoque/acessorios` aprovada pelo usuário em 2026-08-23.
+- Criação/edição/ativação/desativação/exclusão pela interface (conectando as RPCs dos Incrementos
+  2/3 às telas) continuam **pendentes** — cadastro oficial de acessórios/embalagens (e a
+  composição da Petlink) segue bloqueado até essas operações existirem, serem testadas e o backend
+  ser deployado com autorização explícita.
 
 Regras de campos/tamanho/custo/exclusão aprovadas: ver `03_MODELO_BANCO_DADOS.md` §13.3.
 
@@ -244,9 +266,14 @@ independentemente de qual opção for escolhida:
 ### Status
 
 Definição funcional: ✅ aprovada. Regras do cadastro mestre: ✅ aprovadas (ver doc `03` §13.3).
-Implementação (backend/frontend): ❌ não iniciada. Plano: 8 incrementos definidos. Cadastro
-oficial: 🔒 ainda não liberado. Nenhum percentual macro (seções 2/5) é alterado por esta entrada —
-plano aprovado não é implementação (ver regra em §1).
+Backend protegido (Acessórios e Embalagens, Incrementos 2–3): ✅ implementado e testado
+localmente, ⏳ não deployado. Listagem no frontend (Incremento 4): ✅ implementada, testada e
+validada manualmente para `/estoque/acessorios`; Embalagens usa o mesmo componente (mesma
+cobertura de teste), validação manual dedicada ainda não registrada. Criação/edição/ativação/
+desativação/exclusão pela interface: ❌ não iniciadas. Cadastro oficial: 🔒 ainda não liberado.
+Plano: 8 incrementos definidos, 4 com trabalho local concluído. Nenhum percentual macro (seções
+2/5) é alterado por esta entrada — implementação local/testada ainda não é "deployado e validado
+em produção", critério exigido pela regra de §1 para a Fase 3/4 receberem peso cheio.
 
 ---
 
@@ -260,3 +287,4 @@ plano aprovado não é implementação (ver regra em §1).
 | 2026-08-22 | Módulo 1: ajuste visual no formulário de Produto (criação e edição, mesmo componente `ProductForm.tsx`) — campo "Peso total (g)" passa a aparecer antes de "Tempo de Produção" (antes: Tempo de impressão antes do Peso); títulos das colunas correspondentes na listagem (`ProductsPage.tsx`) atualizados para os mesmos textos. Nenhuma lógica de validação, conversão de duração ou contrato de API/banco alterada. Adicionado à seção 6 novo gatilho pendente: quando o Módulo 3 — Estoque tiver interface funcional e validada para cadastrar acessórios/embalagens mestres, avisar o usuário para fazer os cadastros oficiais e completar a composição dos produtos, incluindo o cadastro oficial da Petlink já existente no ambiente — não implementado agora, só registrado como pendência; nenhum percentual macro alterado por esta entrada. |
 | 2026-08-22 | Módulo 1: padrão de busca rápida + autocomplete/typeahead + ordenação por coluna (menu estilo filtro de tabela), já validado em Clientes/Produtos/Empresas, estendido para a listagem de Pedidos (`OrdersPage.tsx`) — busca por número do pedido, cliente/empresa exibido ou nome de qualquer produto do pedido; ordenação em todas as 11 colunas de dados (Nº pedido com comparação numérica natural, Total/Saldo devedor numéricos, Prazo pela data real). Componente compartilhado `SearchAutocomplete.tsx` ganhou um campo opcional `description` (badge de tipo — "Pedido"/"Cliente"/"Produto") para diferenciar sugestões heterogêneas; Clientes/Produtos/Empresas não passam esse campo e continuam com a mesma renderização de antes (suítes de teste dos 3 módulos reexecutadas, sem regressão). Nenhuma alteração na criação/edição de pedidos, nos fluxos de status operacional/financeiro, nem no contrato de `vw_order_summary`. Adicionado à seção 6 novo gatilho pendente: quando os fluxos de status operacional e financeiro de Pedidos estiverem funcionais e validados de ponta a ponta, retornar à listagem para criar botões de filtro rápido por status (incluindo "Aguardando pagamento") — não implementado nesta rodada, só registrado como pendência; nenhum percentual macro alterado por esta entrada. |
 | 2026-08-22 | Módulo 3 (Estoque): auditoria somente leitura seguida de planejamento aprovado para a interface de cadastro mestre de acessórios/embalagens (Incremento 1 do plano de 8 incrementos) — nenhum código, migration, Edge Function ou dado remoto alterado por esta entrada, só documentação. Registradas em `03_MODELO_BANCO_DADOS.md` §13.3: campos da interface (Nome/Tamanho/Variante/Estoque mínimo/Ativo/Custo somente leitura), remoção de Material e Fornecedor da UI (colunas preservadas/inexistentes no banco), Tamanho opcional com 5 opções oficiais (PP/P/M/G/GG) sem CHECK constraint e sem conversão automática de valores legados, `unit_cost` somente leitura com lembrete de retomada quando compras/entradas de estoque existirem, e regras de exclusão física guardada (exigirá migration própria, ainda não criada). Adicionadas a este roadmap: §8 (regra permanente de padrão visual/funcional para novos módulos) e §9 (plano de Módulo 3 — busca/filtros/ordenação independentes por aba, rotas planejadas `/estoque/*` não implementadas, contrato de escrita ainda em aberto entre acesso direto e Edge Function, recomendação por Edge Function). Nenhum percentual macro alterado por esta entrada — plano aprovado não é implementação. |
+| 2026-08-22/23 | Módulo 3 (Estoque), Incrementos 2–4 implementados e testados localmente (nada deployado/liberado): Incremento 2 — backend protegido de Acessórios (`create_accessory`/`update_accessory`/`delete_accessory`, Edge Function `accessories`, migration local). Incremento 3 — mesmo backend espelhado para Embalagens (`create_packaging`/`update_packaging`/`delete_packaging`, Edge Function `packaging`). Incremento 4 — listagem de Estoque no frontend (`/estoque`, `/estoque/acessorios`, `/estoque/embalagens`, `InventoryPage.tsx`): busca, filtro por status e ordenação para as duas áreas, reaproveitando o padrão visual já aprovado nos demais módulos; somente leitura nesta etapa (sem criação/edição/exclusão/ativação — a coluna "Ativo" é um indicador informativo, não um controle, e não há coluna de ações). Validação manual da área `/estoque/acessorios` aprovada pelo usuário em 2026-08-23. Cadastro oficial (incl. composição da Petlink) segue bloqueado até as operações de escrita existirem na interface e o backend ser deployado com autorização explícita. Nenhum percentual macro alterado — trabalho local/testado ainda não atende ao critério "deployado e validado em produção" exigido pela regra de §1. |
