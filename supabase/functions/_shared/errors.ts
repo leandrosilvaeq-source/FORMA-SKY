@@ -91,13 +91,15 @@ const SQLSTATE_MAP: Record<string, (message: string) => AppError> = {
 // negócio (public.products: create_product/update_product_price;
 // public.orders: update_order/add_order_item/update_order_item/
 // remove_order_item/change_order_status/update_quote_order;
-// public.accessories: create_accessory/update_accessory/delete_accessory),
+// public.accessories: create_accessory/update_accessory/delete_accessory;
+// public.packaging: create_packaging/update_packaging/delete_packaging),
 // incluindo a função interna assert_active_user() reutilizada por todas.
 // Todas chegam com code = 'P0001'. Cada entrada nova foi conferida linha a
 // linha contra a migration que a declara (20260814030351_create_order_business_functions.sql,
 // 20260821014342_extend_order_summary_and_payment_method.sql,
 // 20260821031143_add_update_quote_order.sql,
-// 20260822120000_create_accessory_write_functions.sql) antes de ser
+// 20260822120000_create_accessory_write_functions.sql,
+// 20260823120000_create_packaging_write_functions.sql) antes de ser
 // adicionada aqui — sem sobreposição de substring entre nenhuma das
 // entradas abaixo, para nunca haver ambiguidade de qual padrão casa
 // primeiro.
@@ -140,6 +142,18 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
   // cliente é a mesma exceção sem o prefixo do marcador, preservando o
   // texto amigável já pensado para a interface.
   ["ACCESSORY_IN_USE:", (message) => new BusinessRuleError(message.replace(/^ACCESSORY_IN_USE:\s*/, ""))],
+  // create_packaging/update_packaging (Migration 20260823120000): mesmas
+  // invariantes de defesa em profundidade de accessories, espelhadas para
+  // packaging — erros de entrada inválida (400), não de conflito de estado.
+  ["packaging.size inválido", (message) => new ValidationError(message)],
+  ["packaging.name não pode ser vazio", (message) => new ValidationError(message)],
+  ["update_packaging: chave(s) não suportada(s)", (message) => new ValidationError(message)],
+  ["update_packaging: p_patch vazio", (message) => new ValidationError(message)],
+  // delete_packaging (Migration 20260823120000): bloqueio de exclusão
+  // física quando há vínculo em product_packaging — mesmo padrão de
+  // ACCESSORY_IN_USE:, marcador PACKAGING_IN_USE: (independente, nunca
+  // confundido com o de accessories por serem strings distintas).
+  ["PACKAGING_IN_USE:", (message) => new BusinessRuleError(message.replace(/^PACKAGING_IN_USE:\s*/, ""))],
 ];
 
 export function mapPgError(err: PgErrorLike): AppError {

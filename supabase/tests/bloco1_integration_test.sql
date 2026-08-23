@@ -3213,6 +3213,1084 @@ exception when others then
     values ('10', '10.25 [SET ROLE real] update_accessory rejeita chave desconhecida em p_patch (não silenciosamente removida)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
 end $$;
 
+-- ---------------------------------------------------------------------------
+-- 10.26 a 10.49 — Módulo 3, Incremento 3 (backend protegido de Embalagens,
+-- 20260823120000_create_packaging_write_functions.sql). Espelha
+-- integralmente 10.10–10.25 (Acessórios, Incremento 2), adaptado a
+-- packaging/product_packaging, mais cobertura adicional (varredura completa
+-- do enum de tamanho, embalagem inexistente) pedida explicitamente nesta
+-- rodada.
+-- ---------------------------------------------------------------------------
+
+-- 10.26 Setup: fixtures dedicadas de packaging para os testes de backend
+-- protegido — packaging_id_1 (Seção 10.0) já foi consumida pela composição
+-- das 10.3/10.4 e não tem valores legados fora do enum, então esta seção
+-- cria as suas próprias fixtures (via role de dono da transação, mesmo
+-- padrão da 10.0).
+do $$
+declare
+  v_packaging_id_legacy uuid;
+begin
+  begin
+    -- Valores legados propositalmente fora do que a interface aceitaria
+    -- (size fora do enum, material/unit_cost preenchidos) — usados para
+    -- confirmar preservação em update_packaging (10.34).
+    insert into public.packaging (name, material, size, variant, unit_cost)
+      values ('Embalagem de teste legada', 'plástico reciclado', 'EMBALAGEM-XL', 'transparente', 12.50)
+      returning id into v_packaging_id_legacy;
+
+    insert into zz_fixtures(key, value) values ('packaging_id_legacy', v_packaging_id_legacy::text)
+      on conflict (key) do update set value = excluded.value;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('10', '10.26 setup: packaging_id_legacy criado (size/material/unit_cost fora do padrão da interface)', 'PASS',
+              'packaging_id_legacy=' || v_packaging_id_legacy);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('10', '10.26 setup: packaging_id_legacy criado (size/material/unit_cost fora do padrão da interface)', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 10.27 [SET ROLE real] authenticated NÃO consegue mais INSERT direto em
+-- packaging — revogado por
+-- 20260823120000_create_packaging_write_functions.sql (mesma decisão de
+-- accessories no Incremento 2).
+do $$
+declare
+  v_auth_user_id_text text;
+  v_status text;
+  v_details text;
+begin
+  select value into v_auth_user_id_text from zz_fixtures where key = 'auth_user_id';
+
+  begin
+    if v_auth_user_id_text is null or v_auth_user_id_text = '' then
+      raise exception 'fixture ausente: auth_user_id';
+    end if;
+
+    set local role authenticated;
+    perform set_config(
+      'request.jwt.claims',
+      json_build_object('sub', v_auth_user_id_text, 'role', 'authenticated')::text,
+      true
+    );
+
+    insert into public.packaging (name) values ('Não deveria ser inserido por authenticated');
+    v_status := 'FAIL';
+    v_details := 'INSERT direto em packaging foi permitido a authenticated (não deveria mais)';
+  exception when insufficient_privilege then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+  reset "request.jwt.claims";
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.27 [SET ROLE real] authenticated não consegue mais INSERT direto em packaging', v_status, v_details);
+exception when others then
+  reset role;
+  reset "request.jwt.claims";
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.27 [SET ROLE real] authenticated não consegue mais INSERT direto em packaging', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.27b [SET ROLE real] authenticated NÃO consegue mais UPDATE direto de
+-- packaging.name.
+do $$
+declare
+  v_auth_user_id_text text;
+  v_packaging_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value into v_auth_user_id_text from zz_fixtures where key = 'auth_user_id';
+  select value::uuid into v_packaging_id from zz_fixtures where key = 'packaging_id_1';
+
+  begin
+    if v_auth_user_id_text is null or v_packaging_id is null then
+      raise exception 'fixture ausente: auth_user_id/packaging_id_1';
+    end if;
+
+    set local role authenticated;
+    perform set_config(
+      'request.jwt.claims',
+      json_build_object('sub', v_auth_user_id_text, 'role', 'authenticated')::text,
+      true
+    );
+
+    update public.packaging set name = 'Não deveria ser alterado' where id = v_packaging_id;
+    v_status := 'FAIL';
+    v_details := 'UPDATE de name como authenticated foi permitido (não deveria mais)';
+  exception when insufficient_privilege then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+  reset "request.jwt.claims";
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.27b [SET ROLE real] authenticated não consegue mais UPDATE direto de packaging.name', v_status, v_details);
+exception when others then
+  reset role;
+  reset "request.jwt.claims";
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.27b [SET ROLE real] authenticated não consegue mais UPDATE direto de packaging.name', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.28 [SET ROLE real] service_role executa create_packaging; is_active
+-- assume o default (true) quando omitido; material/unit_cost/current_stock
+-- nunca são tocados por esta function (permanecem null/null/0).
+do $$
+declare
+  v_user_id uuid;
+  v_row public.packaging;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role service_role;
+
+    v_row := public.create_packaging(
+      'Embalagem criada via create_packaging (teste)', 'M', 'kraft', 3, null, v_user_id
+    );
+
+    if v_row.id is null then
+      raise exception 'create_packaging não retornou um id';
+    end if;
+    if v_row.is_active is distinct from true then
+      raise exception 'is_active deveria assumir o default true, veio %', v_row.is_active;
+    end if;
+    if v_row.material is not null then
+      raise exception 'material deveria continuar null (nunca setado por create_packaging), veio %', v_row.material;
+    end if;
+    if v_row.unit_cost is not null then
+      raise exception 'unit_cost deveria continuar null, veio %', v_row.unit_cost;
+    end if;
+    if v_row.current_stock <> 0 then
+      raise exception 'current_stock deveria continuar 0 (default da tabela), veio %', v_row.current_stock;
+    end if;
+
+    insert into zz_fixtures(key, value) values ('packaging_id_created', v_row.id::text)
+      on conflict (key) do update set value = excluded.value;
+
+    v_status := 'PASS';
+    v_details := 'id=' || v_row.id || ' is_active=' || v_row.is_active || ' current_stock=' || v_row.current_stock;
+  exception when others then
+    v_status := 'FAIL';
+    v_details := sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.28 [SET ROLE real] service_role executa create_packaging (defaults corretos, material/unit_cost/current_stock nunca tocados)', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.28 [SET ROLE real] service_role executa create_packaging (defaults corretos, material/unit_cost/current_stock nunca tocados)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.29 [SET ROLE real] authenticated NÃO consegue executar create_packaging
+-- diretamente (EXECUTE só concedido a service_role).
+do $$
+declare
+  v_auth_user_id_text text;
+  v_user_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value into v_auth_user_id_text from zz_fixtures where key = 'auth_user_id';
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role authenticated;
+    perform set_config(
+      'request.jwt.claims',
+      json_build_object('sub', v_auth_user_id_text, 'role', 'authenticated')::text,
+      true
+    );
+
+    perform public.create_packaging('Não deveria ser criada', null, null, null, null, v_user_id);
+    v_status := 'FAIL';
+    v_details := 'create_packaging foi executado por authenticated (não deveria)';
+  exception when insufficient_privilege then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+  reset "request.jwt.claims";
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.29 [SET ROLE real] authenticated não consegue executar create_packaging diretamente', v_status, v_details);
+exception when others then
+  reset role;
+  reset "request.jwt.claims";
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.29 [SET ROLE real] authenticated não consegue executar create_packaging diretamente', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.30 [SET ROLE real] anon NÃO consegue executar create_packaging.
+do $$
+declare
+  v_user_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role anon;
+    perform public.create_packaging('Não deveria ser criada (anon)', null, null, null, null, v_user_id);
+    v_status := 'FAIL';
+    v_details := 'create_packaging foi executado por anon (não deveria)';
+  exception when insufficient_privilege then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.30 [SET ROLE real] anon não consegue executar create_packaging diretamente', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.30 [SET ROLE real] anon não consegue executar create_packaging diretamente', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.31 [SET ROLE real] create_packaging aceita size null ("Não se
+-- aplica").
+do $$
+declare
+  v_user_id uuid;
+  v_row public.packaging;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role service_role;
+    v_row := public.create_packaging('Embalagem sem tamanho', null, null, null, null, v_user_id);
+    if v_row.size is not null then
+      raise exception 'size deveria ser null, veio %', v_row.size;
+    end if;
+    v_status := 'PASS';
+    v_details := 'size=null aceito corretamente';
+  exception when others then
+    v_status := 'FAIL';
+    v_details := sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.31 [SET ROLE real] create_packaging aceita size null (Não se aplica)', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.31 [SET ROLE real] create_packaging aceita size null (Não se aplica)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.32 [SET ROLE real] create_packaging aceita as 5 opções oficiais de
+-- tamanho (PP, P, M, G, GG) — varredura completa do enum.
+do $$
+declare
+  v_user_id uuid;
+  v_row public.packaging;
+  v_size text;
+  v_all_ok boolean := true;
+  v_details text := '';
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role service_role;
+    foreach v_size in array array['PP', 'P', 'M', 'G', 'GG']
+    loop
+      v_row := public.create_packaging('Embalagem tamanho ' || v_size, v_size, null, null, null, v_user_id);
+      if v_row.size is distinct from v_size then
+        v_all_ok := false;
+        v_details := v_details || format('esperado=%s obtido=%s; ', v_size, v_row.size);
+      end if;
+    end loop;
+    reset role;
+
+    if v_all_ok then
+      insert into zz_test_results(section, test_name, status, details)
+        values ('10', '10.32 [SET ROLE real] create_packaging aceita PP, P, M, G e GG', 'PASS', 'todas as 5 opções aceitas corretamente');
+    else
+      insert into zz_test_results(section, test_name, status, details)
+        values ('10', '10.32 [SET ROLE real] create_packaging aceita PP, P, M, G e GG', 'FAIL', v_details);
+    end if;
+  exception when others then
+    reset role;
+    insert into zz_test_results(section, test_name, status, details)
+      values ('10', '10.32 [SET ROLE real] create_packaging aceita PP, P, M, G e GG', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 10.33 [SET ROLE real] create_packaging rejeita tamanho livre fora do
+-- enum.
+do $$
+declare
+  v_user_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role service_role;
+    perform public.create_packaging('Embalagem tamanho inválido', 'XG', null, null, null, v_user_id);
+    v_status := 'FAIL';
+    v_details := 'size=XG deveria ter sido rejeitado (fora do enum PP/P/M/G/GG)';
+  exception when others then
+    if sqlerrm like '%size inválido%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'erro inesperado: ' || sqlerrm;
+    end if;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.33 [SET ROLE real] create_packaging rejeita tamanho livre fora do enum', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.33 [SET ROLE real] create_packaging rejeita tamanho livre fora do enum', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.34 [SET ROLE real] update_packaging preserva size/material/unit_cost
+-- legados (packaging_id_legacy, 10.26) quando as chaves não são enviadas —
+-- patch só toca minimum_stock.
+do $$
+declare
+  v_user_id uuid;
+  v_packaging_id uuid;
+  v_row public.packaging;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_packaging_id from zz_fixtures where key = 'packaging_id_legacy';
+
+  begin
+    set local role service_role;
+
+    v_row := public.update_packaging(
+      v_packaging_id,
+      jsonb_build_object('minimum_stock', 9),
+      v_user_id
+    );
+
+    if v_row.size is distinct from 'EMBALAGEM-XL' then
+      raise exception 'size legado deveria ser preservado (EMBALAGEM-XL), veio %', v_row.size;
+    end if;
+    if v_row.material is distinct from 'plástico reciclado' then
+      raise exception 'material legado deveria ser preservado, veio %', v_row.material;
+    end if;
+    if v_row.unit_cost is distinct from 12.50 then
+      raise exception 'unit_cost legado deveria ser preservado (12.50), veio %', v_row.unit_cost;
+    end if;
+    if v_row.minimum_stock <> 9 then
+      raise exception 'minimum_stock deveria ser 9, veio %', v_row.minimum_stock;
+    end if;
+
+    v_status := 'PASS';
+    v_details := 'size/material/unit_cost legados preservados; minimum_stock=' || v_row.minimum_stock;
+  exception when others then
+    v_status := 'FAIL';
+    v_details := sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.34 [SET ROLE real] update_packaging preserva size/material/unit_cost legados quando as chaves não são enviadas', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.34 [SET ROLE real] update_packaging preserva size/material/unit_cost legados quando as chaves não são enviadas', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.35 [SET ROLE real] update_packaging rejeita novo size fora do enum
+-- quando a chave É enviada explicitamente (diferente de 10.34, onde a
+-- chave ausente preserva o valor legado sem revalidar).
+do $$
+declare
+  v_user_id uuid;
+  v_packaging_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_packaging_id from zz_fixtures where key = 'packaging_id_legacy';
+
+  begin
+    set local role service_role;
+    perform public.update_packaging(v_packaging_id, jsonb_build_object('size', 'XG'), v_user_id);
+    v_status := 'FAIL';
+    v_details := 'size=XG deveria ter sido rejeitado (fora do enum PP/P/M/G/GG)';
+  exception when others then
+    if sqlerrm like '%size inválido%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'erro inesperado: ' || sqlerrm;
+    end if;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.35 [SET ROLE real] update_packaging rejeita novo size fora do enum PP/P/M/G/GG', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.35 [SET ROLE real] update_packaging rejeita novo size fora do enum PP/P/M/G/GG', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.36 [SET ROLE real] update_packaging ativa e desativa via is_active —
+-- mesmo contrato PATCH, sem rota redundante.
+do $$
+declare
+  v_user_id uuid;
+  v_packaging_id uuid;
+  v_row public.packaging;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role service_role;
+    v_packaging_id := (public.create_packaging('Embalagem para ativar/desativar', null, null, null, null, v_user_id)).id;
+
+    v_row := public.update_packaging(v_packaging_id, jsonb_build_object('is_active', false), v_user_id);
+    if v_row.is_active is distinct from false then
+      raise exception 'esperado is_active=false após desativar, veio %', v_row.is_active;
+    end if;
+
+    v_row := public.update_packaging(v_packaging_id, jsonb_build_object('is_active', true), v_user_id);
+    if v_row.is_active is distinct from true then
+      raise exception 'esperado is_active=true após reativar, veio %', v_row.is_active;
+    end if;
+
+    v_status := 'PASS';
+    v_details := 'desativou e reativou corretamente';
+  exception when others then
+    v_status := 'FAIL';
+    v_details := sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.36 [SET ROLE real] update_packaging ativa e desativa via is_active', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.36 [SET ROLE real] update_packaging ativa e desativa via is_active', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.37 [SET ROLE real] update_packaging retorna erro reconhecível para
+-- embalagem inexistente (uuid válido, sem linha correspondente).
+do $$
+declare
+  v_user_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role service_role;
+    perform public.update_packaging(
+      '00000000-0000-0000-0000-000000000000'::uuid,
+      jsonb_build_object('minimum_stock', 1),
+      v_user_id
+    );
+    v_status := 'FAIL';
+    v_details := 'embalagem inexistente deveria ter sido rejeitada';
+  exception when others then
+    if sqlerrm like '%não encontrado%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'erro inesperado: ' || sqlerrm;
+    end if;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.37 [SET ROLE real] update_packaging rejeita embalagem inexistente', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.37 [SET ROLE real] update_packaging rejeita embalagem inexistente', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.38 [SET ROLE real] delete_packaging retorna erro reconhecível para
+-- embalagem inexistente.
+do $$
+declare
+  v_user_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role service_role;
+    perform public.delete_packaging('00000000-0000-0000-0000-000000000000'::uuid, v_user_id);
+    v_status := 'FAIL';
+    v_details := 'embalagem inexistente deveria ter sido rejeitada';
+  exception when others then
+    if sqlerrm like '%não encontrado%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'erro inesperado: ' || sqlerrm;
+    end if;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.38 [SET ROLE real] delete_packaging rejeita embalagem inexistente', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.38 [SET ROLE real] delete_packaging rejeita embalagem inexistente', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.39 [SET ROLE real] create_packaging rejeita nome vazio mesmo chamada
+-- diretamente (NOT NULL sozinho não barra '').
+do $$
+declare
+  v_user_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role service_role;
+    perform public.create_packaging('   ', null, null, null, null, v_user_id);
+    v_status := 'FAIL';
+    v_details := 'nome vazio (só espaços) deveria ter sido rejeitado';
+  exception when others then
+    if sqlerrm like '%name não pode ser vazio%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'erro inesperado: ' || sqlerrm;
+    end if;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.39 [SET ROLE real] create_packaging rejeita nome vazio (chamada direta, fora da Edge Function)', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.39 [SET ROLE real] create_packaging rejeita nome vazio (chamada direta, fora da Edge Function)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.40 [SET ROLE real] create_packaging rejeita minimum_stock negativo
+-- (CHECK da tabela, Migration 18 — não uma checagem redundante da
+-- function).
+do $$
+declare
+  v_user_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+
+  begin
+    set local role service_role;
+    perform public.create_packaging('Embalagem com estoque negativo', null, null, -1, null, v_user_id);
+    v_status := 'FAIL';
+    v_details := 'minimum_stock=-1 deveria ter sido rejeitado pela CHECK (minimum_stock >= 0)';
+  exception when check_violation then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.40 [SET ROLE real] create_packaging rejeita minimum_stock negativo (CHECK da tabela)', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.40 [SET ROLE real] create_packaging rejeita minimum_stock negativo (CHECK da tabela)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.41 [SET ROLE real] update_packaging rejeita nome vazio.
+do $$
+declare
+  v_user_id uuid;
+  v_packaging_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_packaging_id from zz_fixtures where key = 'packaging_id_legacy';
+
+  begin
+    set local role service_role;
+    perform public.update_packaging(v_packaging_id, jsonb_build_object('name', '   '), v_user_id);
+    v_status := 'FAIL';
+    v_details := 'nome vazio (só espaços) deveria ter sido rejeitado';
+  exception when others then
+    if sqlerrm like '%name não pode ser vazio%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'erro inesperado: ' || sqlerrm;
+    end if;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.41 [SET ROLE real] update_packaging rejeita nome vazio', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.41 [SET ROLE real] update_packaging rejeita nome vazio', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.42 [SET ROLE real] update_packaging rejeita is_active null explícito
+-- (coluna NOT NULL) quando a chave é enviada com valor JSON null.
+do $$
+declare
+  v_user_id uuid;
+  v_packaging_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_packaging_id from zz_fixtures where key = 'packaging_id_legacy';
+
+  begin
+    set local role service_role;
+    perform public.update_packaging(v_packaging_id, jsonb_build_object('is_active', null), v_user_id);
+    v_status := 'FAIL';
+    v_details := 'is_active=null deveria ter sido rejeitado (coluna NOT NULL)';
+  exception when not_null_violation then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.42 [SET ROLE real] update_packaging rejeita is_active null explícito (NOT NULL)', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.42 [SET ROLE real] update_packaging rejeita is_active null explícito (NOT NULL)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.43 [SET ROLE real] update_packaging rejeita minimum_stock negativo
+-- (CHECK da tabela).
+do $$
+declare
+  v_user_id uuid;
+  v_packaging_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_packaging_id from zz_fixtures where key = 'packaging_id_legacy';
+
+  begin
+    set local role service_role;
+    perform public.update_packaging(v_packaging_id, jsonb_build_object('minimum_stock', -3), v_user_id);
+    v_status := 'FAIL';
+    v_details := 'minimum_stock=-3 deveria ter sido rejeitado pela CHECK (minimum_stock >= 0)';
+  exception when check_violation then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.43 [SET ROLE real] update_packaging rejeita minimum_stock negativo (CHECK da tabela)', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.43 [SET ROLE real] update_packaging rejeita minimum_stock negativo (CHECK da tabela)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.44 [SET ROLE real] update_packaging rejeita p_patch nulo e '{}' —
+-- nunca vira um UPDATE vazio silencioso.
+do $$
+declare
+  v_user_id uuid;
+  v_packaging_id uuid;
+  v_status text;
+  v_details text;
+  v_null_rejected boolean := false;
+  v_empty_rejected boolean := false;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_packaging_id from zz_fixtures where key = 'packaging_id_legacy';
+
+  set local role service_role;
+
+  begin
+    perform public.update_packaging(v_packaging_id, null, v_user_id);
+  exception when others then
+    if sqlerrm like '%p_patch vazio%' then
+      v_null_rejected := true;
+    end if;
+  end;
+
+  begin
+    perform public.update_packaging(v_packaging_id, '{}'::jsonb, v_user_id);
+  exception when others then
+    if sqlerrm like '%p_patch vazio%' then
+      v_empty_rejected := true;
+    end if;
+  end;
+
+  reset role;
+
+  if v_null_rejected and v_empty_rejected then
+    v_status := 'PASS';
+    v_details := 'p_patch nulo e {} rejeitados corretamente';
+  else
+    v_status := 'FAIL';
+    v_details := 'null_rejected=' || v_null_rejected || ' empty_rejected=' || v_empty_rejected;
+  end if;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.44 [SET ROLE real] update_packaging rejeita p_patch nulo e vazio ({})', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.44 [SET ROLE real] update_packaging rejeita p_patch nulo e vazio ({})', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.45 [SET ROLE real] update_packaging rejeita chave desconhecida em
+-- p_patch — não é só silenciosamente removida por jsonb_whitelist.
+do $$
+declare
+  v_user_id uuid;
+  v_packaging_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_packaging_id from zz_fixtures where key = 'packaging_id_legacy';
+
+  begin
+    set local role service_role;
+    perform public.update_packaging(v_packaging_id, jsonb_build_object('material', 'titânio'), v_user_id);
+    v_status := 'FAIL';
+    v_details := 'chave desconhecida (material) deveria ter sido rejeitada, não silenciosamente ignorada';
+  exception when others then
+    if sqlerrm like '%chave(s) não suportada(s)%' then
+      v_status := 'PASS';
+      v_details := sqlerrm;
+    else
+      v_status := 'FAIL';
+      v_details := 'erro inesperado: ' || sqlerrm;
+    end if;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.45 [SET ROLE real] update_packaging rejeita chave desconhecida em p_patch (não silenciosamente removida)', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.45 [SET ROLE real] update_packaging rejeita chave desconhecida em p_patch (não silenciosamente removida)', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.46 [SET ROLE real] delete_packaging exclui fisicamente uma embalagem
+-- nunca utilizada (sem vínculo em product_packaging) — packaging_id_created,
+-- criada na 10.28.
+do $$
+declare
+  v_user_id uuid;
+  v_packaging_id uuid;
+  v_status text;
+  v_details text;
+  v_count integer;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_packaging_id from zz_fixtures where key = 'packaging_id_created';
+
+  begin
+    set local role service_role;
+    perform public.delete_packaging(v_packaging_id, v_user_id);
+
+    select count(*) into v_count from public.packaging where id = v_packaging_id;
+    if v_count <> 0 then
+      raise exception 'embalagem deveria ter sido excluída fisicamente, ainda encontrada';
+    end if;
+
+    v_status := 'PASS';
+    v_details := 'embalagem sem vínculo excluída com sucesso';
+  exception when others then
+    v_status := 'FAIL';
+    v_details := sqlerrm;
+  end;
+
+  reset role;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.46 [SET ROLE real] delete_packaging exclui fisicamente uma embalagem nunca utilizada', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.46 [SET ROLE real] delete_packaging exclui fisicamente uma embalagem nunca utilizada', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.47 [SET ROLE real] delete_packaging bloqueia exclusão de embalagem
+-- vinculada a product_packaging e não remove o vínculo nem executa
+-- cascata. Cria uma embalagem nova e vincula via set_product_composition
+-- (mesmo caminho real de escrita da composição — nunca um INSERT bruto em
+-- product_packaging) para não depender do estado remanescente de outras
+-- seções.
+do $$
+declare
+  v_user_id uuid;
+  v_product_id uuid;
+  v_accessory_id_1 uuid;
+  v_packaging_id uuid;
+  v_status text;
+  v_details text;
+  v_link_count_before integer;
+  v_link_count_after integer;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+  select value::uuid into v_accessory_id_1 from zz_fixtures where key = 'accessory_id_1';
+
+  begin
+    set local role service_role;
+    v_packaging_id := (public.create_packaging('Embalagem vinculada a produto (teste)', null, null, null, null, v_user_id)).id;
+    reset role;
+
+    -- Vincula via o caminho real de escrita (nunca um INSERT bruto em
+    -- product_packaging) — preserva a composição de acessórios já existente
+    -- do produto (accessory_id_1, estado deixado pela 10.4) para não
+    -- interferir em nenhum teste anterior.
+    perform public.set_product_composition(
+      v_product_id,
+      jsonb_build_array(jsonb_build_object('id', v_accessory_id_1, 'quantity', 5)),
+      jsonb_build_array(jsonb_build_object('id', v_packaging_id, 'quantity', 1)),
+      v_user_id
+    );
+
+    select count(*) into v_link_count_before from public.product_packaging where packaging_id = v_packaging_id;
+    if v_link_count_before <> 1 then
+      raise exception 'esperado 1 vínculo criado via set_product_composition, encontrado %', v_link_count_before;
+    end if;
+
+    set local role service_role;
+    begin
+      perform public.delete_packaging(v_packaging_id, v_user_id);
+      v_status := 'FAIL';
+      v_details := 'delete_packaging deveria ter sido bloqueado (embalagem vinculada a um produto)';
+    exception when others then
+      if sqlerrm like '%vinculada a um produto e não pode ser excluída%' then
+        v_status := 'PASS';
+        v_details := sqlerrm;
+      else
+        v_status := 'FAIL';
+        v_details := 'erro inesperado: ' || sqlerrm;
+      end if;
+    end;
+    reset role;
+
+    select count(*) into v_link_count_after from public.product_packaging where packaging_id = v_packaging_id;
+
+    if v_status = 'PASS' and v_link_count_after <> v_link_count_before then
+      v_status := 'FAIL';
+      v_details := 'vínculo em product_packaging não deveria ser alterado (antes=' || v_link_count_before || ' depois=' || v_link_count_after || ')';
+    end if;
+
+    if v_status = 'PASS' and not exists (select 1 from public.packaging where id = v_packaging_id) then
+      v_status := 'FAIL';
+      v_details := 'embalagem não deveria ter sido excluída (bloqueio deveria impedir o DELETE)';
+    end if;
+  exception when others then
+    reset role;
+    v_status := 'FAIL';
+    v_details := 'erro no setup do teste: ' || sqlerrm;
+  end;
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.47 [SET ROLE real] delete_packaging bloqueia exclusão vinculada a product_packaging, sem cascata', v_status, v_details);
+exception when others then
+  reset role;
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.47 [SET ROLE real] delete_packaging bloqueia exclusão vinculada a product_packaging, sem cascata', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.48 [SET ROLE real] authenticated NÃO consegue executar delete_packaging
+-- diretamente (EXECUTE só concedido a service_role).
+do $$
+declare
+  v_auth_user_id_text text;
+  v_user_id uuid;
+  v_packaging_id uuid;
+  v_status text;
+  v_details text;
+begin
+  select value into v_auth_user_id_text from zz_fixtures where key = 'auth_user_id';
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_packaging_id from zz_fixtures where key = 'packaging_id_legacy';
+
+  begin
+    set local role authenticated;
+    perform set_config(
+      'request.jwt.claims',
+      json_build_object('sub', v_auth_user_id_text, 'role', 'authenticated')::text,
+      true
+    );
+
+    perform public.delete_packaging(v_packaging_id, v_user_id);
+    v_status := 'FAIL';
+    v_details := 'delete_packaging foi executado por authenticated (não deveria)';
+  exception when insufficient_privilege then
+    v_status := 'PASS';
+    v_details := sqlerrm;
+  when others then
+    v_status := 'FAIL';
+    v_details := 'erro inesperado: ' || sqlerrm;
+  end;
+
+  reset role;
+  reset "request.jwt.claims";
+
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.48 [SET ROLE real] authenticated não consegue executar delete_packaging diretamente', v_status, v_details);
+exception when others then
+  reset role;
+  reset "request.jwt.claims";
+  insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.48 [SET ROLE real] authenticated não consegue executar delete_packaging diretamente', 'FAIL', 'erro no bloco de teste: ' || sqlerrm);
+end $$;
+
+-- 10.49 Grants: packaging perde INSERT/UPDATE de authenticated (mantém
+-- SELECT, sem DELETE); create_packaging/update_packaging/delete_packaging
+-- só têm EXECUTE concedido a service_role.
+do $$
+begin
+  begin
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.49a authenticated mantém SELECT em packaging',
+      case when has_table_privilege('authenticated', 'public.packaging', 'SELECT') then 'PASS' else 'FAIL' end,
+      'SELECT=' || has_table_privilege('authenticated', 'public.packaging', 'SELECT'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.49b authenticated NÃO tem mais INSERT em packaging',
+      case when has_table_privilege('authenticated', 'public.packaging', 'INSERT') then 'FAIL' else 'PASS' end,
+      'INSERT=' || has_table_privilege('authenticated', 'public.packaging', 'INSERT'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.49c authenticated NÃO tem mais UPDATE em packaging.name',
+      case when has_column_privilege('authenticated', 'public.packaging', 'name', 'UPDATE') then 'FAIL' else 'PASS' end,
+      'UPDATE(name)=' || has_column_privilege('authenticated', 'public.packaging', 'name', 'UPDATE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.49d authenticated não tem DELETE em packaging',
+      case when has_table_privilege('authenticated', 'public.packaging', 'DELETE') then 'FAIL' else 'PASS' end,
+      'DELETE=' || has_table_privilege('authenticated', 'public.packaging', 'DELETE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.49e anon não tem DELETE em packaging',
+      case when has_table_privilege('anon', 'public.packaging', 'DELETE') then 'FAIL' else 'PASS' end,
+      'DELETE=' || has_table_privilege('anon', 'public.packaging', 'DELETE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.49f service_role tem EXECUTE em create_packaging',
+      case when has_function_privilege('service_role', 'public.create_packaging(text, text, text, integer, boolean, uuid)', 'EXECUTE') then 'PASS' else 'FAIL' end,
+      'EXECUTE=' || has_function_privilege('service_role', 'public.create_packaging(text, text, text, integer, boolean, uuid)', 'EXECUTE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.49g authenticated NÃO tem EXECUTE em create_packaging',
+      case when has_function_privilege('authenticated', 'public.create_packaging(text, text, text, integer, boolean, uuid)', 'EXECUTE') then 'FAIL' else 'PASS' end,
+      'EXECUTE=' || has_function_privilege('authenticated', 'public.create_packaging(text, text, text, integer, boolean, uuid)', 'EXECUTE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.49h service_role tem EXECUTE em update_packaging',
+      case when has_function_privilege('service_role', 'public.update_packaging(uuid, jsonb, uuid)', 'EXECUTE') then 'PASS' else 'FAIL' end,
+      'EXECUTE=' || has_function_privilege('service_role', 'public.update_packaging(uuid, jsonb, uuid)', 'EXECUTE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.49i authenticated NÃO tem EXECUTE em update_packaging',
+      case when has_function_privilege('authenticated', 'public.update_packaging(uuid, jsonb, uuid)', 'EXECUTE') then 'FAIL' else 'PASS' end,
+      'EXECUTE=' || has_function_privilege('authenticated', 'public.update_packaging(uuid, jsonb, uuid)', 'EXECUTE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.49j service_role tem EXECUTE em delete_packaging',
+      case when has_function_privilege('service_role', 'public.delete_packaging(uuid, uuid)', 'EXECUTE') then 'PASS' else 'FAIL' end,
+      'EXECUTE=' || has_function_privilege('service_role', 'public.delete_packaging(uuid, uuid)', 'EXECUTE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.49k authenticated NÃO tem EXECUTE em delete_packaging',
+      case when has_function_privilege('authenticated', 'public.delete_packaging(uuid, uuid)', 'EXECUTE') then 'FAIL' else 'PASS' end,
+      'EXECUTE=' || has_function_privilege('authenticated', 'public.delete_packaging(uuid, uuid)', 'EXECUTE'));
+
+    insert into zz_test_results(section, test_name, status, details)
+    values ('10', '10.49l anon NÃO tem EXECUTE em delete_packaging',
+      case when has_function_privilege('anon', 'public.delete_packaging(uuid, uuid)', 'EXECUTE') then 'FAIL' else 'PASS' end,
+      'EXECUTE=' || has_function_privilege('anon', 'public.delete_packaging(uuid, uuid)', 'EXECUTE'));
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('10', '10.49 checagens de privilégio nas novas functions protegidas de Embalagens', 'FAIL', sqlerrm);
+  end;
+end $$;
+
 -- =============================================================================
 -- SEÇÃO 11 — Formatação de order_number (FS-XX-YYY, migration
 -- 20260820233219_update_order_number_format.sql)

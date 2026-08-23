@@ -400,6 +400,9 @@ verify_jwt = false
 [functions.accessories]
 verify_jwt = false
 
+[functions.packaging]
+verify_jwt = false
+
 [functions.orders]
 verify_jwt = false
 
