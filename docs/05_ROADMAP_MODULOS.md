@@ -220,6 +220,24 @@ ainda):
   composição da Petlink) segue bloqueado até essas operações existirem, serem testadas e o backend
   ser deployado com autorização explícita.
 
+**Progresso registrado em 2026-08-24** (backend publicado e sincronizado; criação, edição,
+ativação/desativação e exclusão segura completas na interface, validadas manualmente contra o
+backend remoto):
+
+- **Incrementos 2/3** — migrations `20260822120000`/`20260823120000` (RPCs `create_accessory`/
+  `update_accessory`/`delete_accessory` e equivalentes de `packaging`) **aplicadas no projeto
+  Supabase remoto** (`tjhacqreupfqefntjevf`); Edge Functions `accessories`/`packaging`
+  **publicadas e ativas** (`supabase functions deploy`). 28/28 migrations do projeto sincronizadas,
+  nenhuma pendente.
+- **Incremento 4 e seguintes** — a interface de Estoque deixou de ser somente leitura: criação,
+  edição, ativação/desativação (com confirmação explícita) e exclusão física segura (bloqueada
+  quando há vínculo em `product_accessories`/`product_packaging`, orientando desativação em vez de
+  excluir) estão implementadas para Acessórios e Embalagens, com testes automatizados (frontend +
+  Deno) e **validação manual no navegador aprovada pelo usuário contra o backend remoto**.
+- Cadastro oficial (incluindo a composição da Petlink) **continua bloqueado** — a interface estar
+  completa e validada não libera automaticamente o cadastro oficial; isso depende de autorização
+  explícita separada, conforme §6.
+
 Regras de campos/tamanho/custo/exclusão aprovadas: ver `03_MODELO_BANCO_DADOS.md` §13.3.
 
 ### Padrão visual e funcional
@@ -266,14 +284,17 @@ independentemente de qual opção for escolhida:
 ### Status
 
 Definição funcional: ✅ aprovada. Regras do cadastro mestre: ✅ aprovadas (ver doc `03` §13.3).
-Backend protegido (Acessórios e Embalagens, Incrementos 2–3): ✅ implementado e testado
-localmente, ⏳ não deployado. Listagem no frontend (Incremento 4): ✅ implementada, testada e
-validada manualmente para `/estoque/acessorios`; Embalagens usa o mesmo componente (mesma
-cobertura de teste), validação manual dedicada ainda não registrada. Criação/edição/ativação/
-desativação/exclusão pela interface: ❌ não iniciadas. Cadastro oficial: 🔒 ainda não liberado.
-Plano: 8 incrementos definidos, 4 com trabalho local concluído. Nenhum percentual macro (seções
-2/5) é alterado por esta entrada — implementação local/testada ainda não é "deployado e validado
-em produção", critério exigido pela regra de §1 para a Fase 3/4 receberem peso cheio.
+Backend protegido (Acessórios e Embalagens, Incrementos 2–3): ✅ implementado, testado e
+**publicado no projeto Supabase remoto** (Edge Functions `accessories`/`packaging` ativas,
+migrations aplicadas). Interface de Estoque (listagem, busca, filtros, ordenação, criação, edição,
+ativação/desativação, exclusão segura): ✅ implementada, testada e **validada manualmente pelo
+usuário contra o backend remoto** para Acessórios e Embalagens. Hospedagem pública do frontend:
+⏳ configurada (Vercel, `frontend/vercel.json` — procedimento completo no `README.md` da raiz),
+**URL ainda não verificada**. Cadastro oficial: 🔒 ainda não liberado — depende de autorização
+explícita separada (§6), independente do estado técnico acima. Plano: 8 incrementos definidos,
+backend e interface tecnicamente completos e publicados. O percentual macro (seções 2/5) deste
+roadmap não foi recalculado nesta entrada — fica registrado como pendência para uma próxima
+atualização dedicada do documento.
 
 ---
 
@@ -288,3 +309,4 @@ em produção", critério exigido pela regra de §1 para a Fase 3/4 receberem pe
 | 2026-08-22 | Módulo 1: padrão de busca rápida + autocomplete/typeahead + ordenação por coluna (menu estilo filtro de tabela), já validado em Clientes/Produtos/Empresas, estendido para a listagem de Pedidos (`OrdersPage.tsx`) — busca por número do pedido, cliente/empresa exibido ou nome de qualquer produto do pedido; ordenação em todas as 11 colunas de dados (Nº pedido com comparação numérica natural, Total/Saldo devedor numéricos, Prazo pela data real). Componente compartilhado `SearchAutocomplete.tsx` ganhou um campo opcional `description` (badge de tipo — "Pedido"/"Cliente"/"Produto") para diferenciar sugestões heterogêneas; Clientes/Produtos/Empresas não passam esse campo e continuam com a mesma renderização de antes (suítes de teste dos 3 módulos reexecutadas, sem regressão). Nenhuma alteração na criação/edição de pedidos, nos fluxos de status operacional/financeiro, nem no contrato de `vw_order_summary`. Adicionado à seção 6 novo gatilho pendente: quando os fluxos de status operacional e financeiro de Pedidos estiverem funcionais e validados de ponta a ponta, retornar à listagem para criar botões de filtro rápido por status (incluindo "Aguardando pagamento") — não implementado nesta rodada, só registrado como pendência; nenhum percentual macro alterado por esta entrada. |
 | 2026-08-22 | Módulo 3 (Estoque): auditoria somente leitura seguida de planejamento aprovado para a interface de cadastro mestre de acessórios/embalagens (Incremento 1 do plano de 8 incrementos) — nenhum código, migration, Edge Function ou dado remoto alterado por esta entrada, só documentação. Registradas em `03_MODELO_BANCO_DADOS.md` §13.3: campos da interface (Nome/Tamanho/Variante/Estoque mínimo/Ativo/Custo somente leitura), remoção de Material e Fornecedor da UI (colunas preservadas/inexistentes no banco), Tamanho opcional com 5 opções oficiais (PP/P/M/G/GG) sem CHECK constraint e sem conversão automática de valores legados, `unit_cost` somente leitura com lembrete de retomada quando compras/entradas de estoque existirem, e regras de exclusão física guardada (exigirá migration própria, ainda não criada). Adicionadas a este roadmap: §8 (regra permanente de padrão visual/funcional para novos módulos) e §9 (plano de Módulo 3 — busca/filtros/ordenação independentes por aba, rotas planejadas `/estoque/*` não implementadas, contrato de escrita ainda em aberto entre acesso direto e Edge Function, recomendação por Edge Function). Nenhum percentual macro alterado por esta entrada — plano aprovado não é implementação. |
 | 2026-08-22/23 | Módulo 3 (Estoque), Incrementos 2–4 implementados e testados localmente (nada deployado/liberado): Incremento 2 — backend protegido de Acessórios (`create_accessory`/`update_accessory`/`delete_accessory`, Edge Function `accessories`, migration local). Incremento 3 — mesmo backend espelhado para Embalagens (`create_packaging`/`update_packaging`/`delete_packaging`, Edge Function `packaging`). Incremento 4 — listagem de Estoque no frontend (`/estoque`, `/estoque/acessorios`, `/estoque/embalagens`, `InventoryPage.tsx`): busca, filtro por status e ordenação para as duas áreas, reaproveitando o padrão visual já aprovado nos demais módulos; somente leitura nesta etapa (sem criação/edição/exclusão/ativação — a coluna "Ativo" é um indicador informativo, não um controle, e não há coluna de ações). Validação manual da área `/estoque/acessorios` aprovada pelo usuário em 2026-08-23. Cadastro oficial (incl. composição da Petlink) segue bloqueado até as operações de escrita existirem na interface e o backend ser deployado com autorização explícita. Nenhum percentual macro alterado — trabalho local/testado ainda não atende ao critério "deployado e validado em produção" exigido pela regra de §1. |
+| 2026-08-24 | Módulo 3 (Estoque): criação, edição, ativação/desativação (com confirmação explícita) e exclusão física segura completas na interface para Acessórios e Embalagens, com testes automatizados (frontend + Deno) e validação manual no navegador aprovada pelo usuário. Backend publicado no projeto Supabase remoto: migrations `20260822120000`/`20260823120000` aplicadas (28/28 sincronizadas, nenhuma pendente), Edge Functions `accessories`/`packaging` deployadas e ativas — corrige a informação desatualizada das entradas anteriores de que este backend seguia "não deployado". Uma falha de conexão nas escritas (Edge Functions/migrations ainda não publicadas no momento da primeira validação manual) foi diagnosticada e corrigida na mesma janela de trabalho. Preparado (não executado) o deploy do frontend: `frontend/vercel.json` (Root Directory `frontend`, build `npm run build`, output `dist`, rewrite de SPA para `index.html`) e `"engines"` em `frontend/package.json`; hospedagem pública ainda **sem URL verificada**. Cadastro oficial (incl. composição da Petlink) continua bloqueado — depende de autorização explícita separada (§6), não alterada por esta entrada. Nenhum percentual macro recalculado. |

@@ -55,6 +55,53 @@ npm run dev
 | `npm run test`          | Roda os testes (Vitest) uma vez     |
 | `npm run test:watch`    | Roda os testes em modo watch        |
 
+## Deploy do frontend (Vercel)
+
+O frontend está configurado para deploy na Vercel (`frontend/vercel.json`), mas
+**ainda não há uma URL pública verificada** — a configuração abaixo prepara o
+projeto; a criação do projeto na Vercel e a autenticação da CLI continuam
+sendo um passo manual, feito uma única vez por quem tem acesso à conta.
+
+- **Root Directory:** `frontend`
+- **Framework preset:** Vite
+- **Install Command:** `npm ci` (usa `frontend/package-lock.json`)
+- **Build Command:** `npm run build`
+- **Output Directory:** `dist`
+- **Node.js:** >= 20.19 (exigido pelo Vite 8 — ver `"engines"` em `frontend/package.json`)
+- **SPA fallback:** `frontend/vercel.json` reescreve toda rota para
+  `/index.html`, necessário porque o app usa `react-router-dom` com
+  `BrowserRouter` (rotas como `/estoque/acessorios` precisam funcionar em
+  acesso direto/refresh, não só em navegação client-side).
+
+### Variáveis de ambiente na Vercel
+
+Configurar como **Environment Variables** do projeto na Vercel (nunca no
+Git), com os mesmos nomes já usados por `frontend/.env.local`:
+
+| Nome | Conteúdo |
+| --- | --- |
+| `VITE_SUPABASE_URL` | URL pública do projeto Supabase (`https://tjhacqreupfqefntjevf.supabase.co`) |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Chave publishable/anon (pública, protegida por RLS) |
+
+Nunca configurar `SUPABASE_SERVICE_ROLE_KEY` (ou qualquer secret key) neste
+projeto Vercel — o frontend nunca deve ter acesso a uma chave de service
+role; ela só existe no ambiente das Edge Functions.
+
+### Procedimento (preview e produção)
+
+```bash
+cd frontend
+vercel login                 # uma vez, autentica a CLI (fluxo interativo/navegador)
+vercel link                  # associa esta pasta a um projeto Vercel (Root Directory = frontend)
+vercel                       # deploy de preview da branch atual
+vercel --prod                # promove para produção — só depois de validação/aprovação
+```
+
+Alternativa: conectar o repositório GitHub à Vercel pela própria interface
+web (Import Project) — nesse modo, cada push passa a gerar preview
+automaticamente, e a branch de produção é escolhida explicitamente nas
+configurações do projeto (não é decidida por este README).
+
 ## Banco de dados (Supabase)
 
 O projeto Supabase já está criado e vinculado via CLI (`supabase link`), na
