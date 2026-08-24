@@ -7,8 +7,9 @@ import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { InventoryItemForm, type InventoryItemFormValues } from '@/components/inventory/InventoryItemForm'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useAccessories } from '@/hooks/useAccessories'
 import { usePackaging } from '@/hooks/usePackaging'
@@ -17,13 +18,15 @@ import { normalizeForSearch } from '@/lib/forms/textSearch'
 import { cn } from '@/lib/utils'
 
 // Módulo 3 (Estoque). Incremento 4: consulta e navegação. Incremento 5:
-// CRIAÇÃO de novos acessórios/embalagens (create_accessory/
-// create_packaging). Este incremento acrescenta EDIÇÃO (update_accessory/
-// update_packaging) — só Nome/Tamanho/Variante/Estoque mínimo são
-// editáveis; ativação/desativação e exclusão continuam fora de escopo,
-// propositalmente sem nenhum campo Ativo nos formulários (novo registro
-// nasce ativo pelo default do banco; um registro existente nunca tem seu
-// status alterado por aqui).
+// CRIAÇÃO. Incremento 6: EDIÇÃO. Incremento 7: ATIVAÇÃO/DESATIVAÇÃO (Switch
+// funcional na coluna "Ativo", só `{ is_active }`). Este incremento
+// completa o MVP local com EXCLUSÃO FÍSICA SEGURA — backend já protegido
+// desde os Incrementos 2/3 (delete_accessory/delete_packaging, SECURITY
+// DEFINER, bloqueia com 409 quando há vínculo em product_accessories/
+// product_packaging, nunca cascateia); aqui só o botão "Excluir" por linha
+// + diálogo de confirmação + o método `delete` dos hooks, reaproveitando
+// integralmente a Edge Function/RPC já existentes (nenhuma rota nova,
+// nenhuma migration necessária).
 
 function toErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message
@@ -155,22 +158,6 @@ function StatusFilter({
   )
 }
 
-// Indicador só informativo (nunca um controle) — Ativo/Inativo nesta etapa
-// não é editável (sem Switch), conforme aprovado para o Incremento 4. O
-// texto em si já é o nome acessível, sem necessidade de aria extra.
-function ActiveBadge({ isActive }: { isActive: boolean }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
-        isActive ? 'bg-brand-primary-soft text-brand-primary-dark' : 'bg-muted text-muted-foreground',
-      )}
-    >
-      {isActive ? 'Ativo' : 'Inativo'}
-    </span>
-  )
-}
-
 interface InventoryAreaPanelProps {
   items: InventoryItem[]
   isLoading: boolean
@@ -195,6 +182,20 @@ interface InventoryAreaPanelProps {
   createButtonLabel: string
   onOpenCreateDialog: () => void
   onEditItem: (item: InventoryItem) => void
+  // Usado para montar o nome acessível do Switch ("Ativar acessório Nome"/
+  // "Desativar embalagem Nome") — cada área passa o substantivo no singular
+  // que a identifica.
+  itemNounSingular: string
+  onToggleActive: (item: InventoryItem) => void
+  // Só o item com a mutation em andamento fica com o Switch desabilitado —
+  // nunca a listagem inteira (mesmo padrão já aprovado em
+  // CompaniesPage.tsx: pendingToggleId).
+  pendingToggleId: string | null
+  // Abre o diálogo de confirmação — nunca chama a API diretamente a partir
+  // da listagem; a exclusão de fato só acontece depois de "Excluir
+  // definitivamente" no diálogo (ver AccessoriesInventoryPage/
+  // PackagingInventoryPage).
+  onDeleteItem: (item: InventoryItem) => void
 }
 
 // Painel completo de uma área (busca + filtro + ordenação + tabela +
@@ -219,6 +220,10 @@ function InventoryAreaPanel({
   createButtonLabel,
   onOpenCreateDialog,
   onEditItem,
+  itemNounSingular,
+  onToggleActive,
+  pendingToggleId,
+  onDeleteItem,
 }: InventoryAreaPanelProps) {
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all')
@@ -335,40 +340,40 @@ function InventoryAreaPanel({
           // Produtos/Empresas/Pedidos) — nenhuma coluna cortada em desktop
           // amplo.
           <div className="overflow-x-auto">
-            <Table className="min-w-[1000px] table-fixed text-[16px]">
+            <Table className="min-w-[1080px] table-fixed text-[16px]">
               <TableHeader>
                 <TableRow>
-                  <SortableColumnHeader column="name" label="Nome" sort={sort} onSortChange={setSort} className="w-[20%]" />
-                  <SortableColumnHeader column="size" label="Tamanho" sort={sort} onSortChange={setSort} className="w-[12%]" />
+                  <SortableColumnHeader column="name" label="Nome" sort={sort} onSortChange={setSort} className="w-[18%]" />
+                  <SortableColumnHeader column="size" label="Tamanho" sort={sort} onSortChange={setSort} className="w-[10%]" />
                   <SortableColumnHeader
                     column="variant"
                     label="Variante"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[18%]"
+                    className="w-[15%]"
                   />
                   <SortableColumnHeader
                     column="unit_cost"
                     label="Custo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[14%]"
+                    className="w-[13%]"
                   />
                   <SortableColumnHeader
                     column="minimum_stock"
                     label="Estoque mínimo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[12%]"
+                    className="w-[11%]"
                   />
                   <SortableColumnHeader
                     column="is_active"
                     label="Ativo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[10%]"
+                    className="w-[11%]"
                   />
-                  <TableHead className="h-auto w-[14%] py-2" />
+                  <TableHead className="h-auto w-[22%] py-2" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -396,17 +401,41 @@ function InventoryAreaPanel({
                       </TableCell>
                       <TableCell>{formatMinimumStock(item.minimum_stock)}</TableCell>
                       <TableCell>
-                        <ActiveBadge isActive={item.is_active} />
+                        <Switch
+                          checked={item.is_active}
+                          disabled={pendingToggleId === item.id}
+                          onCheckedChange={() => onToggleActive(item)}
+                          aria-label={`${item.is_active ? 'Desativar' : 'Ativar'} ${itemNounSingular} ${item.name}`}
+                          className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
+                        />
                       </TableCell>
                       <TableCell>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => onEditItem(item)}
-                          className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-                        >
-                          Editar
-                        </Button>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => onEditItem(item)}
+                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                          >
+                            Editar
+                          </Button>
+                          {/* variant="destructive" é intencionalmente sutil
+                              (bg-destructive/10, não um vermelho sólido) —
+                              não compete visualmente com "Editar"
+                              (brand-primary) nem com o botão primário "Novo
+                              X" da barra acima. aria-label sobrepõe o texto
+                              visível "Excluir" com o nome completo do item,
+                              mesmo idioma já usado no aria-label do Switch
+                              acima. */}
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => onDeleteItem(item)}
+                            aria-label={`Excluir ${itemNounSingular} ${item.name}`}
+                          >
+                            Excluir
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   )
@@ -482,7 +511,7 @@ function InventoryPageShell({ area, children }: { area: InventoryArea; children:
 // sucesso, e a listagem já reflete o novo item imediatamente (o hook
 // insere localmente, sem precisar de refetch).
 function AccessoriesInventoryPage() {
-  const { accessories, isLoading, error, refetch, create, update } = useAccessories()
+  const { accessories, isLoading, error, refetch, create, update, delete: deleteAccessoryItem } = useAccessories()
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -494,6 +523,19 @@ function AccessoriesInventoryPage() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
+
+  // Ativação/desativação: estado próprio desta área, independente do de
+  // criação/edição — só o item com a mutation em andamento entra aqui.
+  const [pendingToggleId, setPendingToggleId] = useState<string | null>(null)
+
+  // Exclusão: estado próprio, independente de criação/edição/ativação —
+  // deleteError fica dentro do próprio diálogo de confirmação (nunca vira
+  // toast), já que o usuário precisa decidir o próximo passo (Cancelar ou
+  // ir desativar) olhando para o item ainda visível no diálogo.
+  const [deletingItem, setDeletingItem] = useState<InventoryItem | null>(null)
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   function openCreateDialog() {
     setCreateError(null)
@@ -516,6 +558,50 @@ function AccessoriesInventoryPage() {
       }
     } finally {
       setIsSubmittingCreate(false)
+    }
+  }
+
+  // Envia só `{ is_active }` — o mesmo update_accessory usado pela edição,
+  // sem rota nova. Nenhum toast de sucesso: o próprio Switch (controlado
+  // por item.is_active) já reflete o resultado assim que o hook substitui o
+  // item local; em erro, o item nunca é substituído, então o Switch volta
+  // sozinho ao estado anterior ao ser reabilitado.
+  async function handleToggleActive(item: InventoryItem) {
+    setPendingToggleId(item.id)
+    try {
+      await update(item.id, { is_active: !item.is_active })
+    } catch (err) {
+      toast.error(toErrorMessage(err))
+    } finally {
+      setPendingToggleId(null)
+    }
+  }
+
+  function openDeleteDialog(item: InventoryItem) {
+    setDeletingItem(item)
+    setDeleteError(null)
+    setIsDeleteDialogOpen(true)
+  }
+
+  // delete_accessory (Edge Function -> RPC) já bloqueia com 409 quando o
+  // acessório está vinculado a um produto (product_accessories), com uma
+  // mensagem que já orienta desativar em vez de excluir — exibida aqui tal
+  // qual, sem reescrever. O item só sai do array local depois do await
+  // resolver com sucesso (useAccessories.delete) — em bloqueio/erro, o item
+  // permanece exatamente como estava e o diálogo continua aberto e
+  // funcional para o usuário decidir o próximo passo.
+  async function handleConfirmDelete() {
+    if (!deletingItem) return
+    setIsDeleting(true)
+    setDeleteError(null)
+    try {
+      await deleteAccessoryItem(deletingItem.id)
+      toast.success('Acessório excluído.')
+      setIsDeleteDialogOpen(false)
+    } catch (err) {
+      setDeleteError(toErrorMessage(err))
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -563,6 +649,10 @@ function AccessoriesInventoryPage() {
         createButtonLabel="Novo acessório"
         onOpenCreateDialog={openCreateDialog}
         onEditItem={openEditDialog}
+        itemNounSingular="acessório"
+        onToggleActive={(item) => void handleToggleActive(item)}
+        pendingToggleId={pendingToggleId}
+        onDeleteItem={openDeleteDialog}
       />
 
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
@@ -606,12 +696,43 @@ function AccessoriesInventoryPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Excluir acessório</DialogTitle>
+            <DialogDescription>
+              {deletingItem &&
+                `Tem certeza que deseja excluir "${deletingItem.name}"? Esta ação é permanente e não pode ser desfeita.`}
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && (
+            <p role="alert" className="text-destructive text-sm">
+              {deleteError}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsDeleteDialogOpen(false)}
+              disabled={isDeleting}
+              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+            >
+              Cancelar
+            </Button>
+            <Button type="button" variant="destructive" onClick={() => void handleConfirmDelete()} disabled={isDeleting}>
+              {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </InventoryPageShell>
   )
 }
 
 function PackagingInventoryPage() {
-  const { packaging, isLoading, error, refetch, create, update } = usePackaging()
+  const { packaging, isLoading, error, refetch, create, update, delete: deletePackagingItem } = usePackaging()
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -620,6 +741,13 @@ function PackagingInventoryPage() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
+
+  const [pendingToggleId, setPendingToggleId] = useState<string | null>(null)
+
+  const [deletingItem, setDeletingItem] = useState<InventoryItem | null>(null)
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   function openCreateDialog() {
     setCreateError(null)
@@ -642,6 +770,38 @@ function PackagingInventoryPage() {
       }
     } finally {
       setIsSubmittingCreate(false)
+    }
+  }
+
+  async function handleToggleActive(item: InventoryItem) {
+    setPendingToggleId(item.id)
+    try {
+      await update(item.id, { is_active: !item.is_active })
+    } catch (err) {
+      toast.error(toErrorMessage(err))
+    } finally {
+      setPendingToggleId(null)
+    }
+  }
+
+  function openDeleteDialog(item: InventoryItem) {
+    setDeletingItem(item)
+    setDeleteError(null)
+    setIsDeleteDialogOpen(true)
+  }
+
+  async function handleConfirmDelete() {
+    if (!deletingItem) return
+    setIsDeleting(true)
+    setDeleteError(null)
+    try {
+      await deletePackagingItem(deletingItem.id)
+      toast.success('Embalagem excluída.')
+      setIsDeleteDialogOpen(false)
+    } catch (err) {
+      setDeleteError(toErrorMessage(err))
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -689,6 +849,10 @@ function PackagingInventoryPage() {
         createButtonLabel="Nova embalagem"
         onOpenCreateDialog={openCreateDialog}
         onEditItem={openEditDialog}
+        itemNounSingular="embalagem"
+        onToggleActive={(item) => void handleToggleActive(item)}
+        pendingToggleId={pendingToggleId}
+        onDeleteItem={openDeleteDialog}
       />
 
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
@@ -730,6 +894,37 @@ function PackagingInventoryPage() {
               onCancel={() => setIsEditDialogOpen(false)}
             />
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Excluir embalagem</DialogTitle>
+            <DialogDescription>
+              {deletingItem &&
+                `Tem certeza que deseja excluir "${deletingItem.name}"? Esta ação é permanente e não pode ser desfeita.`}
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && (
+            <p role="alert" className="text-destructive text-sm">
+              {deleteError}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsDeleteDialogOpen(false)}
+              disabled={isDeleting}
+              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+            >
+              Cancelar
+            </Button>
+            <Button type="button" variant="destructive" onClick={() => void handleConfirmDelete()} disabled={isDeleting}>
+              {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </InventoryPageShell>

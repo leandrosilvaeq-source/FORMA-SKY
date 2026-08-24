@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { PT_BR_COLLATOR } from '@/components/dataTable/sorting'
 import {
   createPackaging,
+  deletePackaging,
   listPackaging,
   updatePackaging,
   type CreatePackagingInput,
@@ -17,6 +18,7 @@ interface UsePackagingResult {
   refetch: () => void
   create: (input: CreatePackagingInput) => Promise<Packaging>
   update: (id: string, input: UpdatePackagingInput) => Promise<Packaging>
+  delete: (id: string) => Promise<void>
 }
 
 function toApiError(err: unknown): ApiError {
@@ -78,5 +80,14 @@ export function usePackaging(): UsePackagingResult {
     return updated
   }, [])
 
-  return { packaging, isLoading, error, refetch, create, update }
+  // Exclusão física protegida (DELETE /packaging/:id -> delete_packaging):
+  // a Edge Function/RPC já bloqueia com erro de negócio (409, mensagem
+  // orientando desativação) quando a embalagem está vinculada a um produto
+  // — se deletePackaging rejeita, o item nunca é removido do array local.
+  const deleteItem = useCallback(async (id: string) => {
+    await deletePackaging(id)
+    setPackaging((current) => current.filter((item) => item.id !== id))
+  }, [])
+
+  return { packaging, isLoading, error, refetch, create, update, delete: deleteItem }
 }

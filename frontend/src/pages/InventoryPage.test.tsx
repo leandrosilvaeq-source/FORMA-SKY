@@ -61,6 +61,7 @@ function mockAccessories(
     refetch: ReturnType<typeof vi.fn>
     create: ReturnType<typeof vi.fn>
     update: ReturnType<typeof vi.fn>
+    delete: ReturnType<typeof vi.fn>
   }> = {},
 ) {
   useAccessoriesMock.mockReturnValue({
@@ -70,6 +71,7 @@ function mockAccessories(
     refetch: overrides.refetch ?? vi.fn(),
     create: overrides.create ?? vi.fn().mockResolvedValue(accessoryFixture()),
     update: overrides.update ?? vi.fn().mockResolvedValue(accessoryFixture()),
+    delete: overrides.delete ?? vi.fn().mockResolvedValue(undefined),
   })
 }
 
@@ -81,6 +83,7 @@ function mockPackaging(
     refetch: ReturnType<typeof vi.fn>
     create: ReturnType<typeof vi.fn>
     update: ReturnType<typeof vi.fn>
+    delete: ReturnType<typeof vi.fn>
   }> = {},
 ) {
   usePackagingMock.mockReturnValue({
@@ -90,6 +93,7 @@ function mockPackaging(
     refetch: overrides.refetch ?? vi.fn(),
     create: overrides.create ?? vi.fn().mockResolvedValue(packagingFixture()),
     update: overrides.update ?? vi.fn().mockResolvedValue(packagingFixture()),
+    delete: overrides.delete ?? vi.fn().mockResolvedValue(undefined),
   })
 }
 
@@ -112,7 +116,7 @@ function formatBRL(value: number): string {
   return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/\s/g, ' ')
 }
 
-// "Ativo" aparece tanto no cabeçalho da coluna quanto no badge de status —
+// "Ativo" aparece no cabeçalho da coluna (botão "Ordenar coluna Ativo") —
 // helpers abaixo escopam a busca só ao corpo da tabela (tbody), nunca ao
 // cabeçalho.
 function getTableBody(): HTMLElement {
@@ -255,16 +259,25 @@ describe('InventoryPage', () => {
     expect(within(getTable()).getByText(formatBRL(12.5))).toBeInTheDocument()
   })
 
-  it('Ativo é só informativo (badge de texto), sem Switch nem ações de ativar/desativar/excluir', () => {
+  it('Ativo é um Switch funcional (não mais um badge de texto), sem botões de ativar/desativar', () => {
     mockAccessories([accessoryFixture({ is_active: true }), accessoryFixture({ id: 'a2', name: 'Parafuso', is_active: false })])
     renderPage('acessorios')
 
-    expect(within(getTableBody()).getByText('Ativo')).toBeInTheDocument()
-    expect(within(getTableBody()).getByText('Inativo')).toBeInTheDocument()
-    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+    expect(within(getTableBody()).getByRole('switch', { name: 'Desativar acessório Ímã 6x2' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    expect(within(getTableBody()).getByRole('switch', { name: 'Ativar acessório Parafuso' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+    expect(within(getTableBody()).queryByText('Ativo')).not.toBeInTheDocument()
+    expect(within(getTableBody()).queryByText('Inativo')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^ativar/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /desativar/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /excluir/i })).not.toBeInTheDocument()
+    // "Excluir" existe como ação por linha (coberto em detalhe na suíte de
+    // exclusão abaixo) — aqui só confirmamos que está presente.
+    expect(within(getTableBody()).getByRole('button', { name: 'Excluir acessório Ímã 6x2' })).toBeInTheDocument()
   })
 
   it('busca por nome filtra a listagem, ignorando maiúsculas/minúsculas e espaços de borda', async () => {
@@ -618,24 +631,31 @@ describe('InventoryPage — área Embalagens (/estoque/embalagens)', () => {
     expect(within(getTable()).getByText(formatBRL(7.9))).toBeInTheDocument()
   })
 
-  it('Ativo é só um badge informativo: coluna de Ações sem rótulo, sem checkbox de seleção, sem botões de ativar/desativar/excluir', () => {
+  it('Ativo é um Switch funcional: coluna de Ações sem rótulo, sem checkbox de seleção, sem botões de ativar/desativar', () => {
     mockPackaging([
       packagingFixture({ id: 'k1', is_active: true }),
       packagingFixture({ id: 'k2', name: 'Sacola Kraft', is_active: false }),
     ])
     renderPage('embalagens')
 
-    expect(within(getTableBody()).getByText('Ativo')).toBeInTheDocument()
-    expect(within(getTableBody()).getByText('Inativo')).toBeInTheDocument()
-    // A coluna de ações existe (botão "Editar" por linha), mas o próprio
-    // cabeçalho não tem texto/nome acessível "Ações" — mesmo padrão já
-    // aprovado em CustomersPage/CompaniesPage.
+    expect(within(getTableBody()).getByRole('switch', { name: 'Desativar embalagem Caixa M' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    expect(within(getTableBody()).getByRole('switch', { name: 'Ativar embalagem Sacola Kraft' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+    expect(within(getTableBody()).queryByText('Ativo')).not.toBeInTheDocument()
+    expect(within(getTableBody()).queryByText('Inativo')).not.toBeInTheDocument()
+    // A coluna de ações existe (botões "Editar"/"Excluir" por linha), mas o
+    // próprio cabeçalho não tem texto/nome acessível "Ações" — mesmo padrão
+    // já aprovado em CustomersPage/CompaniesPage.
     expect(screen.queryByRole('columnheader', { name: /ações/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^ativar/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /desativar/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /excluir/i })).not.toBeInTheDocument()
+    expect(within(getTableBody()).getByRole('button', { name: 'Excluir embalagem Caixa M' })).toBeInTheDocument()
   })
 })
 
@@ -1060,5 +1080,461 @@ describe('InventoryPage — edição de itens existentes', () => {
         minimum_stock: 5,
       }),
     )
+  })
+})
+
+// Ativação/desativação — a coluna "Ativo" agora é um Switch funcional que
+// envia só { is_active } pelo mesmo update() já usado pela edição (nenhuma
+// rota nova). O hook (useAccessories/usePackaging) está mockado nestes
+// testes de página — a garantia de "substituição local + ordenação
+// preservada + estado anterior preservado em erro" já é coberta em
+// useAccessories.test.ts/usePackaging.test.ts; aqui cobrimos só a
+// integração com a página (payload exato, desabilitar só o item certo,
+// bloquear duplo clique, toast de erro, busca/filtro preservados,
+// acessibilidade).
+describe('InventoryPage — ativação e desativação', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+  })
+
+  it('os switches refletem o estado atual de cada item (ativo = marcado, inativo = desmarcado)', () => {
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Ímã 6x2', is_active: true }),
+      accessoryFixture({ id: 'a2', name: 'Parafuso', is_active: false }),
+    ])
+    renderPage('acessorios')
+
+    expect(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('switch', { name: 'Ativar acessório Parafuso' })).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('ativar um acessório inativo chama update com { is_active: true } (só essa chave)', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture({ is_active: true }))
+    mockAccessories([accessoryFixture({ is_active: false })], { update })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('switch', { name: 'Ativar acessório Ímã 6x2' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('a1', { is_active: true }))
+    expect(Object.keys(update.mock.calls[0][1])).toEqual(['is_active'])
+  })
+
+  it('desativar um acessório ativo chama update com { is_active: false } (só essa chave)', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture({ is_active: false }))
+    mockAccessories([accessoryFixture({ is_active: true })], { update })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('a1', { is_active: false }))
+    expect(Object.keys(update.mock.calls[0][1])).toEqual(['is_active'])
+  })
+
+  it('ativar uma embalagem inativa chama update com { is_active: true }', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(packagingFixture({ is_active: true }))
+    mockPackaging([packagingFixture({ is_active: false })], { update })
+    renderPage('embalagens')
+
+    await user.click(screen.getByRole('switch', { name: 'Ativar embalagem Caixa M' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('k1', { is_active: true }))
+  })
+
+  it('desativar uma embalagem ativa chama update com { is_active: false }', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(packagingFixture({ is_active: false }))
+    mockPackaging([packagingFixture({ is_active: true })], { update })
+    renderPage('embalagens')
+
+    await user.click(screen.getByRole('switch', { name: 'Desativar embalagem Caixa M' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('k1', { is_active: false }))
+  })
+
+  it('o switch fica desabilitado durante a requisição e bloqueia cliques duplicados', async () => {
+    const user = userEvent.setup()
+    let resolveUpdate: (value: Accessory) => void = () => {}
+    const update = vi.fn(
+      () =>
+        new Promise<Accessory>((resolve) => {
+          resolveUpdate = resolve
+        }),
+    )
+    mockAccessories([accessoryFixture({ is_active: true })], { update })
+    renderPage('acessorios')
+
+    const toggle = screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' })
+    await user.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-disabled', 'true')
+    expect(update).toHaveBeenCalledTimes(1)
+
+    // Um segundo clique enquanto desabilitado não reenvia.
+    await user.click(toggle)
+    expect(update).toHaveBeenCalledTimes(1)
+
+    resolveUpdate(accessoryFixture({ is_active: false }))
+    await waitFor(() => expect(toggle).not.toHaveAttribute('aria-disabled', 'true'))
+  })
+
+  it('só o switch do item em atualização fica desabilitado — os demais continuam operáveis', async () => {
+    const user = userEvent.setup()
+    let resolveUpdate: (value: Accessory) => void = () => {}
+    const update = vi.fn(
+      () =>
+        new Promise<Accessory>((resolve) => {
+          resolveUpdate = resolve
+        }),
+    )
+    mockAccessories(
+      [
+        accessoryFixture({ id: 'a1', name: 'Ímã 6x2', is_active: true }),
+        accessoryFixture({ id: 'a2', name: 'Parafuso', is_active: true }),
+      ],
+      { update },
+    )
+    renderPage('acessorios')
+
+    const firstToggle = screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' })
+    const secondToggle = screen.getByRole('switch', { name: 'Desativar acessório Parafuso' })
+    await user.click(firstToggle)
+
+    expect(firstToggle).toHaveAttribute('aria-disabled', 'true')
+    expect(secondToggle).not.toHaveAttribute('aria-disabled', 'true')
+
+    resolveUpdate(accessoryFixture({ is_active: false }))
+    await waitFor(() => expect(firstToggle).not.toHaveAttribute('aria-disabled', 'true'))
+  })
+
+  it('erro na mutation mostra um toast e não trava o switch nem fecha nada', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockRejectedValue(new ApiError('database', 500, 'Falha ao atualizar acessório.'))
+    mockAccessories([accessoryFixture({ is_active: true })], { update })
+    renderPage('acessorios')
+
+    const toggle = screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' })
+    await user.click(toggle)
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Falha ao atualizar acessório.'))
+    // A restauração do estado anterior em si (o item nunca é substituído no
+    // array local) já é coberta em useAccessories.test.ts; aqui confirmamos
+    // que a página reabilita o switch e não abre/fecha nenhum diálogo.
+    expect(toggle).not.toHaveAttribute('aria-disabled', 'true')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('ativar/desativar não limpa a busca nem o filtro de status ativos', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture({ is_active: false }))
+    mockAccessories(
+      [
+        accessoryFixture({ id: 'a1', name: 'Ímã 6x2', is_active: true }),
+        accessoryFixture({ id: 'a2', name: 'Parafuso', is_active: true }),
+      ],
+      { update },
+    )
+    renderPage('acessorios')
+
+    const searchInput = screen.getByRole('combobox', { name: 'Buscar acessórios' })
+    await user.type(searchInput, 'Ímã')
+    await user.click(screen.getByRole('radio', { name: 'Ativos' }))
+
+    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await waitFor(() => expect(update).toHaveBeenCalled())
+
+    expect(searchInput).toHaveValue('Ímã')
+    expect(screen.getByRole('radio', { name: 'Ativos' })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('com o filtro "Ativos", um item que vira inativo some da listagem assim que o array local é atualizado', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture({ id: 'a1', name: 'Ímã 6x2', is_active: false }))
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', is_active: true })], { update })
+    const { rerender } = renderPage('acessorios')
+
+    await user.click(screen.getByRole('radio', { name: 'Ativos' }))
+    expect(within(getTableBody()).getByText('Ímã 6x2')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith('a1', { is_active: false }))
+
+    // O hook real substituiria o item local (is_active: false) e a página
+    // re-renderizaria com o novo array — como o hook está mockado neste
+    // teste, simulamos essa substituição remockando o retorno e forçando um
+    // novo render; o filtro "Ativos" (estado local do painel) continua
+    // selecionado e reage sozinho ao novo array via useMemo.
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', is_active: false })], { update })
+    rerender(<InventoryPage area="acessorios" />)
+
+    // O filtro "Ativos" agora não inclui mais nenhum item — a tabela some
+    // por completo, dando lugar a "Nenhum resultado encontrado." (mesmo
+    // comportamento já usado pela busca sem correspondência).
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    expect(screen.queryByText('Ímã 6x2')).not.toBeInTheDocument()
+    expect(screen.getByText('Nenhum resultado encontrado.')).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Ativos' })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('nome acessível identifica a ação e o item; o switch é operável por teclado (Tab + Espaço)', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture({ is_active: false }))
+    mockAccessories([accessoryFixture({ is_active: true })], { update })
+    renderPage('acessorios')
+
+    const toggle = screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' })
+    toggle.focus()
+    expect(toggle).toHaveFocus()
+
+    await user.keyboard(' ')
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('a1', { is_active: false }))
+  })
+})
+
+// Exclusão física segura — o backend (delete_accessory/delete_packaging,
+// Edge Functions accessories/packaging) já bloqueia com 409 quando há
+// vínculo em product_accessories/product_packaging, nunca cascateia, e
+// devolve uma mensagem que já orienta desativar em vez de excluir; aqui
+// cobrimos só a integração com a página (abrir confirmação, cancelar sem
+// chamar a API, confirmar chama uma vez, sucesso remove a linha e fecha o
+// diálogo, bloqueio mantém o item e a tela funcional, acessibilidade,
+// independência entre Acessórios e Embalagens).
+describe('InventoryPage — exclusão física segura', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+  })
+
+  it('botão "Excluir" abre um diálogo de confirmação com nome acessível, informando o item e que é permanente', async () => {
+    const user = userEvent.setup()
+    mockAccessories([accessoryFixture()])
+    renderPage('acessorios')
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Excluir acessório' })
+    expect(dialog).toBeInTheDocument()
+    expect(within(dialog).getByText(/Ímã 6x2/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/permanente/i)).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Cancelar' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Excluir definitivamente' })).toBeInTheDocument()
+  })
+
+  it('cancelar fecha o diálogo sem chamar a API de exclusão', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi.fn()
+    mockAccessories([accessoryFixture()], { delete: deleteFn })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Cancelar' }))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(deleteFn).not.toHaveBeenCalled()
+  })
+
+  it('confirmar chama a exclusão exatamente uma vez com o id correto', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi.fn().mockResolvedValue(undefined)
+    mockAccessories([accessoryFixture()], { delete: deleteFn })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+
+    await waitFor(() => expect(deleteFn).toHaveBeenCalledTimes(1))
+    expect(deleteFn).toHaveBeenCalledWith('a1')
+  })
+
+  it('sucesso fecha o diálogo, mostra um toast de confirmação e preserva a busca ativa', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi.fn().mockResolvedValue(undefined)
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2' }), accessoryFixture({ id: 'a2', name: 'Parafuso' })], {
+      delete: deleteFn,
+    })
+    renderPage('acessorios')
+
+    const searchInput = screen.getByRole('combobox', { name: 'Buscar acessórios' })
+    await user.type(searchInput, 'Parafuso')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Excluir acessório Parafuso' }))
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(toastMock.success).toHaveBeenCalledWith('Acessório excluído.')
+    expect(searchInput).toHaveValue('Parafuso')
+  })
+
+  it('sucesso remove apenas a linha excluída, preservando as demais', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi.fn().mockResolvedValue(undefined)
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2' }), accessoryFixture({ id: 'a2', name: 'Parafuso' })], {
+      delete: deleteFn,
+    })
+    const { rerender } = renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+    await waitFor(() => expect(deleteFn).toHaveBeenCalledWith('a1'))
+
+    // O hook real removeria só o item excluído do array local — como o
+    // hook está mockado neste teste de página, simulamos essa substituição
+    // remockando o retorno e forçando um novo render.
+    mockAccessories([accessoryFixture({ id: 'a2', name: 'Parafuso' })], { delete: deleteFn })
+    rerender(<InventoryPage area="acessorios" />)
+
+    expect(within(getTableBody()).queryByText('Ímã 6x2')).not.toBeInTheDocument()
+    expect(within(getTableBody()).getByText('Parafuso')).toBeInTheDocument()
+  })
+
+  it('impede confirmação duplicada: o botão fica desabilitado e mostra estado de processamento durante a exclusão', async () => {
+    const user = userEvent.setup()
+    let resolveDelete: () => void = () => {}
+    const deleteFn = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDelete = resolve
+        }),
+    )
+    mockAccessories([accessoryFixture()], { delete: deleteFn })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+
+    const processingButton = await screen.findByRole('button', { name: 'Excluindo...' })
+    expect(processingButton).toBeDisabled()
+    expect(deleteFn).toHaveBeenCalledTimes(1)
+
+    await user.click(processingButton)
+    expect(deleteFn).toHaveBeenCalledTimes(1)
+
+    resolveDelete()
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('item vinculado a produto (bloqueio 409) permanece na lista, mantém o diálogo funcional e orienta desativar', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiError(
+          'business_rule',
+          409,
+          'Este acessório está vinculado a um produto e não pode ser excluído. Desative o item.',
+        ),
+      )
+    mockAccessories([accessoryFixture()], { delete: deleteFn })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+
+    expect(
+      await screen.findByText('Este acessório está vinculado a um produto e não pode ser excluído. Desative o item.'),
+    ).toBeInTheDocument()
+    // O diálogo continua aberto e funcional — o item nunca some da tabela.
+    // Nota: enquanto o diálogo está aberto, o restante da página fica
+    // aria-hidden (padrão de modal acessível) — screen.getByText ainda
+    // encontra o texto (não filtra por aria-hidden como getByRole faz),
+    // então usamos texto simples aqui em vez de getTableBody()/getByRole.
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText('Ímã 6x2')).toBeInTheDocument()
+    expect(toastMock.error).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Cancelar' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(within(getTableBody()).getByText('Ímã 6x2')).toBeInTheDocument()
+  })
+
+  it('erro inesperado na exclusão mantém o item e a tela funcional, com mensagem clara', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi.fn().mockRejectedValue(new ApiError('database', 500, 'Falha ao excluir acessório.'))
+    mockAccessories([accessoryFixture()], { delete: deleteFn })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+
+    expect(await screen.findByText('Falha ao excluir acessório.')).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText('Ímã 6x2')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Cancelar' }))
+    expect(within(getTableBody()).getByText('Ímã 6x2')).toBeInTheDocument()
+  })
+
+  it('o diálogo é operável por teclado e mantém foco visível (foco em "Cancelar" + Enter fecha)', async () => {
+    const user = userEvent.setup()
+    mockAccessories([accessoryFixture()])
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    const cancelButton = screen.getByRole('button', { name: 'Cancelar' })
+    cancelButton.focus()
+    expect(cancelButton).toHaveFocus()
+
+    await user.keyboard('{Enter}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('excluir uma embalagem chama a API própria de embalagens, independente de acessórios', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi.fn().mockResolvedValue(undefined)
+    mockPackaging([packagingFixture()], { delete: deleteFn })
+    renderPage('embalagens')
+
+    await user.click(screen.getByRole('button', { name: 'Excluir embalagem Caixa M' }))
+    expect(screen.getByRole('dialog', { name: 'Excluir embalagem' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+
+    await waitFor(() => expect(deleteFn).toHaveBeenCalledWith('k1'))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(toastMock.success).toHaveBeenCalledWith('Embalagem excluída.')
+  })
+
+  it('item de embalagem vinculado a produto (bloqueio 409) permanece na lista e orienta desativar', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiError(
+          'business_rule',
+          409,
+          'Esta embalagem está vinculada a um produto e não pode ser excluída. Desative o item.',
+        ),
+      )
+    mockPackaging([packagingFixture()], { delete: deleteFn })
+    renderPage('embalagens')
+
+    await user.click(screen.getByRole('button', { name: 'Excluir embalagem Caixa M' }))
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+
+    expect(
+      await screen.findByText('Esta embalagem está vinculada a um produto e não pode ser excluída. Desative o item.'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Caixa M')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Cancelar' }))
+    expect(within(getTableBody()).getByText('Caixa M')).toBeInTheDocument()
+  })
+
+  it('cancelar a exclusão de um item não afeta o estado de busca/filtro da outra área (independência)', async () => {
+    const user = userEvent.setup()
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2' })])
+    const { unmount } = renderPage('acessorios')
+    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Cancelar' }))
+    unmount()
+
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M' })])
+    renderPage('embalagens')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(within(getTableBody()).getByText('Caixa M')).toBeInTheDocument()
   })
 })

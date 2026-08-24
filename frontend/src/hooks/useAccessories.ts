@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { PT_BR_COLLATOR } from '@/components/dataTable/sorting'
 import {
   createAccessory,
+  deleteAccessory,
   listAccessories,
   updateAccessory,
   type CreateAccessoryInput,
@@ -17,6 +18,10 @@ interface UseAccessoriesResult {
   refetch: () => void
   create: (input: CreateAccessoryInput) => Promise<Accessory>
   update: (id: string, input: UpdateAccessoryInput) => Promise<Accessory>
+  // `delete` (não `remove`) porque é assim que o contrato de API já se
+  // chama (deleteAccessory) — reservado como palavra-chave só em posição de
+  // identificador solto, nunca como chave de objeto/propriedade.
+  delete: (id: string) => Promise<void>
 }
 
 function toApiError(err: unknown): ApiError {
@@ -81,5 +86,15 @@ export function useAccessories(): UseAccessoriesResult {
     return updated
   }, [])
 
-  return { accessories, isLoading, error, refetch, create, update }
+  // Exclusão física protegida (DELETE /accessories/:id -> delete_accessory):
+  // a Edge Function/RPC já bloqueia com erro de negócio (409, mensagem
+  // orientando desativação) quando o acessório está vinculado a um produto
+  // — se deleteAccessory rejeita, o item nunca é removido do array local
+  // (o filter abaixo só roda depois do await resolver com sucesso).
+  const deleteItem = useCallback(async (id: string) => {
+    await deleteAccessory(id)
+    setAccessories((current) => current.filter((item) => item.id !== id))
+  }, [])
+
+  return { accessories, isLoading, error, refetch, create, update, delete: deleteItem }
 }
