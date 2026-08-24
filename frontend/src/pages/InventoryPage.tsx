@@ -525,7 +525,14 @@ function AccessoriesInventoryPage() {
   const [editError, setEditError] = useState<string | null>(null)
 
   // Ativação/desativação: estado próprio desta área, independente do de
-  // criação/edição — só o item com a mutation em andamento entra aqui.
+  // criação/edição. pendingToggleId só é setado durante a requisição de
+  // fato (dentro de handleConfirmToggle) — desabilita o Switch daquele
+  // item; togglingItem/isToggleDialogOpen controlam o diálogo de
+  // confirmação que sempre é exibido antes de qualquer chamada à API.
+  const [togglingItem, setTogglingItem] = useState<InventoryItem | null>(null)
+  const [isToggleDialogOpen, setIsToggleDialogOpen] = useState(false)
+  const [isConfirmingToggle, setIsConfirmingToggle] = useState(false)
+  const [toggleError, setToggleError] = useState<string | null>(null)
   const [pendingToggleId, setPendingToggleId] = useState<string | null>(null)
 
   // Exclusão: estado próprio, independente de criação/edição/ativação —
@@ -561,18 +568,37 @@ function AccessoriesInventoryPage() {
     }
   }
 
+  // Clicar no Switch nunca chama a API diretamente — só abre a confirmação;
+  // a mudança de fato só acontece em handleConfirmToggle, depois do usuário
+  // confirmar. checked={item.is_active} no Switch nunca reflete algo
+  // otimista: sem confirmação, o Switch simplesmente volta para o valor
+  // corrente do item (nada mudou ainda).
+  function openToggleDialog(item: InventoryItem) {
+    setTogglingItem(item)
+    setToggleError(null)
+    setIsToggleDialogOpen(true)
+  }
+
   // Envia só `{ is_active }` — o mesmo update_accessory usado pela edição,
-  // sem rota nova. Nenhum toast de sucesso: o próprio Switch (controlado
-  // por item.is_active) já reflete o resultado assim que o hook substitui o
-  // item local; em erro, o item nunca é substituído, então o Switch volta
-  // sozinho ao estado anterior ao ser reabilitado.
-  async function handleToggleActive(item: InventoryItem) {
-    setPendingToggleId(item.id)
+  // sem rota nova. Sucesso: toast claro + fecha o diálogo — o próprio
+  // Switch (controlado por item.is_active) já reflete o novo estado assim
+  // que o hook substitui o item local. Erro: fica inline no diálogo (nunca
+  // toast), diálogo continua aberto e funcional — o item nunca é
+  // substituído localmente, então o Switch permanece no estado anterior.
+  async function handleConfirmToggle() {
+    if (!togglingItem) return
+    const willActivate = !togglingItem.is_active
+    setIsConfirmingToggle(true)
+    setPendingToggleId(togglingItem.id)
+    setToggleError(null)
     try {
-      await update(item.id, { is_active: !item.is_active })
+      await update(togglingItem.id, { is_active: willActivate })
+      toast.success(`Acessório ${willActivate ? 'ativado' : 'desativado'}.`)
+      setIsToggleDialogOpen(false)
     } catch (err) {
-      toast.error(toErrorMessage(err))
+      setToggleError(toErrorMessage(err))
     } finally {
+      setIsConfirmingToggle(false)
       setPendingToggleId(null)
     }
   }
@@ -650,7 +676,7 @@ function AccessoriesInventoryPage() {
         onOpenCreateDialog={openCreateDialog}
         onEditItem={openEditDialog}
         itemNounSingular="acessório"
-        onToggleActive={(item) => void handleToggleActive(item)}
+        onToggleActive={openToggleDialog}
         pendingToggleId={pendingToggleId}
         onDeleteItem={openDeleteDialog}
       />
@@ -668,6 +694,50 @@ function AccessoriesInventoryPage() {
             onSubmit={(values) => void handleCreateSubmit(values)}
             onCancel={() => setIsCreateDialogOpen(false)}
           />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isToggleDialogOpen} onOpenChange={setIsToggleDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{togglingItem?.is_active ? 'Desativar acessório' : 'Ativar acessório'}</DialogTitle>
+            <DialogDescription>
+              {togglingItem &&
+                (togglingItem.is_active
+                  ? `Tem certeza que deseja desativar "${togglingItem.name}"? Um acessório inativo deixa de poder ser adicionado a novas composições de produtos, mas os vínculos já existentes são preservados.`
+                  : `Tem certeza que deseja ativar "${togglingItem.name}"?`)}
+            </DialogDescription>
+          </DialogHeader>
+          {toggleError && (
+            <p role="alert" className="text-destructive text-sm">
+              {toggleError}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsToggleDialogOpen(false)}
+              disabled={isConfirmingToggle}
+              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void handleConfirmToggle()}
+              disabled={isConfirmingToggle}
+              className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
+            >
+              {isConfirmingToggle
+                ? togglingItem?.is_active
+                  ? 'Desativando...'
+                  : 'Ativando...'
+                : togglingItem?.is_active
+                  ? 'Desativar'
+                  : 'Ativar'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -742,6 +812,10 @@ function PackagingInventoryPage() {
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
 
+  const [togglingItem, setTogglingItem] = useState<InventoryItem | null>(null)
+  const [isToggleDialogOpen, setIsToggleDialogOpen] = useState(false)
+  const [isConfirmingToggle, setIsConfirmingToggle] = useState(false)
+  const [toggleError, setToggleError] = useState<string | null>(null)
   const [pendingToggleId, setPendingToggleId] = useState<string | null>(null)
 
   const [deletingItem, setDeletingItem] = useState<InventoryItem | null>(null)
@@ -773,13 +847,26 @@ function PackagingInventoryPage() {
     }
   }
 
-  async function handleToggleActive(item: InventoryItem) {
-    setPendingToggleId(item.id)
+  function openToggleDialog(item: InventoryItem) {
+    setTogglingItem(item)
+    setToggleError(null)
+    setIsToggleDialogOpen(true)
+  }
+
+  async function handleConfirmToggle() {
+    if (!togglingItem) return
+    const willActivate = !togglingItem.is_active
+    setIsConfirmingToggle(true)
+    setPendingToggleId(togglingItem.id)
+    setToggleError(null)
     try {
-      await update(item.id, { is_active: !item.is_active })
+      await update(togglingItem.id, { is_active: willActivate })
+      toast.success(`Embalagem ${willActivate ? 'ativada' : 'desativada'}.`)
+      setIsToggleDialogOpen(false)
     } catch (err) {
-      toast.error(toErrorMessage(err))
+      setToggleError(toErrorMessage(err))
     } finally {
+      setIsConfirmingToggle(false)
       setPendingToggleId(null)
     }
   }
@@ -850,7 +937,7 @@ function PackagingInventoryPage() {
         onOpenCreateDialog={openCreateDialog}
         onEditItem={openEditDialog}
         itemNounSingular="embalagem"
-        onToggleActive={(item) => void handleToggleActive(item)}
+        onToggleActive={openToggleDialog}
         pendingToggleId={pendingToggleId}
         onDeleteItem={openDeleteDialog}
       />
@@ -868,6 +955,50 @@ function PackagingInventoryPage() {
             onSubmit={(values) => void handleCreateSubmit(values)}
             onCancel={() => setIsCreateDialogOpen(false)}
           />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isToggleDialogOpen} onOpenChange={setIsToggleDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{togglingItem?.is_active ? 'Desativar embalagem' : 'Ativar embalagem'}</DialogTitle>
+            <DialogDescription>
+              {togglingItem &&
+                (togglingItem.is_active
+                  ? `Tem certeza que deseja desativar "${togglingItem.name}"? Uma embalagem inativa deixa de poder ser adicionada a novas composições de produtos, mas os vínculos já existentes são preservados.`
+                  : `Tem certeza que deseja ativar "${togglingItem.name}"?`)}
+            </DialogDescription>
+          </DialogHeader>
+          {toggleError && (
+            <p role="alert" className="text-destructive text-sm">
+              {toggleError}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsToggleDialogOpen(false)}
+              disabled={isConfirmingToggle}
+              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void handleConfirmToggle()}
+              disabled={isConfirmingToggle}
+              className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
+            >
+              {isConfirmingToggle
+                ? togglingItem?.is_active
+                  ? 'Desativando...'
+                  : 'Ativando...'
+                : togglingItem?.is_active
+                  ? 'Desativar'
+                  : 'Ativar'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

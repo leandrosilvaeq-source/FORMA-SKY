@@ -1083,15 +1083,18 @@ describe('InventoryPage — edição de itens existentes', () => {
   })
 })
 
-// Ativação/desativação — a coluna "Ativo" agora é um Switch funcional que
-// envia só { is_active } pelo mesmo update() já usado pela edição (nenhuma
-// rota nova). O hook (useAccessories/usePackaging) está mockado nestes
-// testes de página — a garantia de "substituição local + ordenação
-// preservada + estado anterior preservado em erro" já é coberta em
-// useAccessories.test.ts/usePackaging.test.ts; aqui cobrimos só a
-// integração com a página (payload exato, desabilitar só o item certo,
-// bloquear duplo clique, toast de erro, busca/filtro preservados,
-// acessibilidade).
+// Ativação/desativação — a coluna "Ativo" é um Switch funcional, mas clicar
+// nele NUNCA chama a API diretamente: sempre abre um diálogo de
+// confirmação primeiro (mesmo padrão acessível de Dialog já usado por
+// criação/edição/exclusão, nunca window.confirm); só "Ativar"/"Desativar"
+// dentro do diálogo envia { is_active } via o mesmo update() já usado pela
+// edição (nenhuma rota nova). O hook (useAccessories/usePackaging) está
+// mockado nestes testes de página — a garantia de "substituição local +
+// ordenação preservada + estado anterior preservado em erro" já é coberta
+// em useAccessories.test.ts/usePackaging.test.ts; aqui cobrimos a
+// integração com a página (abrir confirmação, cancelar sem chamar API,
+// confirmar chama uma vez com payload exato, bloquear clique duplicado,
+// sucesso/erro, busca/filtro preservados, acessibilidade).
 describe('InventoryPage — ativação e desativação', () => {
   beforeEach(() => {
     toastMock.success.mockReset()
@@ -1109,25 +1112,59 @@ describe('InventoryPage — ativação e desativação', () => {
     expect(screen.getByRole('switch', { name: 'Ativar acessório Parafuso' })).toHaveAttribute('aria-checked', 'false')
   })
 
-  it('ativar um acessório inativo chama update com { is_active: true } (só essa chave)', async () => {
+  it('clicar no switch abre um diálogo de confirmação com nome acessível, sem chamar a API ainda', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn()
+    mockAccessories([accessoryFixture({ is_active: true })], { update })
+    renderPage('acessorios')
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Desativar acessório' })
+    expect(dialog).toBeInTheDocument()
+    expect(within(dialog).getByText(/Ímã 6x2/)).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Cancelar' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Desativar' })).toBeInTheDocument()
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('cancelar fecha o diálogo sem chamar a API', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn()
+    mockAccessories([accessoryFixture({ is_active: true })], { update })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Cancelar' }))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('confirmar ativação chama update com { is_active: true } (só essa chave), exatamente uma vez', async () => {
     const user = userEvent.setup()
     const update = vi.fn().mockResolvedValue(accessoryFixture({ is_active: true }))
     mockAccessories([accessoryFixture({ is_active: false })], { update })
     renderPage('acessorios')
 
     await user.click(screen.getByRole('switch', { name: 'Ativar acessório Ímã 6x2' }))
+    expect(screen.getByRole('dialog', { name: 'Ativar acessório' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Ativar' }))
 
-    await waitFor(() => expect(update).toHaveBeenCalledWith('a1', { is_active: true }))
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1))
+    expect(update).toHaveBeenCalledWith('a1', { is_active: true })
     expect(Object.keys(update.mock.calls[0][1])).toEqual(['is_active'])
   })
 
-  it('desativar um acessório ativo chama update com { is_active: false } (só essa chave)', async () => {
+  it('confirmar desativação chama update com { is_active: false } (só essa chave)', async () => {
     const user = userEvent.setup()
     const update = vi.fn().mockResolvedValue(accessoryFixture({ is_active: false }))
     mockAccessories([accessoryFixture({ is_active: true })], { update })
     renderPage('acessorios')
 
     await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Desativar' }))
 
     await waitFor(() => expect(update).toHaveBeenCalledWith('a1', { is_active: false }))
     expect(Object.keys(update.mock.calls[0][1])).toEqual(['is_active'])
@@ -1140,6 +1177,8 @@ describe('InventoryPage — ativação e desativação', () => {
     renderPage('embalagens')
 
     await user.click(screen.getByRole('switch', { name: 'Ativar embalagem Caixa M' }))
+    expect(screen.getByRole('dialog', { name: 'Ativar embalagem' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Ativar' }))
 
     await waitFor(() => expect(update).toHaveBeenCalledWith('k1', { is_active: true }))
   })
@@ -1151,11 +1190,40 @@ describe('InventoryPage — ativação e desativação', () => {
     renderPage('embalagens')
 
     await user.click(screen.getByRole('switch', { name: 'Desativar embalagem Caixa M' }))
+    await user.click(screen.getByRole('button', { name: 'Desativar' }))
 
     await waitFor(() => expect(update).toHaveBeenCalledWith('k1', { is_active: false }))
   })
 
-  it('o switch fica desabilitado durante a requisição e bloqueia cliques duplicados', async () => {
+  it('reativar um item previamente desativado funciona (ativação e desativação são simétricas)', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture({ is_active: true }))
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Parafuso', is_active: false })], { update })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('switch', { name: 'Ativar acessório Parafuso' }))
+    expect(screen.getByRole('dialog', { name: 'Ativar acessório' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Ativar' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('a1', { is_active: true }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(toastMock.success).toHaveBeenCalledWith('Acessório ativado.')
+  })
+
+  it('sucesso mostra uma mensagem clara e fecha o diálogo', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture({ is_active: false }))
+    mockAccessories([accessoryFixture({ is_active: true })], { update })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Desativar' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(toastMock.success).toHaveBeenCalledWith('Acessório desativado.')
+  })
+
+  it('impede confirmação duplicada: o botão de confirmar fica desabilitado e mostra estado de processamento', async () => {
     const user = userEvent.setup()
     let resolveUpdate: (value: Accessory) => void = () => {}
     const update = vi.fn(
@@ -1167,21 +1235,21 @@ describe('InventoryPage — ativação e desativação', () => {
     mockAccessories([accessoryFixture({ is_active: true })], { update })
     renderPage('acessorios')
 
-    const toggle = screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' })
-    await user.click(toggle)
+    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Desativar' }))
 
-    expect(toggle).toHaveAttribute('aria-disabled', 'true')
+    const processingButton = await screen.findByRole('button', { name: 'Desativando...' })
+    expect(processingButton).toBeDisabled()
     expect(update).toHaveBeenCalledTimes(1)
 
-    // Um segundo clique enquanto desabilitado não reenvia.
-    await user.click(toggle)
+    await user.click(processingButton)
     expect(update).toHaveBeenCalledTimes(1)
 
     resolveUpdate(accessoryFixture({ is_active: false }))
-    await waitFor(() => expect(toggle).not.toHaveAttribute('aria-disabled', 'true'))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
-  it('só o switch do item em atualização fica desabilitado — os demais continuam operáveis', async () => {
+  it('o switch do item fica desabilitado só durante a requisição de fato (depois de confirmar)', async () => {
     const user = userEvent.setup()
     let resolveUpdate: (value: Accessory) => void = () => {}
     const update = vi.fn(
@@ -1202,6 +1270,7 @@ describe('InventoryPage — ativação e desativação', () => {
     const firstToggle = screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' })
     const secondToggle = screen.getByRole('switch', { name: 'Desativar acessório Parafuso' })
     await user.click(firstToggle)
+    await user.click(screen.getByRole('button', { name: 'Desativar' }))
 
     expect(firstToggle).toHaveAttribute('aria-disabled', 'true')
     expect(secondToggle).not.toHaveAttribute('aria-disabled', 'true')
@@ -1210,20 +1279,22 @@ describe('InventoryPage — ativação e desativação', () => {
     await waitFor(() => expect(firstToggle).not.toHaveAttribute('aria-disabled', 'true'))
   })
 
-  it('erro na mutation mostra um toast e não trava o switch nem fecha nada', async () => {
+  it('erro na mutation mantém o diálogo aberto e funcional, com mensagem clara (nunca toast)', async () => {
     const user = userEvent.setup()
     const update = vi.fn().mockRejectedValue(new ApiError('database', 500, 'Falha ao atualizar acessório.'))
     mockAccessories([accessoryFixture({ is_active: true })], { update })
     renderPage('acessorios')
 
-    const toggle = screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' })
-    await user.click(toggle)
+    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Desativar' }))
 
-    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Falha ao atualizar acessório.'))
-    // A restauração do estado anterior em si (o item nunca é substituído no
-    // array local) já é coberta em useAccessories.test.ts; aqui confirmamos
-    // que a página reabilita o switch e não abre/fecha nenhum diálogo.
-    expect(toggle).not.toHaveAttribute('aria-disabled', 'true')
+    expect(await screen.findByText('Falha ao atualizar acessório.')).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(toastMock.error).not.toHaveBeenCalled()
+    expect(toastMock.success).not.toHaveBeenCalled()
+
+    // O diálogo continua funcional: cancelar ainda fecha normalmente.
+    await user.click(screen.getByRole('button', { name: 'Cancelar' }))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
@@ -1244,6 +1315,7 @@ describe('InventoryPage — ativação e desativação', () => {
     await user.click(screen.getByRole('radio', { name: 'Ativos' }))
 
     await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Desativar' }))
     await waitFor(() => expect(update).toHaveBeenCalled())
 
     expect(searchInput).toHaveValue('Ímã')
@@ -1260,6 +1332,7 @@ describe('InventoryPage — ativação e desativação', () => {
     expect(within(getTableBody()).getByText('Ímã 6x2')).toBeInTheDocument()
 
     await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Desativar' }))
     await waitFor(() => expect(update).toHaveBeenCalledWith('a1', { is_active: false }))
 
     // O hook real substituiria o item local (is_active: false) e a página
@@ -1279,7 +1352,7 @@ describe('InventoryPage — ativação e desativação', () => {
     expect(screen.getByRole('radio', { name: 'Ativos' })).toHaveAttribute('aria-checked', 'true')
   })
 
-  it('nome acessível identifica a ação e o item; o switch é operável por teclado (Tab + Espaço)', async () => {
+  it('nome acessível do switch identifica a ação e o item; switch e diálogo são operáveis por teclado', async () => {
     const user = userEvent.setup()
     const update = vi.fn().mockResolvedValue(accessoryFixture({ is_active: false }))
     mockAccessories([accessoryFixture({ is_active: true })], { update })
@@ -1290,6 +1363,12 @@ describe('InventoryPage — ativação e desativação', () => {
     expect(toggle).toHaveFocus()
 
     await user.keyboard(' ')
+    expect(screen.getByRole('dialog', { name: 'Desativar acessório' })).toBeInTheDocument()
+
+    const confirmButton = screen.getByRole('button', { name: 'Desativar' })
+    confirmButton.focus()
+    expect(confirmButton).toHaveFocus()
+    await user.keyboard('{Enter}')
 
     await waitFor(() => expect(update).toHaveBeenCalledWith('a1', { is_active: false }))
   })
