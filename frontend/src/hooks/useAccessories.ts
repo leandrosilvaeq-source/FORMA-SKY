@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { PT_BR_COLLATOR } from '@/components/dataTable/sorting'
-import { createAccessory, listAccessories, type CreateAccessoryInput } from '@/lib/api/accessories'
+import {
+  createAccessory,
+  listAccessories,
+  updateAccessory,
+  type CreateAccessoryInput,
+  type UpdateAccessoryInput,
+} from '@/lib/api/accessories'
 import { ApiError } from '@/lib/api/errors'
 import type { Accessory } from '@/types/domain'
 
@@ -10,6 +16,7 @@ interface UseAccessoriesResult {
   error: ApiError | null
   refetch: () => void
   create: (input: CreateAccessoryInput) => Promise<Accessory>
+  update: (id: string, input: UpdateAccessoryInput) => Promise<Accessory>
 }
 
 function toApiError(err: unknown): ApiError {
@@ -63,5 +70,16 @@ export function useAccessories(): UseAccessoriesResult {
     return created
   }, [])
 
-  return { accessories, isLoading, error, refetch, create }
+  // Mesmo raciocínio de create: updateAccessory já devolve a linha completa
+  // atualizada — substituída in-place no array local (por id) e reordenada
+  // por nome, sem refetch.
+  const update = useCallback(async (id: string, input: UpdateAccessoryInput) => {
+    const updated = await updateAccessory(id, input)
+    setAccessories((current) =>
+      current.map((item) => (item.id === id ? updated : item)).sort((a, b) => PT_BR_COLLATOR.compare(a.name, b.name)),
+    )
+    return updated
+  }, [])
+
+  return { accessories, isLoading, error, refetch, create, update }
 }

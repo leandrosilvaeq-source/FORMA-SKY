@@ -9,19 +9,21 @@ import { InventoryItemForm, type InventoryItemFormValues } from '@/components/in
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useAccessories } from '@/hooks/useAccessories'
 import { usePackaging } from '@/hooks/usePackaging'
 import { ApiError } from '@/lib/api/errors'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
 import { cn } from '@/lib/utils'
 
-// Módulo 3 (Estoque). Incremento 4: somente consulta e navegação. Este
-// incremento acrescenta CRIAÇÃO de novos acessórios/embalagens (via
-// create_accessory/create_packaging, já implementados e testados nos
-// Incrementos 2/3) — edição, ativação/desativação e exclusão continuam
-// fora de escopo, propositalmente sem nenhum campo Ativo no formulário de
-// criação (novo registro nasce ativo pelo default do banco).
+// Módulo 3 (Estoque). Incremento 4: consulta e navegação. Incremento 5:
+// CRIAÇÃO de novos acessórios/embalagens (create_accessory/
+// create_packaging). Este incremento acrescenta EDIÇÃO (update_accessory/
+// update_packaging) — só Nome/Tamanho/Variante/Estoque mínimo são
+// editáveis; ativação/desativação e exclusão continuam fora de escopo,
+// propositalmente sem nenhum campo Ativo nos formulários (novo registro
+// nasce ativo pelo default do banco; um registro existente nunca tem seu
+// status alterado por aqui).
 
 function toErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message
@@ -192,6 +194,7 @@ interface InventoryAreaPanelProps {
   statusFilterAriaLabel: string
   createButtonLabel: string
   onOpenCreateDialog: () => void
+  onEditItem: (item: InventoryItem) => void
 }
 
 // Painel completo de uma área (busca + filtro + ordenação + tabela +
@@ -215,6 +218,7 @@ function InventoryAreaPanel({
   statusFilterAriaLabel,
   createButtonLabel,
   onOpenCreateDialog,
+  onEditItem,
 }: InventoryAreaPanelProps) {
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all')
@@ -331,39 +335,40 @@ function InventoryAreaPanel({
           // Produtos/Empresas/Pedidos) — nenhuma coluna cortada em desktop
           // amplo.
           <div className="overflow-x-auto">
-            <Table className="min-w-[900px] table-fixed text-[16px]">
+            <Table className="min-w-[1000px] table-fixed text-[16px]">
               <TableHeader>
                 <TableRow>
-                  <SortableColumnHeader column="name" label="Nome" sort={sort} onSortChange={setSort} className="w-[24%]" />
-                  <SortableColumnHeader column="size" label="Tamanho" sort={sort} onSortChange={setSort} className="w-[14%]" />
+                  <SortableColumnHeader column="name" label="Nome" sort={sort} onSortChange={setSort} className="w-[20%]" />
+                  <SortableColumnHeader column="size" label="Tamanho" sort={sort} onSortChange={setSort} className="w-[12%]" />
                   <SortableColumnHeader
                     column="variant"
                     label="Variante"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[20%]"
+                    className="w-[18%]"
                   />
                   <SortableColumnHeader
                     column="unit_cost"
                     label="Custo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[16%]"
+                    className="w-[14%]"
                   />
                   <SortableColumnHeader
                     column="minimum_stock"
                     label="Estoque mínimo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[14%]"
+                    className="w-[12%]"
                   />
                   <SortableColumnHeader
                     column="is_active"
                     label="Ativo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[12%]"
+                    className="w-[10%]"
                   />
+                  <TableHead className="h-auto w-[14%] py-2" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -392,6 +397,16 @@ function InventoryAreaPanel({
                       <TableCell>{formatMinimumStock(item.minimum_stock)}</TableCell>
                       <TableCell>
                         <ActiveBadge isActive={item.is_active} />
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onEditItem(item)}
+                          className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                        >
+                          Editar
+                        </Button>
                       </TableCell>
                     </TableRow>
                   )
@@ -467,10 +482,18 @@ function InventoryPageShell({ area, children }: { area: InventoryArea; children:
 // sucesso, e a listagem já reflete o novo item imediatamente (o hook
 // insere localmente, sem precisar de refetch).
 function AccessoriesInventoryPage() {
-  const { accessories, isLoading, error, refetch, create } = useAccessories()
+  const { accessories, isLoading, error, refetch, create, update } = useAccessories()
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+
+  // Diálogo de edição: estado separado do de criação — nunca abertos ao
+  // mesmo tempo, mas cada um com seu próprio ciclo de vida/erro/submitting,
+  // sem reaproveitar o estado de criação.
+  const [editingItem, setEditingItem] = useState<InventoryItem | null>(null)
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
 
   function openCreateDialog() {
     setCreateError(null)
@@ -496,6 +519,32 @@ function AccessoriesInventoryPage() {
     }
   }
 
+  function openEditDialog(item: InventoryItem) {
+    setEditingItem(item)
+    setEditError(null)
+    setIsEditDialogOpen(true)
+  }
+
+  async function handleEditSubmit(values: InventoryItemFormValues) {
+    if (!editingItem) return
+    setIsSubmittingEdit(true)
+    setEditError(null)
+    try {
+      await update(editingItem.id, values)
+      toast.success('Acessório atualizado.')
+      setIsEditDialogOpen(false)
+    } catch (err) {
+      const message = toErrorMessage(err)
+      if (err instanceof ApiError && err.type === 'validation') {
+        setEditError(message)
+      } else {
+        toast.error(message)
+      }
+    } finally {
+      setIsSubmittingEdit(false)
+    }
+  }
+
   return (
     <InventoryPageShell area="acessorios">
       <InventoryAreaPanel
@@ -513,6 +562,7 @@ function AccessoriesInventoryPage() {
         statusFilterAriaLabel="Filtrar acessórios por status"
         createButtonLabel="Novo acessório"
         onOpenCreateDialog={openCreateDialog}
+        onEditItem={openEditDialog}
       />
 
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
@@ -530,15 +580,46 @@ function AccessoriesInventoryPage() {
           />
         </DialogContent>
       </Dialog>
+
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Editar acessório</DialogTitle>
+            <DialogDescription>Atualize os dados do acessório.</DialogDescription>
+          </DialogHeader>
+          {editingItem && (
+            <InventoryItemForm
+              key={editingItem.id}
+              idPrefix="accessory-edit"
+              mode="edit"
+              initialValues={{
+                name: editingItem.name,
+                size: editingItem.size,
+                variant: editingItem.variant,
+                minimum_stock: editingItem.minimum_stock,
+              }}
+              isSubmitting={isSubmittingEdit}
+              submitError={editError}
+              onSubmit={(values) => void handleEditSubmit(values)}
+              onCancel={() => setIsEditDialogOpen(false)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </InventoryPageShell>
   )
 }
 
 function PackagingInventoryPage() {
-  const { packaging, isLoading, error, refetch, create } = usePackaging()
+  const { packaging, isLoading, error, refetch, create, update } = usePackaging()
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+
+  const [editingItem, setEditingItem] = useState<InventoryItem | null>(null)
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
 
   function openCreateDialog() {
     setCreateError(null)
@@ -564,6 +645,32 @@ function PackagingInventoryPage() {
     }
   }
 
+  function openEditDialog(item: InventoryItem) {
+    setEditingItem(item)
+    setEditError(null)
+    setIsEditDialogOpen(true)
+  }
+
+  async function handleEditSubmit(values: InventoryItemFormValues) {
+    if (!editingItem) return
+    setIsSubmittingEdit(true)
+    setEditError(null)
+    try {
+      await update(editingItem.id, values)
+      toast.success('Embalagem atualizada.')
+      setIsEditDialogOpen(false)
+    } catch (err) {
+      const message = toErrorMessage(err)
+      if (err instanceof ApiError && err.type === 'validation') {
+        setEditError(message)
+      } else {
+        toast.error(message)
+      }
+    } finally {
+      setIsSubmittingEdit(false)
+    }
+  }
+
   return (
     <InventoryPageShell area="embalagens">
       <InventoryAreaPanel
@@ -581,6 +688,7 @@ function PackagingInventoryPage() {
         statusFilterAriaLabel="Filtrar embalagens por status"
         createButtonLabel="Nova embalagem"
         onOpenCreateDialog={openCreateDialog}
+        onEditItem={openEditDialog}
       />
 
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
@@ -596,6 +704,32 @@ function PackagingInventoryPage() {
             onSubmit={(values) => void handleCreateSubmit(values)}
             onCancel={() => setIsCreateDialogOpen(false)}
           />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Editar embalagem</DialogTitle>
+            <DialogDescription>Atualize os dados da embalagem.</DialogDescription>
+          </DialogHeader>
+          {editingItem && (
+            <InventoryItemForm
+              key={editingItem.id}
+              idPrefix="packaging-edit"
+              mode="edit"
+              initialValues={{
+                name: editingItem.name,
+                size: editingItem.size,
+                variant: editingItem.variant,
+                minimum_stock: editingItem.minimum_stock,
+              }}
+              isSubmitting={isSubmittingEdit}
+              submitError={editError}
+              onSubmit={(values) => void handleEditSubmit(values)}
+              onCancel={() => setIsEditDialogOpen(false)}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </InventoryPageShell>

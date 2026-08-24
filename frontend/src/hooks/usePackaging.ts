@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { PT_BR_COLLATOR } from '@/components/dataTable/sorting'
-import { createPackaging, listPackaging, type CreatePackagingInput } from '@/lib/api/packaging'
+import {
+  createPackaging,
+  listPackaging,
+  updatePackaging,
+  type CreatePackagingInput,
+  type UpdatePackagingInput,
+} from '@/lib/api/packaging'
 import { ApiError } from '@/lib/api/errors'
 import type { Packaging } from '@/types/domain'
 
@@ -10,6 +16,7 @@ interface UsePackagingResult {
   error: ApiError | null
   refetch: () => void
   create: (input: CreatePackagingInput) => Promise<Packaging>
+  update: (id: string, input: UpdatePackagingInput) => Promise<Packaging>
 }
 
 function toApiError(err: unknown): ApiError {
@@ -60,5 +67,16 @@ export function usePackaging(): UsePackagingResult {
     return created
   }, [])
 
-  return { packaging, isLoading, error, refetch, create }
+  // Mesmo raciocínio de create: updatePackaging já devolve a linha completa
+  // atualizada — substituída in-place no array local (por id) e reordenada
+  // por nome, sem refetch.
+  const update = useCallback(async (id: string, input: UpdatePackagingInput) => {
+    const updated = await updatePackaging(id, input)
+    setPackaging((current) =>
+      current.map((item) => (item.id === id ? updated : item)).sort((a, b) => PT_BR_COLLATOR.compare(a.name, b.name)),
+    )
+    return updated
+  }, [])
+
+  return { packaging, isLoading, error, refetch, create, update }
 }

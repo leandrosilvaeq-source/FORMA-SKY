@@ -141,3 +141,91 @@ describe('InventoryItemForm', () => {
     expect(screen.getByRole('button', { name: 'Salvando...' })).toBeDisabled()
   })
 })
+
+describe('InventoryItemForm — modo edição', () => {
+  it('mode="edit" pré-preenche os campos a partir de initialValues e usa o rótulo "Salvar alterações"', () => {
+    renderForm({
+      mode: 'edit',
+      initialValues: { name: 'Ímã 6x2', size: 'M', variant: 'azul', minimum_stock: 10 },
+    })
+
+    expect(screen.getByLabelText('Nome')).toHaveValue('Ímã 6x2')
+    expect(screen.getByLabelText('Variante')).toHaveValue('azul')
+    expect(screen.getByLabelText('Estoque mínimo')).toHaveValue('10')
+    expect(screen.getByRole('radio', { name: 'M' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('button', { name: 'Salvar alterações' })).toBeInTheDocument()
+  })
+
+  it('minimum_stock nulo em initialValues pré-preenche o campo como vazio', () => {
+    renderForm({
+      mode: 'edit',
+      initialValues: { name: 'Ímã 6x2', size: null, variant: null, minimum_stock: null },
+    })
+
+    expect(screen.getByLabelText('Estoque mínimo')).toHaveValue('')
+  })
+
+  it('editar e salvar sem alterar nada reenvia os mesmos valores pré-preenchidos', async () => {
+    const user = userEvent.setup()
+    const { onSubmit } = renderForm({
+      mode: 'edit',
+      initialValues: { name: 'Ímã 6x2', size: 'M', variant: 'azul', minimum_stock: 10 },
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    expect(onSubmit).toHaveBeenCalledWith({ name: 'Ímã 6x2', size: 'M', variant: 'azul', minimum_stock: 10 })
+  })
+
+  it('um tamanho legado (fora de PP/P/M/G/GG) aparece como opção extra, selecionada por padrão', () => {
+    renderForm({
+      mode: 'edit',
+      initialValues: { name: 'Parafuso', size: 'M3', variant: null, minimum_stock: 0 },
+    })
+
+    const legacyOption = screen.getByRole('radio', { name: 'M3' })
+    expect(legacyOption).toHaveAttribute('aria-checked', 'true')
+    // As opções oficiais continuam todas presentes, mais a legada — nunca
+    // um campo de texto livre para digitar um novo valor de tamanho.
+    expect(screen.getAllByRole('radio')).toHaveLength(7)
+    expect(screen.queryByRole('textbox', { name: 'Tamanho' })).not.toBeInTheDocument()
+  })
+
+  it('o valor legado pode ser mantido inalterado ao salvar', async () => {
+    const user = userEvent.setup()
+    const { onSubmit } = renderForm({
+      mode: 'edit',
+      initialValues: { name: 'Parafuso', size: 'M3', variant: null, minimum_stock: 0 },
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    expect(onSubmit).toHaveBeenCalledWith({ name: 'Parafuso', size: 'M3', variant: null, minimum_stock: 0 })
+  })
+
+  it('o valor legado pode ser trocado por uma opção oficial da lista', async () => {
+    const user = userEvent.setup()
+    const { onSubmit } = renderForm({
+      mode: 'edit',
+      initialValues: { name: 'Parafuso', size: 'M3', variant: null, minimum_stock: 0 },
+    })
+
+    await user.click(screen.getByRole('radio', { name: 'G' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    expect(onSubmit).toHaveBeenCalledWith({ name: 'Parafuso', size: 'G', variant: null, minimum_stock: 0 })
+  })
+
+  it('o valor legado pode ser trocado por "Não se aplica" (size null)', async () => {
+    const user = userEvent.setup()
+    const { onSubmit } = renderForm({
+      mode: 'edit',
+      initialValues: { name: 'Parafuso', size: 'M3', variant: null, minimum_stock: 0 },
+    })
+
+    await user.click(screen.getByRole('radio', { name: 'Não se aplica' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    expect(onSubmit).toHaveBeenCalledWith({ name: 'Parafuso', size: null, variant: null, minimum_stock: 0 })
+  })
+})

@@ -55,7 +55,13 @@ function packagingFixture(overrides: Partial<Packaging> = {}): Packaging {
 
 function mockAccessories(
   list: Accessory[],
-  overrides: Partial<{ isLoading: boolean; error: unknown; refetch: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> }> = {},
+  overrides: Partial<{
+    isLoading: boolean
+    error: unknown
+    refetch: ReturnType<typeof vi.fn>
+    create: ReturnType<typeof vi.fn>
+    update: ReturnType<typeof vi.fn>
+  }> = {},
 ) {
   useAccessoriesMock.mockReturnValue({
     accessories: list,
@@ -63,12 +69,19 @@ function mockAccessories(
     error: overrides.error ?? null,
     refetch: overrides.refetch ?? vi.fn(),
     create: overrides.create ?? vi.fn().mockResolvedValue(accessoryFixture()),
+    update: overrides.update ?? vi.fn().mockResolvedValue(accessoryFixture()),
   })
 }
 
 function mockPackaging(
   list: Packaging[],
-  overrides: Partial<{ isLoading: boolean; error: unknown; refetch: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> }> = {},
+  overrides: Partial<{
+    isLoading: boolean
+    error: unknown
+    refetch: ReturnType<typeof vi.fn>
+    create: ReturnType<typeof vi.fn>
+    update: ReturnType<typeof vi.fn>
+  }> = {},
 ) {
   usePackagingMock.mockReturnValue({
     packaging: list,
@@ -76,6 +89,7 @@ function mockPackaging(
     error: overrides.error ?? null,
     refetch: overrides.refetch ?? vi.fn(),
     create: overrides.create ?? vi.fn().mockResolvedValue(packagingFixture()),
+    update: overrides.update ?? vi.fn().mockResolvedValue(packagingFixture()),
   })
 }
 
@@ -241,14 +255,15 @@ describe('InventoryPage', () => {
     expect(within(getTable()).getByText(formatBRL(12.5))).toBeInTheDocument()
   })
 
-  it('Ativo é só informativo (badge de texto), sem Switch nem ações de editar/excluir', () => {
+  it('Ativo é só informativo (badge de texto), sem Switch nem ações de ativar/desativar/excluir', () => {
     mockAccessories([accessoryFixture({ is_active: true }), accessoryFixture({ id: 'a2', name: 'Parafuso', is_active: false })])
     renderPage('acessorios')
 
     expect(within(getTableBody()).getByText('Ativo')).toBeInTheDocument()
     expect(within(getTableBody()).getByText('Inativo')).toBeInTheDocument()
     expect(screen.queryByRole('switch')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /editar/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^ativar/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /desativar/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /excluir/i })).not.toBeInTheDocument()
   })
 
@@ -603,7 +618,7 @@ describe('InventoryPage — área Embalagens (/estoque/embalagens)', () => {
     expect(within(getTable()).getByText(formatBRL(7.9))).toBeInTheDocument()
   })
 
-  it('Ativo é só um badge informativo: sem coluna Ações, sem checkbox de seleção, sem botões de editar/ativar/desativar/excluir', () => {
+  it('Ativo é só um badge informativo: coluna de Ações sem rótulo, sem checkbox de seleção, sem botões de ativar/desativar/excluir', () => {
     mockPackaging([
       packagingFixture({ id: 'k1', is_active: true }),
       packagingFixture({ id: 'k2', name: 'Sacola Kraft', is_active: false }),
@@ -612,10 +627,12 @@ describe('InventoryPage — área Embalagens (/estoque/embalagens)', () => {
 
     expect(within(getTableBody()).getByText('Ativo')).toBeInTheDocument()
     expect(within(getTableBody()).getByText('Inativo')).toBeInTheDocument()
+    // A coluna de ações existe (botão "Editar" por linha), mas o próprio
+    // cabeçalho não tem texto/nome acessível "Ações" — mesmo padrão já
+    // aprovado em CustomersPage/CompaniesPage.
     expect(screen.queryByRole('columnheader', { name: /ações/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('switch')).not.toBeInTheDocument()
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /editar/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^ativar/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /desativar/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /excluir/i })).not.toBeInTheDocument()
@@ -801,5 +818,247 @@ describe('InventoryPage — cadastro de novos itens', () => {
 
     resolveCreate(accessoryFixture())
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+})
+
+// Edição de itens existentes — o próprio InventoryItemForm.test.tsx já
+// cobre pré-preenchimento/tamanho legado/validações em isolamento; os
+// testes abaixo cobrem só a integração com a página (botão "Editar" por
+// linha, abrir/fechar com os dados certos, payload exato enviado a
+// update(), sucesso/erro/duplo-envio, busca/filtro preservados).
+describe('InventoryPage — edição de itens existentes', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+  })
+
+  it('botão "Editar" existe em cada linha da listagem de Acessórios e abre "Editar acessório" pré-preenchido', async () => {
+    const user = userEvent.setup()
+    mockAccessories([accessoryFixture()])
+    renderPage('acessorios')
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+
+    expect(screen.getByRole('dialog', { name: 'Editar acessório' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Nome')).toHaveValue('Ímã 6x2')
+    expect(screen.getByLabelText('Variante')).toHaveValue('azul')
+    expect(screen.getByLabelText('Estoque mínimo')).toHaveValue('10')
+    expect(screen.getByRole('radio', { name: 'M' })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('cancelar a edição fecha o diálogo sem chamar update()', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn()
+    mockAccessories([accessoryFixture()], { update })
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await user.clear(screen.getByLabelText('Nome'))
+    await user.type(screen.getByLabelText('Nome'), 'Não deve ser salvo')
+    await user.click(screen.getByRole('button', { name: 'Cancelar' }))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('reabrir a edição para um registro diferente não preserva os valores do anterior', async () => {
+    const user = userEvent.setup()
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Ímã 6x2' }),
+      accessoryFixture({ id: 'a2', name: 'Parafuso', size: 'G', variant: 'prata', minimum_stock: 3 }),
+    ])
+    renderPage('acessorios')
+
+    const rows = within(getTableBody()).getAllByRole('row')
+    await user.click(within(rows[0]).getByRole('button', { name: 'Editar' }))
+    expect(screen.getByLabelText('Nome')).toHaveValue('Ímã 6x2')
+    await user.click(screen.getByRole('button', { name: 'Cancelar' }))
+
+    await user.click(within(rows[1]).getByRole('button', { name: 'Editar' }))
+    expect(screen.getByLabelText('Nome')).toHaveValue('Parafuso')
+    expect(screen.getByLabelText('Variante')).toHaveValue('prata')
+    expect(screen.getByLabelText('Estoque mínimo')).toHaveValue('3')
+  })
+
+  it('envia o payload exato ao editar um acessório (nome pós-trim, sem is_active/material/unit_cost/current_stock)', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture())
+    mockAccessories([accessoryFixture()], { update })
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await user.clear(screen.getByLabelText('Nome'))
+    await user.type(screen.getByLabelText('Nome'), '  Ímã atualizado  ')
+    await user.clear(screen.getByLabelText('Variante'))
+    await user.type(screen.getByLabelText('Variante'), '  prata  ')
+    await user.clear(screen.getByLabelText('Estoque mínimo'))
+    await user.type(screen.getByLabelText('Estoque mínimo'), '7')
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith('a1', {
+        name: 'Ímã atualizado',
+        size: 'M',
+        variant: 'prata',
+        minimum_stock: 7,
+      }),
+    )
+    expect(Object.keys(update.mock.calls[0][1])).toEqual(['name', 'size', 'variant', 'minimum_stock'])
+  })
+
+  it('tamanho "Não se aplica" é enviado como null na edição', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture())
+    mockAccessories([accessoryFixture({ size: 'M' })], { update })
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await user.click(screen.getByRole('radio', { name: 'Não se aplica' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('a1', expect.objectContaining({ size: null })))
+  })
+
+  it('um tamanho legado é preservado quando o usuário não altera a seleção', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture())
+    mockAccessories([accessoryFixture({ size: 'M3' })], { update })
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    expect(screen.getByRole('radio', { name: 'M3' })).toHaveAttribute('aria-checked', 'true')
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('a1', expect.objectContaining({ size: 'M3' })))
+  })
+
+  it('um tamanho legado pode ser substituído por uma opção oficial da lista', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture())
+    mockAccessories([accessoryFixture({ size: 'M3' })], { update })
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await user.click(screen.getByRole('radio', { name: 'GG' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('a1', expect.objectContaining({ size: 'GG' })))
+  })
+
+  it('sucesso fecha o diálogo e mostra um toast de confirmação', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture({ name: 'Ímã atualizado' }))
+    mockAccessories([accessoryFixture()], { update })
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await user.clear(screen.getByLabelText('Nome'))
+    await user.type(screen.getByLabelText('Nome'), 'Ímã atualizado')
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(toastMock.success).toHaveBeenCalledWith('Acessório atualizado.')
+  })
+
+  it('erro de validação mantém o diálogo aberto, preserva os valores e mostra a mensagem dentro do formulário (nunca toast)', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockRejectedValue(new ApiError('validation', 400, 'Campo inválido: name.'))
+    mockAccessories([accessoryFixture()], { update })
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await user.clear(screen.getByLabelText('Nome'))
+    await user.type(screen.getByLabelText('Nome'), 'Nome inválido')
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    expect(await screen.findByText('Campo inválido: name.')).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByLabelText('Nome')).toHaveValue('Nome inválido')
+    expect(toastMock.error).not.toHaveBeenCalled()
+  })
+
+  it('falha de autenticação (401) na edição é tratada via toast, sem fechar o diálogo nem perder os valores', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockRejectedValue(new ApiError('authorization', 401, 'Sessão expirada. Faça login novamente.'))
+    mockAccessories([accessoryFixture()], { update })
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Sessão expirada. Faça login novamente.'))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('impede edição duplicada: o botão fica desabilitado durante o envio e não reenvia', async () => {
+    const user = userEvent.setup()
+    let resolveUpdate: (value: Accessory) => void = () => {}
+    const update = vi.fn(
+      () =>
+        new Promise<Accessory>((resolve) => {
+          resolveUpdate = resolve
+        }),
+    )
+    mockAccessories([accessoryFixture()], { update })
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    const savingButton = await screen.findByRole('button', { name: 'Salvando...' })
+    expect(savingButton).toBeDisabled()
+    expect(update).toHaveBeenCalledTimes(1)
+
+    await user.click(savingButton)
+    expect(update).toHaveBeenCalledTimes(1)
+
+    resolveUpdate(accessoryFixture())
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('editar não limpa a busca nem o filtro de status ativos na listagem', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture())
+    mockAccessories(
+      [accessoryFixture({ id: 'a1', name: 'Ímã 6x2' }), accessoryFixture({ id: 'a2', name: 'Parafuso', is_active: false })],
+      { update },
+    )
+    renderPage('acessorios')
+
+    const searchInput = screen.getByRole('combobox', { name: 'Buscar acessórios' })
+    await user.type(searchInput, 'Ímã')
+    await user.click(screen.getByRole('radio', { name: 'Ativos' }))
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    expect(searchInput).toHaveValue('Ímã')
+    expect(screen.getByRole('radio', { name: 'Ativos' })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('botão "Editar" existe na listagem de Embalagens e abre "Editar embalagem" com payload correto', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(packagingFixture())
+    mockPackaging([packagingFixture()], { update })
+    renderPage('embalagens')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    expect(screen.getByRole('dialog', { name: 'Editar embalagem' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Nome')).toHaveValue('Caixa M')
+
+    await user.clear(screen.getByLabelText('Nome'))
+    await user.type(screen.getByLabelText('Nome'), 'Caixa G')
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith('k1', {
+        name: 'Caixa G',
+        size: 'M',
+        variant: 'kraft',
+        minimum_stock: 5,
+      }),
+    )
   })
 })

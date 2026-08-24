@@ -6,19 +6,28 @@ import { Label } from '@/components/ui/label'
 import { parseNumberField } from '@/lib/forms/numberField'
 import { cn } from '@/lib/utils'
 
-// Formulário de CRIAÇÃO compartilhado entre Acessórios e Embalagens — as
-// duas têm exatamente os mesmos campos editáveis nesta etapa (confirmado
-// por leitura: create_accessory/create_packaging têm assinatura idêntica).
-// Edição, ativação/desativação e exclusão continuam fora de escopo desta
-// rodada — nenhum campo Ativo aqui: um registro novo nasce ativo pelo
-// default do banco (accessories/packaging.is_active not null default
-// true), nunca escolhido no formulário, mesmo padrão já usado em
-// CustomerForm.tsx.
+// Formulário de CRIAÇÃO e EDIÇÃO compartilhado entre Acessórios e
+// Embalagens — as duas têm exatamente os mesmos campos editáveis nesta
+// etapa (confirmado por leitura: create/update_accessory e
+// create/update_packaging têm assinatura idêntica). Ativação/desativação e
+// exclusão continuam fora de escopo — nenhum campo Ativo aqui: um registro
+// novo nasce ativo pelo default do banco (accessories/packaging.is_active
+// not null default true), e a edição desta etapa nunca envia is_active,
+// mesmo padrão já usado em CustomerForm.tsx.
 export interface InventoryItemFormValues {
   name: string
   size: string | null
   variant: string | null
   minimum_stock: number
+}
+
+// Valores para pré-preencher o formulário em modo edição — mesmo padrão já
+// aprovado em ProductForm.tsx (ProductFormInitialValues).
+export interface InventoryItemFormInitialValues {
+  name: string
+  size: string | null
+  variant: string | null
+  minimum_stock: number | null
 }
 
 // "Não se aplica" (size = null) é uma opção explícita do grupo, não um
@@ -37,20 +46,46 @@ const SIZE_OPTIONS: Array<{ label: string; value: string | null }> = [
 interface InventoryItemFormProps {
   // Prefixo para os ids dos campos (ex.: "accessory"/"packaging") — evita
   // colisão de id quando, em tese, dois diálogos deste formulário existem
-  // na mesma árvore (não acontece hoje, já que as duas áreas nunca montam
-  // ao mesmo tempo, mas mantém o componente seguro para reuso).
+  // na mesma árvore (acontece hoje: o diálogo de criação e o de edição de
+  // uma mesma área usam idPrefix distintos, mesmo que nunca abertos ao
+  // mesmo tempo, mantendo o componente seguro para reuso).
   idPrefix: string
+  mode?: 'create' | 'edit'
+  initialValues?: InventoryItemFormInitialValues
   isSubmitting: boolean
   submitError: string | null
   onSubmit: (values: InventoryItemFormValues) => void
   onCancel: () => void
 }
 
-export function InventoryItemForm({ idPrefix, isSubmitting, submitError, onSubmit, onCancel }: InventoryItemFormProps) {
-  const [name, setName] = useState('')
-  const [size, setSize] = useState<string | null>(null)
-  const [variant, setVariant] = useState('')
-  const [minimumStock, setMinimumStock] = useState('')
+export function InventoryItemForm({
+  idPrefix,
+  mode = 'create',
+  initialValues,
+  isSubmitting,
+  submitError,
+  onSubmit,
+  onCancel,
+}: InventoryItemFormProps) {
+  const [name, setName] = useState(initialValues?.name ?? '')
+  const [size, setSize] = useState<string | null>(initialValues?.size ?? null)
+  const [variant, setVariant] = useState(initialValues?.variant ?? '')
+  const [minimumStock, setMinimumStock] = useState(
+    initialValues?.minimum_stock != null ? String(initialValues.minimum_stock) : '',
+  )
+  // Um tamanho legado (fora de PP/P/M/G/GG) vira uma opção extra do próprio
+  // radiogroup, capturada uma única vez na montagem — nunca recalculada a
+  // partir do `size` corrente, mesmo idioma já aprovado em
+  // ProductCompositionForm.tsx (stableOutOfRangeByKey) para quantidades
+  // fora do range. Isso permite ao usuário manter o valor legado
+  // inalterado, escolher "Não se aplica" ou trocar por um valor oficial —
+  // nunca digitar um valor livre novo, que não existe como campo de texto
+  // aqui.
+  const [sizeOptions] = useState(() => {
+    const legacyValue = initialValues?.size
+    if (!legacyValue || SIZE_OPTIONS.some((option) => option.value === legacyValue)) return SIZE_OPTIONS
+    return [...SIZE_OPTIONS, { label: legacyValue, value: legacyValue }]
+  })
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -104,7 +139,7 @@ export function InventoryItemForm({ idPrefix, isSubmitting, submitError, onSubmi
       <div className="flex flex-col gap-2">
         <Label>Tamanho</Label>
         <div role="radiogroup" aria-label="Tamanho" className="flex flex-wrap gap-2">
-          {SIZE_OPTIONS.map((option) => (
+          {sizeOptions.map((option) => (
             <button
               key={option.label}
               type="button"
@@ -167,7 +202,7 @@ export function InventoryItemForm({ idPrefix, isSubmitting, submitError, onSubmi
           disabled={isSubmitting}
           className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
         >
-          {isSubmitting ? 'Salvando...' : 'Salvar'}
+          {isSubmitting ? 'Salvando...' : mode === 'edit' ? 'Salvar alterações' : 'Salvar'}
         </Button>
       </DialogFooter>
     </form>

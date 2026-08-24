@@ -2,14 +2,16 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/errors'
 
-const { listPackagingMock, createPackagingMock } = vi.hoisted(() => ({
+const { listPackagingMock, createPackagingMock, updatePackagingMock } = vi.hoisted(() => ({
   listPackagingMock: vi.fn(),
   createPackagingMock: vi.fn(),
+  updatePackagingMock: vi.fn(),
 }))
 
 vi.mock('@/lib/api/packaging', () => ({
   listPackaging: listPackagingMock,
   createPackaging: createPackagingMock,
+  updatePackaging: updatePackagingMock,
 }))
 
 import { usePackaging } from './usePackaging'
@@ -34,6 +36,7 @@ describe('usePackaging', () => {
   beforeEach(() => {
     listPackagingMock.mockReset()
     createPackagingMock.mockReset()
+    updatePackagingMock.mockReset()
   })
 
   it('loads the packaging list on mount', async () => {
@@ -93,5 +96,42 @@ describe('usePackaging', () => {
     ).rejects.toBeInstanceOf(ApiError)
 
     expect(result.current.packaging).toEqual([otherPackagingItem])
+  })
+
+  it('update() calls the API, replaces the item locally (still sorted by name) and returns it — without refetching', async () => {
+    listPackagingMock.mockResolvedValue([packagingItem, otherPackagingItem])
+    const updated = { ...packagingItem, name: 'Argola plástica', minimum_stock: 15 }
+    updatePackagingMock.mockResolvedValue(updated)
+
+    const { result } = renderHook(() => usePackaging())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    let returned
+    await act(async () => {
+      returned = await result.current.update('1', { name: 'Argola plástica', minimum_stock: 15 })
+    })
+
+    expect(updatePackagingMock).toHaveBeenCalledWith('1', { name: 'Argola plástica', minimum_stock: 15 })
+    expect(returned).toEqual(updated)
+    // "Argola plástica" reordena antes de "Sacola Kraft" — a lista continua
+    // ordenada por nome após a atualização local, sem precisar de refetch.
+    expect(result.current.packaging).toEqual([updated, otherPackagingItem])
+    expect(listPackagingMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('update() propagates an ApiError without changing the current list', async () => {
+    listPackagingMock.mockResolvedValue([packagingItem, otherPackagingItem])
+    updatePackagingMock.mockRejectedValue(new ApiError('validation', 400, 'Campo inválido: name.'))
+
+    const { result } = renderHook(() => usePackaging())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    await expect(
+      act(async () => {
+        await result.current.update('1', { name: '' })
+      }),
+    ).rejects.toBeInstanceOf(ApiError)
+
+    expect(result.current.packaging).toEqual([packagingItem, otherPackagingItem])
   })
 })
