@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
@@ -18,6 +18,7 @@ const {
   listOrderItemsMock,
   useOrderManagementMock,
   changeOrderStatusMock,
+  registerPaymentMock,
 } = vi.hoisted(() => ({
   useOrdersMock: vi.fn(),
   useCustomersMock: vi.fn(),
@@ -39,6 +40,11 @@ const {
   // uma busca inteira de resumo/pagamentos/histórico só para trocar um
   // status a partir da linha da tabela) — precisa do próprio mock aqui.
   changeOrderStatusMock: vi.fn(),
+  // OrderPaymentStatusControl (coluna Status financeiro da listagem) chama
+  // registerPayment direto de lib/api/payments, pelo mesmo motivo de
+  // changeOrderStatusMock acima — os 3 valores financeiros já vêm prontos
+  // via OrderSummary (useOrders), sem precisar de useOrderManagement.
+  registerPaymentMock: vi.fn(),
   // OrderManagementPanel usa useOrderManagement por inteiro — mockado aqui
   // pelo mesmo motivo de getOrder/listOrderItems acima: esta suíte testa só
   // a integração (o botão abre o diálogo certo, com o orderId certo), não
@@ -60,6 +66,7 @@ vi.mock('@/lib/api/orders', () => ({
   changeOrderStatus: changeOrderStatusMock,
 }))
 vi.mock('@/lib/api/orderItems', () => ({ listOrderItems: listOrderItemsMock }))
+vi.mock('@/lib/api/payments', () => ({ registerPayment: registerPaymentMock }))
 vi.mock('@/hooks/useOrderManagement', () => ({ useOrderManagement: useOrderManagementMock }))
 
 import { formatDateOnly, OrdersPage } from './OrdersPage'
@@ -290,6 +297,7 @@ describe('OrdersPage', () => {
     listOrderItemsMock.mockReset().mockResolvedValue([fullOrderItem])
     updateQuoteOrderMock.mockReset().mockResolvedValue({ id: 'o1' })
     changeOrderStatusMock.mockReset().mockResolvedValue(undefined)
+    registerPaymentMock.mockReset().mockResolvedValue({ id: 'pay-1' })
     useOrderManagementMock.mockReset().mockReturnValue({
       summary: orderSummary,
       payments: [],
@@ -1194,6 +1202,148 @@ describe('OrdersPage', () => {
       const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
       expect(within(row).getByRole('button', { name: 'Orçamento' })).toBeInTheDocument()
       expect(within(row).getByRole('button', { name: /gerenciar pedido/i })).toBeInTheDocument()
+    })
+  })
+
+  describe('Alterar status financeiro diretamente pela listagem (coluna Status financeiro)', () => {
+    it('mostra um badge clicável com o texto do status financeiro atual', () => {
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      expect(within(row).getByRole('button', { name: /status financeiro: aguardando pagamento/i })).toBeInTheDocument()
+    })
+
+    it('clicar no status financeiro abre o RegisterPaymentForm com os totais corretos do pedido', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      await user.click(within(row).getByRole('button', { name: /status financeiro/i }))
+
+      expect(screen.getByRole('heading', { name: 'Registrar pagamento' })).toBeInTheDocument()
+      expect(screen.getByRole('radiogroup', { name: 'Tipo de pagamento' })).toBeInTheDocument()
+      // orderSummary: total_receivable=50, total_paid=0, balance_due=50
+      const totals = screen.getAllByText('R$ 50,00')
+      expect(totals.length).toBeGreaterThanOrEqual(2)
+    })
+
+    it('abre também pelo teclado (foco + Enter)', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      const trigger = within(row).getByRole('button', { name: /status financeiro/i })
+      trigger.focus()
+      await user.keyboard('{Enter}')
+
+      expect(screen.getByRole('heading', { name: 'Registrar pagamento' })).toBeInTheDocument()
+    })
+
+    it('registrar um pagamento chama registerPayment, mostra toast, refaz a listagem e fecha o diálogo', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      await user.click(within(row).getByRole('button', { name: /status financeiro/i }))
+
+      await user.click(screen.getByRole('radio', { name: 'Sinal' }))
+      await user.click(screen.getByRole('radio', { name: 'Pix' }))
+      await user.click(screen.getByLabelText(/^valor$/i))
+      await user.keyboard('2000')
+      await user.click(screen.getByRole('button', { name: /^registrar pagamento$/i }))
+
+      await waitFor(() =>
+        expect(registerPaymentMock).toHaveBeenCalledWith(
+          expect.objectContaining({ order_id: 'o1', payment_type: 'SINAL', payment_method: 'PIX', amount: 20 }),
+        ),
+      )
+      expect(toastMock.success).toHaveBeenCalledWith('Pagamento registrado.')
+      expect(refetchMock).toHaveBeenCalled()
+      await waitFor(() => expect(screen.queryByRole('heading', { name: 'Registrar pagamento' })).not.toBeInTheDocument())
+    })
+
+    it('mostra o erro real do backend e mantém o diálogo aberto quando o pagamento falha', async () => {
+      registerPaymentMock.mockRejectedValue(new ApiError('business_rule', 409, 'Soma dos pagamentos ficaria negativa'))
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      await user.click(within(row).getByRole('button', { name: /status financeiro/i }))
+      await user.click(screen.getByRole('radio', { name: 'Sinal' }))
+      await user.click(screen.getByRole('radio', { name: 'Pix' }))
+      await user.click(screen.getByLabelText(/^valor$/i))
+      await user.keyboard('2000')
+      await user.click(screen.getByRole('button', { name: /^registrar pagamento$/i }))
+
+      expect(await screen.findByText('Soma dos pagamentos ficaria negativa')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Registrar pagamento' })).toBeInTheDocument()
+    })
+
+    it('bloqueia duplo envio: o botão fica desabilitado durante a requisição', async () => {
+      let resolvePromise: (value: { id: string }) => void = () => {}
+      registerPaymentMock.mockReturnValue(
+        new Promise<{ id: string }>((resolve) => {
+          resolvePromise = resolve
+        }),
+      )
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      await user.click(within(row).getByRole('button', { name: /status financeiro/i }))
+      await user.click(screen.getByRole('radio', { name: 'Sinal' }))
+      await user.click(screen.getByRole('radio', { name: 'Pix' }))
+      await user.click(screen.getByLabelText(/^valor$/i))
+      await user.keyboard('2000')
+      await user.click(screen.getByRole('button', { name: /^registrar pagamento$/i }))
+
+      expect(screen.getByRole('button', { name: /registrando/i })).toBeDisabled()
+      expect(registerPaymentMock).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        resolvePromise({ id: 'pay-1' })
+        await Promise.resolve()
+      })
+    })
+
+    it('pedido CANCELLED: o controle de status financeiro continua clicável (register_payment não bloqueia por order_status)', async () => {
+      const cancelledOrder = { ...orderSummary, order_status: 'CANCELLED' as const }
+      mockOrders([cancelledOrder], {}, createMock)
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      await user.click(within(row).getByRole('button', { name: /status financeiro/i }))
+
+      expect(screen.getByRole('heading', { name: 'Registrar pagamento' })).toBeInTheDocument()
+    })
+
+    it('o controle de Status do pedido (operacional) continua funcionando ao lado do de status financeiro', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      expect(within(row).getByRole('button', { name: 'Orçamento' })).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: /status financeiro/i })).toBeInTheDocument()
+
+      const user2 = user
+      await user2.click(within(row).getByRole('button', { name: 'Orçamento' }))
+      expect(screen.getByRole('heading', { name: /alterar status/i })).toBeInTheDocument()
+    })
+
+    it('filtros por status e busca continuam funcionando com o novo controle de status financeiro na coluna', async () => {
+      const orderB = { ...orderSummary, order_id: 'o2', order_number: 'FS-26-002', order_status: 'APPROVED' as const }
+      mockOrders([orderSummary, orderB], {}, createMock)
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'FS-26-002')
+      expect(within(getTable()).getByText('FS-26-002')).toBeInTheDocument()
+      expect(within(getTable()).queryByText('FS-26-001')).not.toBeInTheDocument()
+
+      await user.clear(screen.getByRole('combobox', { name: 'Buscar pedido' }))
+      const group = screen.getByRole('radiogroup', { name: 'Filtrar pedidos por status' })
+      await user.click(within(group).getByRole('radio', { name: /^aprovado/i }))
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['FS-26-002'])
     })
   })
 
