@@ -122,6 +122,19 @@ export function CustomersPage() {
   // Nomes de empresa/origem resolvidos a partir dos dados já carregados por
   // useCompanies/useLeadSources — nenhuma consulta nova, nunca exibe UUID.
   const companyNameById = useMemo(() => new Map(companies.map((company) => [company.id, company.name])), [companies])
+
+  // Empresas oferecidas no formulário: só ativas, exceto a empresa já
+  // vinculada ao cliente em edição (se ela tiver sido desativada depois do
+  // vínculo, continua aparecendo/selecionada — nunca perde o vínculo
+  // existente por causa de uma desativação posterior). listCompanies()
+  // continua trazendo ativas e inativas sem filtro nenhum, porque a tela de
+  // Empresas precisa exibir as duas — o filtro é só para a lista oferecida
+  // aqui, no formulário de Clientes.
+  const availableCompanies = useMemo(
+    () =>
+      companies.filter((company) => company.is_active || company.id === editingCustomer?.company_id),
+    [companies, editingCustomer],
+  )
   const leadSourceNameById = useMemo(
     () => new Map(leadSources.map((source) => [source.id, source.name])),
     [leadSources],
@@ -410,7 +423,7 @@ export function CustomersPage() {
           <CustomerForm
             key={editingCustomer?.id ?? 'new'}
             initialValues={editingCustomer ?? undefined}
-            companies={companies}
+            companies={availableCompanies}
             leadSources={leadSources}
             isSubmitting={isSubmitting}
             submitError={formError}

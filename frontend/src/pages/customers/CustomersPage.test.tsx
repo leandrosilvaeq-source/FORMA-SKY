@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
-import type { Customer } from '@/types/domain'
+import type { Company, Customer } from '@/types/domain'
 
 const { useCustomersMock, useCompaniesMock, useLeadSourcesMock, toastMock, useAuthMock } = vi.hoisted(() => ({
   useCustomersMock: vi.fn(),
@@ -266,6 +266,103 @@ describe('CustomersPage', () => {
 
     expect(screen.getByText('Nenhum cliente cadastrado.')).toBeInTheDocument()
     expect(screen.queryByText('Nenhum cliente encontrado para esta busca.')).not.toBeInTheDocument()
+  })
+
+  describe('Empresa no formulário de Cliente (ativas vs. inativas — mesmo padrão de OrderForm.tsx)', () => {
+    // Duas empresas inativas propositalmente distintas: uma nunca vinculada
+    // a nenhum cliente (deve ficar sempre fora da lista) e outra vinculada
+    // ao cliente em edição (deve continuar aparecendo só nesse caso, para
+    // não apagar/substituir o vínculo existente).
+    const inactiveCompany: Company = { ...company, id: 'c2', name: 'Empresa Inativa', is_active: false }
+    const inactiveLinkedCompany: Company = {
+      ...company,
+      id: 'c3',
+      name: 'Empresa Vinculada Desativada',
+      is_active: false,
+    }
+    const customerWithInactiveCompany: Customer = { ...customer, id: '5', name: 'Cliente Vinculado', company_id: 'c3' }
+
+    beforeEach(() => {
+      useCompaniesMock.mockReturnValue({
+        companies: [company, inactiveCompany, inactiveLinkedCompany],
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+      })
+    })
+
+    it('empresa ativa aparece na lista ao criar um novo cliente', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /novo cliente/i }))
+      await user.click(screen.getByRole('combobox', { name: 'Empresa' }))
+
+      expect(await screen.findByRole('option', { name: 'Empresa A' })).toBeInTheDocument()
+    })
+
+    it('empresa inativa (sem vínculo com o cliente em edição) não aparece ao criar um novo cliente', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /novo cliente/i }))
+      await user.click(screen.getByRole('combobox', { name: 'Empresa' }))
+      await screen.findByRole('option', { name: 'Empresa A' })
+
+      expect(screen.queryByRole('option', { name: 'Empresa Inativa' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('option', { name: 'Empresa Vinculada Desativada' })).not.toBeInTheDocument()
+    })
+
+    it('empresa inativa já vinculada ao cliente em edição continua aparecendo e selecionável', async () => {
+      mockCustomers([customerWithInactiveCompany], {}, createMock, updateMock)
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /editar/i }))
+      await user.click(screen.getByRole('combobox', { name: 'Empresa' }))
+
+      expect(await screen.findByRole('option', { name: 'Empresa Vinculada Desativada' })).toBeInTheDocument()
+      // A outra empresa inativa, sem vínculo com ESTE cliente, continua fora.
+      expect(screen.queryByRole('option', { name: 'Empresa Inativa' })).not.toBeInTheDocument()
+    })
+
+    it('o campo Empresa já abre com o vínculo existente selecionado, mesmo com a empresa desativada', async () => {
+      mockCustomers([customerWithInactiveCompany], {}, createMock, updateMock)
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /editar/i }))
+
+      expect(screen.getByRole('combobox', { name: 'Empresa' })).toHaveTextContent('Empresa Vinculada Desativada')
+    })
+
+    it('salvar a edição sem tocar no campo Empresa preserva o company_id existente (nenhuma substituição automática)', async () => {
+      mockCustomers([customerWithInactiveCompany], {}, createMock, updateMock)
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /editar/i }))
+      await user.click(screen.getByRole('button', { name: /^salvar$/i }))
+
+      await waitFor(() =>
+        expect(updateMock).toHaveBeenCalledWith('5', expect.objectContaining({ company_id: 'c3' })),
+      )
+    })
+
+    it('trocar para uma empresa ativa a partir de um vínculo inativo funciona normalmente', async () => {
+      mockCustomers([customerWithInactiveCompany], {}, createMock, updateMock)
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /editar/i }))
+      await user.click(screen.getByRole('combobox', { name: 'Empresa' }))
+      await user.click(await screen.findByRole('option', { name: 'Empresa A' }))
+      await user.click(screen.getByRole('button', { name: /^salvar$/i }))
+
+      await waitFor(() =>
+        expect(updateMock).toHaveBeenCalledWith('5', expect.objectContaining({ company_id: 'c1' })),
+      )
+    })
   })
 
   describe('WhatsApp/Instagram clicáveis na listagem', () => {
