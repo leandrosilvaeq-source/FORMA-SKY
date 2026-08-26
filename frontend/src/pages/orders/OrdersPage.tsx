@@ -7,6 +7,7 @@ import { SearchAutocomplete, type SearchAutocompleteOption } from '@/components/
 import { OrderEditForm } from '@/components/orders/OrderEditForm'
 import { OrderForm } from '@/components/orders/OrderForm'
 import { OrderManagementPanel } from '@/components/orders/OrderManagementPanel'
+import { OrderStatusControl } from '@/components/orders/OrderStatusControl'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -597,7 +598,6 @@ export function OrdersPage() {
                     clientText,
                     typesText,
                     productsText,
-                    statusText,
                     paymentStatusText,
                     paymentMethodText,
                     deliveryMethodText,
@@ -625,8 +625,13 @@ export function OrdersPage() {
                       <TableCell className="truncate" title={productsText ?? undefined}>
                         {productsText ?? '—'}
                       </TableCell>
-                      <TableCell className="truncate" title={statusText}>
-                        {statusText}
+                      <TableCell className="truncate">
+                        <OrderStatusControl
+                          orderId={order.order_id}
+                          orderNumber={order.order_number}
+                          status={order.order_status}
+                          onChanged={refetch}
+                        />
                       </TableCell>
                       <TableCell className="truncate" title={paymentStatusText}>
                         {paymentStatusText}

@@ -17,6 +17,7 @@ const {
   updateQuoteOrderMock,
   listOrderItemsMock,
   useOrderManagementMock,
+  changeOrderStatusMock,
 } = vi.hoisted(() => ({
   useOrdersMock: vi.fn(),
   useCustomersMock: vi.fn(),
@@ -33,6 +34,11 @@ const {
   getOrderMock: vi.fn(),
   updateQuoteOrderMock: vi.fn(),
   listOrderItemsMock: vi.fn(),
+  // OrderStatusControl (coluna Status da listagem) chama changeOrderStatus
+  // direto de lib/api/orders, sem passar por useOrderManagement (custaria
+  // uma busca inteira de resumo/pagamentos/histórico só para trocar um
+  // status a partir da linha da tabela) — precisa do próprio mock aqui.
+  changeOrderStatusMock: vi.fn(),
   // OrderManagementPanel usa useOrderManagement por inteiro — mockado aqui
   // pelo mesmo motivo de getOrder/listOrderItems acima: esta suíte testa só
   // a integração (o botão abre o diálogo certo, com o orderId certo), não
@@ -48,7 +54,11 @@ vi.mock('@/hooks/useLeadSources', () => ({ useLeadSources: useLeadSourcesMock })
 vi.mock('@/hooks/useProducts', () => ({ useProducts: useProductsMock }))
 vi.mock('sonner', () => ({ toast: toastMock }))
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
-vi.mock('@/lib/api/orders', () => ({ getOrder: getOrderMock, updateQuoteOrder: updateQuoteOrderMock }))
+vi.mock('@/lib/api/orders', () => ({
+  getOrder: getOrderMock,
+  updateQuoteOrder: updateQuoteOrderMock,
+  changeOrderStatus: changeOrderStatusMock,
+}))
 vi.mock('@/lib/api/orderItems', () => ({ listOrderItems: listOrderItemsMock }))
 vi.mock('@/hooks/useOrderManagement', () => ({ useOrderManagement: useOrderManagementMock }))
 
@@ -279,6 +289,7 @@ describe('OrdersPage', () => {
     getOrderMock.mockReset().mockResolvedValue(fullOrder)
     listOrderItemsMock.mockReset().mockResolvedValue([fullOrderItem])
     updateQuoteOrderMock.mockReset().mockResolvedValue({ id: 'o1' })
+    changeOrderStatusMock.mockReset().mockResolvedValue(undefined)
     useOrderManagementMock.mockReset().mockReturnValue({
       summary: orderSummary,
       payments: [],
@@ -1055,6 +1066,134 @@ describe('OrdersPage', () => {
 
       expect(approvedRadio).toHaveAttribute('aria-checked', 'true')
       expect(getVisibleOrderNumbersInOrder()).toEqual(['FS-26-002'])
+    })
+  })
+
+  describe('Alterar status diretamente pela listagem (coluna Status)', () => {
+    it('QUOTE mostra um badge clicável na coluna Status, sem precisar abrir "Gerenciar pedido"', () => {
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      expect(within(row).getByRole('button', { name: 'Orçamento' })).toBeInTheDocument()
+    })
+
+    it('DELIVERED mostra só um badge estático, sem nenhuma ação', () => {
+      const deliveredOrder = { ...orderSummary, order_status: 'DELIVERED' as const }
+      mockOrders([deliveredOrder], {}, createMock)
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      expect(within(row).queryByRole('button', { name: 'Entregue' })).not.toBeInTheDocument()
+      expect(within(row).getByText('Entregue')).toBeInTheDocument()
+    })
+
+    it('CANCELLED mostra só um badge estático, sem nenhuma ação', () => {
+      const cancelledOrder = { ...orderSummary, order_status: 'CANCELLED' as const }
+      mockOrders([cancelledOrder], {}, createMock)
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      expect(within(row).queryByRole('button', { name: 'Cancelado' })).not.toBeInTheDocument()
+      expect(within(row).getByText('Cancelado')).toBeInTheDocument()
+      // Ações da linha (Alterar/Gerenciar pedido) continuam disponíveis —
+      // só o controle de STATUS vira badge estático, nunca a linha inteira.
+      expect(within(row).getByRole('button', { name: /gerenciar pedido/i })).toBeInTheDocument()
+    })
+
+    it('clicar no badge de status abre o diálogo mostrando só a próxima transição válida, exige confirmação', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      await user.click(within(row).getByRole('button', { name: 'Orçamento' }))
+
+      expect(screen.getByRole('heading', { name: /alterar status/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /avançar para "aguardando aprovação"/i })).toBeInTheDocument()
+      expect(changeOrderStatusMock).not.toHaveBeenCalled()
+    })
+
+    it('confirmar a transição chama changeOrderStatus, mostra toast e refaz a listagem/contagens', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      await user.click(within(row).getByRole('button', { name: 'Orçamento' }))
+      await user.click(screen.getByRole('button', { name: /avançar para/i }))
+      await user.click(screen.getByRole('button', { name: /^confirmar$/i }))
+
+      await waitFor(() => expect(changeOrderStatusMock).toHaveBeenCalledWith('o1', 'WAITING_APPROVAL'))
+      expect(toastMock.success).toHaveBeenCalled()
+      expect(refetchMock).toHaveBeenCalled()
+    })
+
+    it('bloqueia duplo clique: o botão Confirmar fica desabilitado durante a chamada', async () => {
+      let resolvePromise: () => void = () => {}
+      changeOrderStatusMock.mockReturnValue(
+        new Promise<void>((resolve) => {
+          resolvePromise = resolve
+        }),
+      )
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      await user.click(within(row).getByRole('button', { name: 'Orçamento' }))
+      await user.click(screen.getByRole('button', { name: /avançar para/i }))
+      await user.click(screen.getByRole('button', { name: /^confirmar$/i }))
+
+      expect(screen.getByRole('button', { name: /confirmando/i })).toBeDisabled()
+      resolvePromise()
+    })
+
+    it('mostra o erro real do backend quando a transição falha, sem fechar o diálogo', async () => {
+      changeOrderStatusMock.mockRejectedValue(new ApiError('business_rule', 409, 'Transição de status inválida'))
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      await user.click(within(row).getByRole('button', { name: 'Orçamento' }))
+      await user.click(screen.getByRole('button', { name: /avançar para/i }))
+      await user.click(screen.getByRole('button', { name: /^confirmar$/i }))
+
+      expect(await screen.findByText('Transição de status inválida')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /alterar status/i })).toBeInTheDocument()
+    })
+
+    it('pedido QUOTE só-CATALOG: avançar para "Aguardando aprovação" continua correto mesmo que o backend já promova automaticamente a Aprovado', async () => {
+      // Este teste só confirma que a página confia no refetch (nunca
+      // assume o novo status localmente) — a promoção automática em si é
+      // responsabilidade de try_auto_approve_order() no backend, já fora
+      // do escopo do frontend.
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      await user.click(within(row).getByRole('button', { name: 'Orçamento' }))
+      await user.click(screen.getByRole('button', { name: /avançar para/i }))
+      await user.click(screen.getByRole('button', { name: /^confirmar$/i }))
+
+      await waitFor(() => expect(changeOrderStatusMock).toHaveBeenCalledWith('o1', 'WAITING_APPROVAL'))
+      expect(refetchMock).toHaveBeenCalled()
+    })
+
+    it('cancelar pela listagem só é oferecido quando a máquina de estados permite', async () => {
+      const inProductionOrder = { ...orderSummary, order_status: 'IN_PRODUCTION' as const }
+      mockOrders([inProductionOrder], {}, createMock)
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      await user.click(within(row).getByRole('button', { name: 'Em produção' }))
+
+      expect(screen.queryByRole('button', { name: /cancelar pedido/i })).not.toBeInTheDocument()
+    })
+
+    it('o botão "Gerenciar pedido" continua disponível ao lado do controle de status, para pagamentos/histórico', () => {
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      expect(within(row).getByRole('button', { name: 'Orçamento' })).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: /gerenciar pedido/i })).toBeInTheDocument()
     })
   })
 

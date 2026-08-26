@@ -413,6 +413,8 @@ export function OrderManagementPanel({ orderId, clientLabel, onClose, onChanged 
             <DialogDescription>Pedido {summary.order_number}.</DialogDescription>
           </DialogHeader>
           <RegisterPaymentForm
+            orderTotal={summary.total_receivable}
+            balanceDue={summary.balance_due}
             currentTotalPaid={summary.total_paid}
             isSubmitting={isRegisteringPayment}
             submitError={paymentError}

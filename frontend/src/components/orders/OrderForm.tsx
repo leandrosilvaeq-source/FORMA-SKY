@@ -54,14 +54,18 @@ function isKnownDeliveryMethod(value: string | null): value is DeliveryMethod {
 // projeto (ao contrário de Instagram/WhatsApp/Facebook/TikTok em "Entrou em
 // contato por"), então todos usam a mesma cor genérica --brand-primary,
 // igual ao tratamento já dado a "Indicação"/"Outros" naquele grupo.
-const PAYMENT_METHOD_ITEMS: Array<{ label: string; value: PaymentMethod | null; Icon: IconComponent }> = [
+// Exportado para reuso por RegisterPaymentForm.tsx (campo "Método de
+// pagamento" do registro de pagamento) — mesma exigência explícita de
+// "reutilizar as mesmas constantes/ícones do OrderForm" em vez de duplicar
+// um segundo mapeamento de ícones para os 3 métodos reais.
+export const PAYMENT_METHOD_ITEMS: Array<{ label: string; value: PaymentMethod | null; Icon: IconComponent }> = [
   { label: 'Não informado', value: null, Icon: CircleDashedIcon },
   { label: 'Pix', value: 'PIX', Icon: QrCodeIcon },
   { label: 'Dinheiro', value: 'DINHEIRO', Icon: BanknoteIcon },
   { label: 'Cartão', value: 'CARTAO', Icon: CreditCardIcon },
 ]
 
-type IconComponent = ComponentType<{ className?: string }>
+export type IconComponent = ComponentType<{ className?: string }>
 
 const DELIVERY_METHOD_ICONS: Record<DeliveryMethod, IconComponent> = {
   'Em mãos': HandIcon,
@@ -104,6 +108,21 @@ function SectionRow({
         <div className="min-w-0 flex-1">{children}</div>
       </div>
       {error && <p className="text-destructive px-3 text-xs">{error}</p>}
+    </div>
+  )
+}
+
+// Bloco visual das 3 seções do formulário (Dados do Cliente / Dados do
+// Pedido / Entrega) — mesmo padrão de borda/raio já usado pelo bloco de
+// Itens logo abaixo (border-input rounded-lg border), nunca um componente
+// de card novo (ex.: components/ui/card.tsx, com ring/bg diferentes):
+// mantém a mesma linguagem visual já estabelecida DENTRO deste próprio
+// arquivo, sem introduzir um segundo padrão de "card" só para Pedidos.
+function FormSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="border-input rounded-lg border p-3">
+      <p className="text-muted-foreground mb-2 px-1 text-xs font-semibold tracking-wide uppercase">{title}</p>
+      <div className="flex flex-col gap-2">{children}</div>
     </div>
   )
 }
@@ -316,23 +335,30 @@ export function OrderForm({
 
   const showShipping = deliveryMethod === 'Correios' || deliveryMethod === 'Transportadora'
 
-  // Numeração visual das seções: recalculada a cada render para continuar
-  // coerente com o layout quando Empresa (só B2B) ou Frete (só
-  // Correios/Transportadora) entram/saem de cena — nunca deixa buraco na
-  // sequência.
-  let sectionNumber = 1
-  const saleTypeSectionNumber = sectionNumber++
-  const itemTypeSectionNumber = sectionNumber++
-  const companySectionNumber = saleType === 'B2B' ? sectionNumber++ : null
-  const customerSectionNumber = sectionNumber++
-  const leadSourceSectionNumber = sectionNumber++
-  const itemsSectionNumber = sectionNumber++
-  const deliverySectionNumber = sectionNumber++
-  const shippingSectionNumber = showShipping ? sectionNumber++ : null
-  const deliveryDateSectionNumber = sectionNumber++
-  const paymentMethodSectionNumber = sectionNumber++
+  // Numeração visual reinicia em 1 dentro de cada uma das 3 seções (Dados
+  // do Cliente / Dados do Pedido / Entrega) — recalculada a cada render
+  // para continuar coerente quando Empresa (só B2B) ou Frete (só
+  // Correios/Transportadora) entram/saem de cena, nunca deixando buraco na
+  // sequência dentro da própria seção.
+  let section1Number = 1
+  const saleTypeSectionNumber = section1Number++
+  const companySectionNumber = saleType === 'B2B' ? section1Number++ : null
+  const customerSectionNumber = section1Number++
+  // Último número da seção 1 — nenhum incremento necessário depois deste.
+  const leadSourceSectionNumber = section1Number
+
+  let section2Number = 1
+  const itemTypeSectionNumber = section2Number++
+  const itemsSectionNumber = section2Number++
+  // Último número da seção 2 — nenhum incremento necessário depois deste.
+  const paymentMethodSectionNumber = section2Number
+
+  let section3Number = 1
+  const deliverySectionNumber = section3Number++
+  const shippingSectionNumber = showShipping ? section3Number++ : null
+  const deliveryDateSectionNumber = section3Number++
   // Última seção numerada — nenhum incremento necessário depois desta.
-  const notesSectionNumber = sectionNumber
+  const notesSectionNumber = section3Number
 
   // Ao sair de B2B, limpa companyId — garante que uma empresa escolhida
   // antes não fique "fantasma" no estado se o usuário voltar para B2B
@@ -551,74 +577,54 @@ export function OrderForm({
 
       {readOnly && readOnlyMessage && <p className="text-muted-foreground text-sm">{readOnlyMessage}</p>}
 
-      <SectionRow number={saleTypeSectionNumber} label="Tipo de venda">
-        <div role="radiogroup" aria-label="Tipo de venda" className="border-input inline-flex rounded-md border p-0.5">
-          {SALE_TYPE_ITEMS.map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              role="radio"
-              aria-checked={saleType === item.value}
-              disabled={readOnly}
-              onClick={() => handleSaleTypeChange(item.value)}
-              className={cn(
-                'focus-visible:ring-brand-accent rounded-sm px-4 py-1 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50',
-                saleType === item.value
-                  ? 'bg-brand-primary text-brand-primary-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-              )}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      </SectionRow>
+      <FormSection title="Dados do cliente">
+        <SectionRow number={saleTypeSectionNumber} label="Tipo de venda">
+          <div role="radiogroup" aria-label="Tipo de venda" className="border-input inline-flex rounded-md border p-0.5">
+            {SALE_TYPE_ITEMS.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                role="radio"
+                aria-checked={saleType === item.value}
+                disabled={readOnly}
+                onClick={() => handleSaleTypeChange(item.value)}
+                className={cn(
+                  'focus-visible:ring-brand-accent rounded-sm px-4 py-1 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50',
+                  saleType === item.value
+                    ? 'bg-brand-primary text-brand-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                )}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </SectionRow>
 
-      <SectionRow number={itemTypeSectionNumber} label="Tipo de item">
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-1.5 text-sm font-medium">
-            <input
-              type="checkbox"
-              checked
-              disabled={readOnly}
-              aria-label="Catálogo"
-              className="accent-brand-primary size-4 rounded"
-              // Único tipo funcional nesta rodada: sempre marcado, nunca
-              // desabilitado (visualmente "disponível", ao contrário de
-              // Personalizado/Spot). Sem estado próprio para alternar — um
-              // clique é revertido de volta para true no mesmo evento,
-              // antes do próximo paint, então nunca aparece desmarcado.
-              onChange={(event) => {
-                event.currentTarget.checked = true
-              }}
-            />
-            Catálogo
-          </label>
-          <label className="text-muted-foreground flex items-center gap-1.5 text-sm">
-            <input type="checkbox" checked={false} disabled aria-label="Personalizado" className="size-4 rounded" />
-            Personalizado
-            <span className="bg-muted text-muted-foreground rounded-full px-1.5 py-0.5 text-[0.65rem]">
-              Em breve
-            </span>
-          </label>
-          <label className="text-muted-foreground flex items-center gap-1.5 text-sm">
-            <input type="checkbox" checked={false} disabled aria-label="Spot" className="size-4 rounded" />
-            Spot
-            <span className="bg-muted text-muted-foreground rounded-full px-1.5 py-0.5 text-[0.65rem]">
-              Em breve
-            </span>
-          </label>
-        </div>
-      </SectionRow>
+        {saleType === 'B2B' && (
+          <SectionRow number={companySectionNumber as number} label="Empresa" error={headerErrors.company_id}>
+            <Select items={companyItems} value={companyId} onValueChange={(value) => !readOnly && setCompanyId(value)}>
+              <SelectTrigger aria-label="Empresa" size="sm" className="w-full" disabled={readOnly}>
+                <SelectValue placeholder="Selecione a empresa" />
+              </SelectTrigger>
+              <SelectContent>
+                {companyItems.map((item) => (
+                  <SelectItem key={item.value ?? 'none'} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </SectionRow>
+        )}
 
-      {saleType === 'B2B' && (
-        <SectionRow number={companySectionNumber as number} label="Empresa" error={headerErrors.company_id}>
-          <Select items={companyItems} value={companyId} onValueChange={(value) => !readOnly && setCompanyId(value)}>
-            <SelectTrigger aria-label="Empresa" size="sm" className="w-full" disabled={readOnly}>
-              <SelectValue placeholder="Selecione a empresa" />
+        <SectionRow number={customerSectionNumber} label="Cliente/Contato" error={headerErrors.customer_id}>
+          <Select items={customerItems} value={customerId} onValueChange={(value) => !readOnly && setCustomerId(value)}>
+            <SelectTrigger aria-label="Cliente/Contato" size="sm" className="w-full" disabled={readOnly}>
+              <SelectValue placeholder="Selecione o cliente ou contato" />
             </SelectTrigger>
             <SelectContent>
-              {companyItems.map((item) => (
+              {customerItems.map((item) => (
                 <SelectItem key={item.value ?? 'none'} value={item.value}>
                   {item.label}
                 </SelectItem>
@@ -626,268 +632,294 @@ export function OrderForm({
             </SelectContent>
           </Select>
         </SectionRow>
-      )}
 
-      <SectionRow number={customerSectionNumber} label="Cliente/Contato" error={headerErrors.customer_id}>
-        <Select items={customerItems} value={customerId} onValueChange={(value) => !readOnly && setCustomerId(value)}>
-          <SelectTrigger aria-label="Cliente/Contato" size="sm" className="w-full" disabled={readOnly}>
-            <SelectValue placeholder="Selecione o cliente ou contato" />
-          </SelectTrigger>
-          <SelectContent>
-            {customerItems.map((item) => (
-              <SelectItem key={item.value ?? 'none'} value={item.value}>
-                {item.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </SectionRow>
-
-      <SectionRow number={leadSourceSectionNumber} label="Entrou em contato por:">
-        {/* Cards verticais (ícone grande em cima, nome embaixo) — extraídos
-            para components/leadSources/LeadSourcePicker.tsx, também
-            reutilizado por CustomerForm.tsx ("Como nos conheceu:"). Mesma
-            referência de tamanho de ícone (size-8) adotada por "Forma de
-            entrega" e "Método de pagamento" abaixo. */}
-        <LeadSourcePicker
-          leadSources={leadSources}
-          selectedId={leadSourceId}
-          onToggle={handleLeadSourceToggle}
-          ariaLabel="Entrou em contato por"
-          disabled={readOnly}
-        />
-      </SectionRow>
-
-      <div className="border-input rounded-lg border p-2">
-        <div className="flex items-center justify-between px-1 pb-1.5">
-          <span className="text-sm font-medium">{itemsSectionNumber}. Itens</span>
-          <Button
-            type="button"
-            variant="outline"
-            size="xs"
-            onClick={addItemRow}
+        <SectionRow number={leadSourceSectionNumber} label="Entrou em contato por:">
+          {/* Cards verticais (ícone grande em cima, nome embaixo) — extraídos
+              para components/leadSources/LeadSourcePicker.tsx, também
+              reutilizado por CustomerForm.tsx ("Como nos conheceu:"). Mesma
+              referência de tamanho de ícone (size-8) adotada por "Forma de
+              entrega" e "Método de pagamento" abaixo. */}
+          <LeadSourcePicker
+            leadSources={leadSources}
+            selectedId={leadSourceId}
+            onToggle={handleLeadSourceToggle}
+            ariaLabel="Entrou em contato por"
             disabled={readOnly}
-            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-          >
-            <PlusIcon /> Adicionar item
-          </Button>
-        </div>
-        <Table>
-          <TableHeader>
-            <TableRow className="bg-brand-primary-dark hover:bg-brand-primary-dark">
-              <TableHead className="text-brand-primary-foreground h-7 text-xs">Produto</TableHead>
-              <TableHead className="text-brand-primary-foreground h-7 text-xs">Preço</TableHead>
-              <TableHead className="text-brand-primary-foreground h-7 text-xs">Quantidade</TableHead>
-              <TableHead className="text-brand-primary-foreground h-7 text-xs">Personalização</TableHead>
-              <TableHead className="text-brand-primary-foreground h-7 text-xs">Total</TableHead>
-              <TableHead className="h-7 w-9" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {items.map((row) => {
-              const productOptions = productSelectOptions(row.key)
-              return (
-                <Fragment key={row.key}>
-                  <TableRow>
-                    <TableCell className="p-1.5">
-                      <Select
-                        items={productOptions}
-                        value={row.productId}
-                        onValueChange={(value) => handleProductChange(row.key, value)}
-                      >
-                        <SelectTrigger aria-label="Produto" size="sm" className="w-full min-w-40" disabled={readOnly}>
-                          <SelectValue placeholder="Selecione um produto" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {productOptions.map((item) => (
-                            <SelectItem key={item.value ?? 'none'} value={item.value}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </TableCell>
-                    <TableCell className="p-1.5">
-                      <div className="relative w-24">
-                        <span className="text-muted-foreground pointer-events-none absolute inset-y-0 left-2 flex items-center text-xs">
-                          R$
-                        </span>
-                        <Input
-                          className="h-7 pl-7"
-                          inputMode="decimal"
-                          aria-label="Preço unitário"
-                          value={row.unitPrice}
-                          onChange={(event) => updateItemRow(row.key, { unitPrice: event.target.value })}
-                          disabled={readOnly}
-                        />
-                      </div>
-                    </TableCell>
-                    <TableCell className="p-1.5">
-                      <div className="flex items-center gap-1">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon-xs"
-                          aria-label="Diminuir quantidade"
-                          onClick={() => decrementQuantity(row.key)}
-                          disabled={readOnly}
-                        >
-                          <MinusIcon />
-                        </Button>
-                        <Input
-                          className="h-7 w-10 shrink-0 px-1 text-center"
-                          inputMode="numeric"
-                          aria-label="Quantidade"
-                          value={row.quantity}
-                          onChange={(event) => updateItemRow(row.key, { quantity: event.target.value })}
-                          disabled={readOnly}
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon-xs"
-                          aria-label="Aumentar quantidade"
-                          onClick={() => incrementQuantity(row.key)}
-                          disabled={readOnly}
-                        >
-                          <PlusIcon />
-                        </Button>
-                      </div>
-                    </TableCell>
-                    <TableCell className="p-1.5">
-                      <Input
-                        className="h-7 w-24"
-                        inputMode="decimal"
-                        aria-label="Taxa de personalização"
-                        placeholder="0,00"
-                        value={row.personalizationFee}
-                        onChange={(event) => updateItemRow(row.key, { personalizationFee: event.target.value })}
-                        disabled={readOnly}
-                      />
-                    </TableCell>
-                    <TableCell className="p-1.5 text-sm font-medium">{formatCurrency(computeRowTotal(row))}</TableCell>
-                    <TableCell className="p-1.5">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() => removeItemRow(row.key)}
-                        disabled={items.length === 1 || readOnly}
-                        aria-label="Remover item"
-                      >
-                        <Trash2Icon />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                  {itemErrors[row.key] && (
+          />
+        </SectionRow>
+      </FormSection>
+
+      <FormSection title="Dados do pedido">
+        <SectionRow number={itemTypeSectionNumber} label="Tipo de item">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-1.5 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked
+                disabled={readOnly}
+                aria-label="Catálogo"
+                className="accent-brand-primary size-4 rounded"
+                // Único tipo funcional nesta rodada: sempre marcado, nunca
+                // desabilitado (visualmente "disponível", ao contrário de
+                // Personalizado/Spot). Sem estado próprio para alternar — um
+                // clique é revertido de volta para true no mesmo evento,
+                // antes do próximo paint, então nunca aparece desmarcado.
+                onChange={(event) => {
+                  event.currentTarget.checked = true
+                }}
+              />
+              Catálogo
+            </label>
+            <label className="text-muted-foreground flex items-center gap-1.5 text-sm">
+              <input type="checkbox" checked={false} disabled aria-label="Personalizado" className="size-4 rounded" />
+              Personalizado
+              <span className="bg-muted text-muted-foreground rounded-full px-1.5 py-0.5 text-[0.65rem]">
+                Em breve
+              </span>
+            </label>
+            <label className="text-muted-foreground flex items-center gap-1.5 text-sm">
+              <input type="checkbox" checked={false} disabled aria-label="Spot" className="size-4 rounded" />
+              Spot
+              <span className="bg-muted text-muted-foreground rounded-full px-1.5 py-0.5 text-[0.65rem]">
+                Em breve
+              </span>
+            </label>
+          </div>
+        </SectionRow>
+
+        <div className="border-input rounded-lg border p-2">
+          <div className="flex items-center justify-between px-1 pb-1.5">
+            <span className="text-sm font-medium">{itemsSectionNumber}. Itens</span>
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              onClick={addItemRow}
+              disabled={readOnly}
+              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+            >
+              <PlusIcon /> Adicionar item
+            </Button>
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-brand-primary-dark hover:bg-brand-primary-dark">
+                <TableHead className="text-brand-primary-foreground h-7 text-xs">Produto</TableHead>
+                <TableHead className="text-brand-primary-foreground h-7 text-xs">Preço</TableHead>
+                <TableHead className="text-brand-primary-foreground h-7 text-xs">Quantidade</TableHead>
+                <TableHead className="text-brand-primary-foreground h-7 text-xs">Personalização</TableHead>
+                <TableHead className="text-brand-primary-foreground h-7 text-xs">Total</TableHead>
+                <TableHead className="h-7 w-9" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.map((row) => {
+                const productOptions = productSelectOptions(row.key)
+                return (
+                  <Fragment key={row.key}>
                     <TableRow>
-                      <TableCell colSpan={6} className="text-destructive p-1.5 pt-0 text-xs whitespace-normal">
-                        {itemErrors[row.key]}
+                      <TableCell className="p-1.5">
+                        <Select
+                          items={productOptions}
+                          value={row.productId}
+                          onValueChange={(value) => handleProductChange(row.key, value)}
+                        >
+                          <SelectTrigger aria-label="Produto" size="sm" className="w-full min-w-40" disabled={readOnly}>
+                            <SelectValue placeholder="Selecione um produto" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {productOptions.map((item) => (
+                              <SelectItem key={item.value ?? 'none'} value={item.value}>
+                                {item.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                      <TableCell className="p-1.5">
+                        <div className="relative w-24">
+                          <span className="text-muted-foreground pointer-events-none absolute inset-y-0 left-2 flex items-center text-xs">
+                            R$
+                          </span>
+                          <Input
+                            className="h-7 pl-7"
+                            inputMode="decimal"
+                            aria-label="Preço unitário"
+                            value={row.unitPrice}
+                            onChange={(event) => updateItemRow(row.key, { unitPrice: event.target.value })}
+                            disabled={readOnly}
+                          />
+                        </div>
+                      </TableCell>
+                      <TableCell className="p-1.5">
+                        <div className="flex items-center gap-1">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon-xs"
+                            aria-label="Diminuir quantidade"
+                            onClick={() => decrementQuantity(row.key)}
+                            disabled={readOnly}
+                          >
+                            <MinusIcon />
+                          </Button>
+                          <Input
+                            className="h-7 w-10 shrink-0 px-1 text-center"
+                            inputMode="numeric"
+                            aria-label="Quantidade"
+                            value={row.quantity}
+                            onChange={(event) => updateItemRow(row.key, { quantity: event.target.value })}
+                            disabled={readOnly}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon-xs"
+                            aria-label="Aumentar quantidade"
+                            onClick={() => incrementQuantity(row.key)}
+                            disabled={readOnly}
+                          >
+                            <PlusIcon />
+                          </Button>
+                        </div>
+                      </TableCell>
+                      <TableCell className="p-1.5">
+                        <Input
+                          className="h-7 w-24"
+                          inputMode="decimal"
+                          aria-label="Taxa de personalização"
+                          placeholder="0,00"
+                          value={row.personalizationFee}
+                          onChange={(event) => updateItemRow(row.key, { personalizationFee: event.target.value })}
+                          disabled={readOnly}
+                        />
+                      </TableCell>
+                      <TableCell className="p-1.5 text-sm font-medium">{formatCurrency(computeRowTotal(row))}</TableCell>
+                      <TableCell className="p-1.5">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => removeItemRow(row.key)}
+                          disabled={items.length === 1 || readOnly}
+                          aria-label="Remover item"
+                        >
+                          <Trash2Icon />
+                        </Button>
                       </TableCell>
                     </TableRow>
-                  )}
-                </Fragment>
-              )
-            })}
-          </TableBody>
-        </Table>
-      </div>
+                    {itemErrors[row.key] && (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-destructive p-1.5 pt-0 text-xs whitespace-normal">
+                          {itemErrors[row.key]}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
+                )
+              })}
+            </TableBody>
+          </Table>
+        </div>
 
-      <SectionRow number={deliverySectionNumber} label="Forma de entrega">
-        {/* Ícone size-8, mesma referência visual dos novos cards de "Entrou
-            em contato por" (item 4) — só o tamanho do ícone muda; o botão
-            continua no formato pílula horizontal (sem texto abaixo do
-            ícone), conforme aprovado. */}
-        <div role="radiogroup" aria-label="Forma de entrega" className="flex flex-wrap gap-2">
-          {DELIVERY_METHODS.map((method) => {
-            const Icon = DELIVERY_METHOD_ICONS[method]
-            return (
+        <SectionRow number={paymentMethodSectionNumber} label="Método de pagamento">
+          {/* Mesmo tratamento de tamanho de ícone (size-8) de "Forma de
+              entrega" e dos cards de "Entrou em contato por". */}
+          <div role="radiogroup" aria-label="Método de pagamento" className="flex flex-wrap gap-2">
+            {PAYMENT_METHOD_ITEMS.map((item) => (
               <button
-                key={method}
+                key={item.value ?? 'none'}
                 type="button"
                 role="radio"
-                aria-checked={deliveryMethod === method}
+                aria-checked={paymentMethod === item.value}
                 disabled={readOnly}
-                onClick={() => handleDeliveryMethodChange(method)}
+                onClick={() => !readOnly && setPaymentMethod(item.value)}
                 className={cn(
                   'focus-visible:ring-brand-accent inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50',
-                  deliveryMethod === method
+                  paymentMethod === item.value
                     ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
                     : 'border-input text-muted-foreground hover:bg-muted hover:text-foreground',
                 )}
               >
-                <Icon className="text-brand-primary size-8 shrink-0" />
-                {method}
+                <item.Icon className="text-brand-primary size-8 shrink-0" />
+                {item.label}
               </button>
-            )
-          })}
-        </div>
-      </SectionRow>
-
-      {showShipping && (
-        <SectionRow number={shippingSectionNumber as number} label="Frete" error={headerErrors.shipping_cost}>
-          <div className="relative w-32">
-            <span className="text-muted-foreground pointer-events-none absolute inset-y-0 left-2 flex items-center text-xs">
-              R$
-            </span>
-            <Input
-              className="h-7 pl-7"
-              inputMode="decimal"
-              aria-label="Frete"
-              value={shippingCost}
-              onChange={(event) => setShippingCost(event.target.value)}
-              disabled={readOnly}
-            />
+            ))}
           </div>
         </SectionRow>
-      )}
+      </FormSection>
 
-      <SectionRow number={deliveryDateSectionNumber} label="Prazo de entrega">
-        <Input
-          type="date"
-          className="h-7 w-40"
-          aria-label="Prazo de entrega"
-          value={expectedDeliveryDate}
-          onChange={(event) => setExpectedDeliveryDate(event.target.value)}
-          disabled={readOnly}
-        />
-      </SectionRow>
+      <FormSection title="Entrega">
+        <SectionRow number={deliverySectionNumber} label="Forma de entrega">
+          {/* Ícone size-8, mesma referência visual dos cards de "Entrou em
+              contato por" e "Método de pagamento" — só o tamanho do ícone
+              muda; o botão continua no formato pílula horizontal (sem texto
+              abaixo do ícone), conforme aprovado. */}
+          <div role="radiogroup" aria-label="Forma de entrega" className="flex flex-wrap gap-2">
+            {DELIVERY_METHODS.map((method) => {
+              const Icon = DELIVERY_METHOD_ICONS[method]
+              return (
+                <button
+                  key={method}
+                  type="button"
+                  role="radio"
+                  aria-checked={deliveryMethod === method}
+                  disabled={readOnly}
+                  onClick={() => handleDeliveryMethodChange(method)}
+                  className={cn(
+                    'focus-visible:ring-brand-accent inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50',
+                    deliveryMethod === method
+                      ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
+                      : 'border-input text-muted-foreground hover:bg-muted hover:text-foreground',
+                  )}
+                >
+                  <Icon className="text-brand-primary size-8 shrink-0" />
+                  {method}
+                </button>
+              )
+            })}
+          </div>
+        </SectionRow>
 
-      <SectionRow number={paymentMethodSectionNumber} label="Método de pagamento">
-        {/* Mesmo tratamento de tamanho de ícone (size-8) de "Forma de
-            entrega" e dos novos cards de "Entrou em contato por". */}
-        <div role="radiogroup" aria-label="Método de pagamento" className="flex flex-wrap gap-2">
-          {PAYMENT_METHOD_ITEMS.map((item) => (
-            <button
-              key={item.value ?? 'none'}
-              type="button"
-              role="radio"
-              aria-checked={paymentMethod === item.value}
-              disabled={readOnly}
-              onClick={() => !readOnly && setPaymentMethod(item.value)}
-              className={cn(
-                'focus-visible:ring-brand-accent inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50',
-                paymentMethod === item.value
-                  ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
-                  : 'border-input text-muted-foreground hover:bg-muted hover:text-foreground',
-              )}
-            >
-              <item.Icon className="text-brand-primary size-8 shrink-0" />
-              {item.label}
-            </button>
-          ))}
-        </div>
-      </SectionRow>
+        {showShipping && (
+          <SectionRow number={shippingSectionNumber as number} label="Frete" error={headerErrors.shipping_cost}>
+            <div className="relative w-32">
+              <span className="text-muted-foreground pointer-events-none absolute inset-y-0 left-2 flex items-center text-xs">
+                R$
+              </span>
+              <Input
+                className="h-7 pl-7"
+                inputMode="decimal"
+                aria-label="Frete"
+                value={shippingCost}
+                onChange={(event) => setShippingCost(event.target.value)}
+                disabled={readOnly}
+              />
+            </div>
+          </SectionRow>
+        )}
 
-      <SectionRow number={notesSectionNumber} label="Observações">
-        <textarea
-          aria-label="Observações"
-          className="border-input focus-visible:border-ring focus-visible:ring-ring/50 min-h-16 w-full rounded-md border bg-transparent p-2 text-sm outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50"
-          value={notes}
-          onChange={(event) => setNotes(event.target.value)}
-          disabled={readOnly}
-        />
-      </SectionRow>
+        <SectionRow number={deliveryDateSectionNumber} label="Prazo de entrega">
+          <Input
+            type="date"
+            className="h-7 w-40"
+            aria-label="Prazo de entrega"
+            value={expectedDeliveryDate}
+            onChange={(event) => setExpectedDeliveryDate(event.target.value)}
+            disabled={readOnly}
+          />
+        </SectionRow>
+
+        <SectionRow number={notesSectionNumber} label="Observações">
+          <textarea
+            aria-label="Observações"
+            className="border-input focus-visible:border-ring focus-visible:ring-ring/50 min-h-16 w-full rounded-md border bg-transparent p-2 text-sm outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50"
+            value={notes}
+            onChange={(event) => setNotes(event.target.value)}
+            disabled={readOnly}
+          />
+        </SectionRow>
+      </FormSection>
 
       {submitError && <p className="text-destructive text-sm">{submitError}</p>}
 

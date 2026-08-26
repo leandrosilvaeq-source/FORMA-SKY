@@ -270,11 +270,10 @@ describe('OrderManagementPanel', () => {
     await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
     expect(screen.getByRole('heading', { name: 'Registrar pagamento' })).toBeInTheDocument()
 
-    await user.click(screen.getByRole('combobox', { name: 'Tipo de pagamento' }))
-    await user.click(await screen.findByRole('option', { name: 'Final' }))
-    await user.click(screen.getByRole('combobox', { name: 'Método de pagamento' }))
-    await user.click(await screen.findByRole('option', { name: 'Pix' }))
-    await user.type(screen.getByLabelText(/valor \(r\$\)/i), '80')
+    await user.click(within(screen.getByRole('radiogroup', { name: 'Tipo de pagamento' })).getByRole('radio', { name: 'Final' }))
+    await user.click(within(screen.getByRole('radiogroup', { name: 'Método de pagamento' })).getByRole('radio', { name: 'Pix' }))
+    await user.click(screen.getByLabelText(/^valor$/i))
+    await user.keyboard('8000')
     await user.click(screen.getByRole('button', { name: /^registrar pagamento$/i }))
 
     await waitFor(() =>
@@ -293,14 +292,14 @@ describe('OrderManagementPanel', () => {
     renderPanel()
 
     await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
-    await user.click(screen.getByRole('combobox', { name: 'Tipo de pagamento' }))
-    await user.click(await screen.findByRole('option', { name: 'Ajuste' }))
-    await user.click(screen.getByRole('combobox', { name: 'Método de pagamento' }))
-    await user.click(await screen.findByRole('option', { name: 'Pix' }))
+    await user.click(within(screen.getByRole('radiogroup', { name: 'Tipo de pagamento' })).getByRole('radio', { name: 'Ajuste' }))
+    await user.click(within(screen.getByRole('radiogroup', { name: 'Método de pagamento' })).getByRole('radio', { name: 'Pix' }))
     // -10 passa na validação client-side (currentTotalPaid=30, 30-10=20 >= 0)
     // — o objetivo deste teste é o erro REAL do backend, não a réplica
     // client-side da mesma regra.
-    await user.type(screen.getByLabelText(/valor \(r\$\)/i), '-10')
+    await user.click(screen.getByRole('switch', { name: /ajuste negativo/i }))
+    await user.click(screen.getByLabelText(/^valor$/i))
+    await user.keyboard('1000')
     await user.type(screen.getByLabelText(/observações/i), 'estorno pequeno')
     await user.click(screen.getByRole('button', { name: /^registrar pagamento$/i }))
 

@@ -205,6 +205,89 @@ async function fillMinimalValidOrder(user: ReturnType<typeof userEvent.setup>): 
 }
 
 describe('OrderForm', () => {
+  describe('Organização em 3 seções visuais (Dados do cliente / Dados do pedido / Entrega)', () => {
+    it('mostra os 3 títulos de seção, nessa ordem', () => {
+      renderForm()
+
+      const titles = ['Dados do cliente', 'Dados do pedido', 'Entrega'].map((text) => screen.getByText(text))
+      expect(titles[0].compareDocumentPosition(titles[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(titles[1].compareDocumentPosition(titles[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    it('"Dados do cliente" contém, nessa ordem, Tipo de venda, Cliente/Contato e Entrou em contato por (B2C, sem Empresa)', () => {
+      renderForm()
+
+      const section = screen.getByText('Dados do cliente').parentElement as HTMLElement
+      const saleTypeGroup = within(section).getByRole('radiogroup', { name: 'Tipo de venda' })
+      const customerCombobox = within(section).getByRole('combobox', { name: 'Cliente/Contato' })
+      const leadSourceGroup = within(section).getByRole('radiogroup', { name: 'Entrou em contato por' })
+
+      expect(within(section).queryByRole('combobox', { name: 'Empresa' })).not.toBeInTheDocument()
+      expect(saleTypeGroup.compareDocumentPosition(customerCombobox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(customerCombobox.compareDocumentPosition(leadSourceGroup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    it('em B2B, Empresa aparece dentro de "Dados do cliente", imediatamente após Tipo de venda e antes de Cliente/Contato', async () => {
+      const user = userEvent.setup()
+      renderForm()
+      await clickRadio(user, 'Tipo de venda', 'B2B')
+
+      const section = screen.getByText('Dados do cliente').parentElement as HTMLElement
+      const saleTypeGroup = within(section).getByRole('radiogroup', { name: 'Tipo de venda' })
+      const companyCombobox = within(section).getByRole('combobox', { name: 'Empresa' })
+      const customerCombobox = within(section).getByRole('combobox', { name: 'Cliente/Contato' })
+
+      expect(saleTypeGroup.compareDocumentPosition(companyCombobox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(companyCombobox.compareDocumentPosition(customerCombobox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    it('"Dados do pedido" contém Tipo de item, a tabela de Itens e Método de pagamento, nessa ordem', () => {
+      renderForm()
+
+      const section = screen.getByText('Dados do pedido').parentElement as HTMLElement
+      const catalogCheckbox = within(section).getByRole('checkbox', { name: 'Catálogo' })
+      const itemsTable = within(section).getByRole('table')
+      const paymentMethodGroup = within(section).getByRole('radiogroup', { name: 'Método de pagamento' })
+
+      expect(catalogCheckbox.compareDocumentPosition(itemsTable) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(itemsTable.compareDocumentPosition(paymentMethodGroup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    it('"Entrega" contém Forma de entrega, Prazo de entrega e Observações, nessa ordem (Frete fora de Correios/Transportadora)', () => {
+      renderForm()
+
+      const section = screen.getByText('Entrega').parentElement as HTMLElement
+      const deliveryGroup = within(section).getByRole('radiogroup', { name: 'Forma de entrega' })
+      const deliveryDateInput = within(section).getByLabelText('Prazo de entrega')
+      const notesTextarea = within(section).getByLabelText('Observações')
+
+      expect(within(section).queryByLabelText('Frete')).not.toBeInTheDocument()
+      expect(deliveryGroup.compareDocumentPosition(deliveryDateInput) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(deliveryDateInput.compareDocumentPosition(notesTextarea) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    it('Frete aparece dentro de "Entrega", entre Forma de entrega e Prazo de entrega, quando Correios é escolhido', async () => {
+      const user = userEvent.setup()
+      renderForm()
+      await clickRadio(user, 'Forma de entrega', 'Correios')
+
+      const section = screen.getByText('Entrega').parentElement as HTMLElement
+      const deliveryGroup = within(section).getByRole('radiogroup', { name: 'Forma de entrega' })
+      const shippingInput = within(section).getByLabelText('Frete')
+      const deliveryDateInput = within(section).getByLabelText('Prazo de entrega')
+
+      expect(deliveryGroup.compareDocumentPosition(shippingInput) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(shippingInput.compareDocumentPosition(deliveryDateInput) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    it('Método de pagamento NÃO fica em "Entrega" (mudou de seção nesta rodada)', () => {
+      renderForm()
+
+      const section = screen.getByText('Entrega').parentElement as HTMLElement
+      expect(within(section).queryByRole('radiogroup', { name: 'Método de pagamento' })).not.toBeInTheDocument()
+    })
+  })
+
   it('renderiza em B2C por padrão: Empresa ausente, Cliente/Contato presente, 1 linha de item vazia', () => {
     renderForm()
 
