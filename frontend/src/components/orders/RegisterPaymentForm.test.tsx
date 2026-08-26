@@ -288,4 +288,131 @@ describe('RegisterPaymentForm', () => {
 
     expect(screen.getByText('Soma dos pagamentos ficaria negativa.')).toBeInTheDocument()
   })
+
+  describe('Bloqueio de pagamento excedente (saldo devedor nunca pode ser ultrapassado)', () => {
+    // Total do pedido R$ 100,00, já pago R$ 40,00, saldo devedor R$ 60,00 —
+    // mesmo exemplo do enunciado da regra.
+    const scenario = { orderTotal: 100, currentTotalPaid: 40, balanceDue: 60 }
+
+    it('pagamento inferior ao saldo (R$ 50,00 de R$ 60,00) é aceito normalmente', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm(scenario)
+
+      await pickRadio(user, 'Tipo de pagamento', 'Final')
+      await pickRadio(user, 'Método de pagamento', 'Pix')
+      await user.click(screen.getByLabelText(AMOUNT_LABEL))
+      await user.keyboard('5000')
+      await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ amount: 50 }))
+    })
+
+    it('pagamento exatamente igual ao saldo (R$ 60,00) é aceito', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm(scenario)
+
+      await pickRadio(user, 'Tipo de pagamento', 'Final')
+      await pickRadio(user, 'Método de pagamento', 'Pix')
+      await user.click(screen.getByLabelText(AMOUNT_LABEL))
+      await user.keyboard('6000')
+      await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ amount: 60 }))
+    })
+
+    it('pagamento um centavo acima do saldo (R$ 60,01) é bloqueado com o valor máximo permitido na mensagem', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm(scenario)
+
+      await pickRadio(user, 'Tipo de pagamento', 'Final')
+      await pickRadio(user, 'Método de pagamento', 'Pix')
+      await user.click(screen.getByLabelText(AMOUNT_LABEL))
+      await user.keyboard('6001')
+      await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
+
+      expect(
+        await screen.findByText('O valor não pode ultrapassar o saldo devedor. Valor máximo permitido: R$ 60,00.'),
+      ).toBeInTheDocument()
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('tentativa cuja soma ultrapassa muito o total também é bloqueada (não só por 1 centavo)', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm(scenario)
+
+      await pickRadio(user, 'Tipo de pagamento', 'Integral')
+      await pickRadio(user, 'Método de pagamento', 'Cartão')
+      await user.click(screen.getByLabelText(AMOUNT_LABEL))
+      await user.keyboard('20000')
+      await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
+
+      expect(
+        await screen.findByText('O valor não pode ultrapassar o saldo devedor. Valor máximo permitido: R$ 60,00.'),
+      ).toBeInTheDocument()
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('duas parcelas cuja soma completa exatamente o pedido: a segunda parcela (saldo restante) ainda é aceita', async () => {
+      const user = userEvent.setup()
+      // Primeira parcela de R$ 60,00 já registrada — simula o estado depois
+      // do primeiro pagamento (currentTotalPaid/balanceDue atualizados,
+      // mesma forma como a prop chegaria após refetch no app real).
+      const { onSubmit } = renderForm({ orderTotal: 100, currentTotalPaid: 60, balanceDue: 40 })
+
+      await pickRadio(user, 'Tipo de pagamento', 'Final')
+      await pickRadio(user, 'Método de pagamento', 'Pix')
+      await user.click(screen.getByLabelText(AMOUNT_LABEL))
+      await user.keyboard('4000')
+      await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ amount: 40 }))
+    })
+
+    it('pedido já totalmente pago (saldo devedor zero): o formulário de registro fica desabilitado', () => {
+      renderForm({ orderTotal: 100, currentTotalPaid: 100, balanceDue: 0 })
+
+      expect(screen.getByText(/já está totalmente pago/i)).toBeInTheDocument()
+      expect(screen.queryByRole('radiogroup', { name: 'Tipo de pagamento' })).not.toBeInTheDocument()
+      expect(screen.queryByLabelText(AMOUNT_LABEL)).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /registrar pagamento/i })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /^fechar$/i })).toBeInTheDocument()
+    })
+
+    it('mesmo bloqueio se aplica a um saldo negativo residual (dado legado de excedente anterior à regra)', () => {
+      renderForm({ orderTotal: 100, currentTotalPaid: 120, balanceDue: -20 })
+
+      expect(screen.getByText(/já está totalmente pago/i)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /registrar pagamento/i })).not.toBeInTheDocument()
+    })
+
+    it('"Fechar" no estado totalmente pago chama onCancel', async () => {
+      const user = userEvent.setup()
+      const { onCancel } = renderForm({ orderTotal: 100, currentTotalPaid: 100, balanceDue: 0 })
+
+      await user.click(screen.getByRole('button', { name: /^fechar$/i }))
+
+      expect(onCancel).toHaveBeenCalled()
+    })
+
+    it('continua mostrando o resumo financeiro (Total/Já pago/Saldo devedor) mesmo no estado totalmente pago', () => {
+      renderForm({ orderTotal: 100, currentTotalPaid: 100, balanceDue: 0 })
+
+      expect(screen.getAllByText('R$ 100,00')).toHaveLength(2) // Total do pedido + Já pago
+      expect(screen.getByText('R$ 0,00')).toBeInTheDocument() // Saldo devedor
+    })
+
+    it('exibe o erro real do backend (submitError) quando o teto é violado apesar da validação local (saldo desatualizado)', () => {
+      renderForm({
+        ...scenario,
+        submitError:
+          'Pagamento excedente: a soma dos pagamentos ultrapassaria o total do pedido. Valor máximo permitido: R$ 60,00.',
+      })
+
+      expect(
+        screen.getByText(
+          'Pagamento excedente: a soma dos pagamentos ultrapassaria o total do pedido. Valor máximo permitido: R$ 60,00.',
+        ),
+      ).toBeInTheDocument()
+    })
+  })
 })

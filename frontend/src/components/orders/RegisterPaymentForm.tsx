@@ -20,17 +20,22 @@ import {
 import type { PaymentMethod, PaymentType } from '@/types/domain'
 
 // Espelha exatamente as regras de supabase/functions/payments/index.ts +
-// public.payments (Migration 12) — nenhuma regra nova é inventada aqui:
+// public.payments (Migration 12) + register_payment() (Migration
+// 20260826120000_add_payment_overpayment_guard.sql) — nenhuma regra nova é
+// inventada aqui além do que a RPC já impõe:
 // - amount <> 0 (payments.amount check);
 // - fora de AJUSTE, amount > 0 (payments_amount_type_consistency);
 // - amount < 0 exige notes não vazio (payments_negative_adjustment_requires_notes);
 // - a soma dos pagamentos do pedido nunca pode ficar negativa
-//   (register_payment: v_current_total + p_amount < 0) — validado aqui só
-//   como conveniência de UI (erro mais cedo, sem round-trip); o backend
-//   continua sendo a autoridade final e pode rejeitar mesmo assim.
-// Deliberadamente NÃO valida um teto máximo de valor: pagamento excedente é
-// permitido sem estorno automático (vw_order_summary.has_overpayment/
-// overpayment_amount), então nenhum limite superior é imposto aqui.
+//   (v_current_total + p_amount < 0);
+// - a soma dos pagamentos nunca pode ultrapassar total_receivable
+//   (v_current_total + p_amount > v_total_receivable) — regra confirmada
+//   pelo usuário em 2026-08-26, revertendo a decisão anterior que permitia
+//   pagamento excedente. Validado aqui só como conveniência de UI (erro
+//   mais cedo, sem round-trip); o backend continua sendo a autoridade
+//   final e pode rejeitar mesmo assim — a mensagem de erro real do backend
+//   (submitError) é sempre exibida se, por qualquer motivo, o valor exibido
+//   aqui como saldo devedor estiver desatualizado.
 
 // Ícones novos (Tipo de pagamento não existe em OrderForm.tsx — nada para
 // reaproveitar ali; escolhidos pelo mesmo critério de "ícone com cor fixa
@@ -234,6 +239,8 @@ export function RegisterPaymentForm({
       errors.amount = 'O valor não pode ser zero.'
     } else if (paymentType && paymentType !== 'AJUSTE' && amountValue < 0) {
       errors.amount = 'O valor deve ser maior que zero (só Ajuste aceita valor negativo).'
+    } else if (amountValue > 0 && amountValue > balanceDue) {
+      errors.amount = `O valor não pode ultrapassar o saldo devedor. Valor máximo permitido: ${formatBRL(balanceDue)}.`
     } else if (amountValue < 0 && currentTotalPaid + amountValue < 0) {
       errors.amount = 'Este ajuste deixaria a soma dos pagamentos do pedido negativa.'
     }
@@ -259,6 +266,47 @@ export function RegisterPaymentForm({
   }
 
   const amountDisplay = `${isNegative && cents > 0 ? '-' : ''}${formatCentsToBRL(cents)}`
+
+  // Pedido totalmente pago (saldo devedor zerado ou já negativo por dado
+  // legado anterior a esta regra): nenhum novo pagamento pode ser
+  // registrado — qualquer valor positivo ultrapassaria o total do pedido
+  // por definição, e a regra confirmada em 2026-08-26 é bloquear TODO novo
+  // lançamento neste estado, sem exceção para Ajuste. Resumo financeiro
+  // continua visível (mesmo bloco de sempre); só a parte interativa do
+  // formulário é substituída por este aviso.
+  if (balanceDue <= 0) {
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="border-brand-primary/20 bg-brand-primary-soft/40 grid grid-cols-3 gap-2 rounded-lg border px-3 py-2">
+          <div>
+            <p className="text-muted-foreground text-xs">Total do pedido</p>
+            <p className="text-brand-primary-dark text-sm font-medium">{formatBRL(orderTotal)}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs">Já pago</p>
+            <p className="text-brand-primary-dark text-sm font-medium">{formatBRL(currentTotalPaid)}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs">Saldo devedor</p>
+            <p className="text-brand-primary-dark text-sm font-medium">{formatBRL(balanceDue)}</p>
+          </div>
+        </div>
+        <p className="text-muted-foreground text-sm">
+          Este pedido já está totalmente pago — não é possível registrar um novo pagamento.
+        </p>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onCancel}
+            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+          >
+            Fechar
+          </Button>
+        </DialogFooter>
+      </div>
+    )
+  }
 
   return (
     <form className="flex flex-col gap-4" onSubmit={handleSubmit}>

@@ -154,7 +154,7 @@ describe('OrderPaymentStatusControl', () => {
     expect(onChanged).toHaveBeenCalled()
   })
 
-  it('registers a payment above the balance due (excedente) — backend allows it, no client-side upper bound', async () => {
+  it('bloqueia um pagamento acima do saldo devedor (excedente) — regra confirmada em 2026-08-26, sem estar mais permitida', async () => {
     const user = userEvent.setup()
     const onChanged = renderControl({ balanceDue: 100 })
 
@@ -165,8 +165,34 @@ describe('OrderPaymentStatusControl', () => {
     await user.keyboard('20000')
     await user.click(screen.getByRole('button', { name: /^registrar pagamento$/i }))
 
-    await waitFor(() => expect(registerPaymentMock).toHaveBeenCalledWith(expect.objectContaining({ amount: 200 })))
-    expect(onChanged).toHaveBeenCalled()
+    expect(
+      await screen.findByText('O valor não pode ultrapassar o saldo devedor. Valor máximo permitido: R$ 100,00.'),
+    ).toBeInTheDocument()
+    expect(registerPaymentMock).not.toHaveBeenCalled()
+    expect(onChanged).not.toHaveBeenCalled()
+  })
+
+  it('quando o saldo devedor é zero, o formulário de registro fica desabilitado (pedido totalmente pago)', async () => {
+    const user = userEvent.setup()
+    renderControl({ balanceDue: 0, totalPaid: 500 })
+
+    await user.click(screen.getByRole('button', { name: /status financeiro/i }))
+
+    expect(screen.getByText(/já está totalmente pago/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^registrar pagamento$/i })).not.toBeInTheDocument()
+  })
+
+  it('pedido totalmente pago: a listagem continua mostrando o badge "Pago" e o controle não permite novo pagamento', async () => {
+    const user = userEvent.setup()
+    renderControl({ paymentStatus: 'PAID', balanceDue: 0, totalPaid: 500, orderTotal: 500 })
+
+    // O badge da listagem continua mostrando "Pago" — nunca some nem vira
+    // outro texto por causa do bloqueio de excedente.
+    expect(screen.getByRole('button', { name: /status financeiro: pago/i })).toHaveTextContent('Pago')
+
+    await user.click(screen.getByRole('button', { name: /status financeiro/i }))
+    expect(screen.getByText(/já está totalmente pago/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^registrar pagamento$/i })).not.toBeInTheDocument()
   })
 
   it('AJUSTE negativo segue as regras já existentes do RegisterPaymentForm (exige observação)', async () => {
