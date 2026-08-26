@@ -314,3 +314,26 @@ export interface Payment {
   created_by: string
   created_at: string
 }
+
+// supabase/migrations/20260814023012_create_status_history_tables.sql
+export interface OrderStatusHistory {
+  id: string
+  order_id: string
+  // Nullable só no primeiro registro de um pedido (nasce direto em QUOTE,
+  // sem "de onde veio").
+  from_status: OrderStatus | null
+  to_status: OrderStatus
+  changed_at: string
+  changed_by: string
+  reason: string | null
+}
+
+export interface PaymentStatusHistory {
+  id: string
+  order_id: string
+  from_status: PaymentStatus | null
+  to_status: PaymentStatus
+  changed_at: string
+  changed_by: string
+  reason: string | null
+}

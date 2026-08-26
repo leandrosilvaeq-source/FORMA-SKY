@@ -255,17 +255,64 @@ export function OrderForm({
   // aplicada, já que a coluna é NOT NULL) fica de fora, nunca é tratado
   // como CATALOG por omissão.
   const activeProducts = products.filter((product) => product.is_active && product.product_type === 'CATALOG')
-  const activeCustomers = customers.filter((customer) => customer.is_active)
-  const activeCompanies = companies.filter((company) => company.is_active)
 
-  const customerItems = activeCustomers.map((customer) => ({
+  // Cliente/Empresa já vinculados a este pedido (modo edição) continuam
+  // visíveis/selecionados mesmo se desativados depois da criação do pedido
+  // — nunca perdem o vínculo por causa de uma desativação posterior, mesmo
+  // padrão já aprovado em CustomersPage.tsx/CustomerForm.tsx para o campo
+  // Empresa. Em modo criação, initialValues é undefined, então a condição
+  // extra nunca casa com um cliente/empresa real — comportamento idêntico
+  // ao filtro simples de antes.
+  const availableCustomers = customers.filter(
+    (customer) => customer.is_active || customer.id === initialValues?.customerId,
+  )
+  const availableCompanies = companies.filter(
+    (company) => company.is_active || company.id === initialValues?.companyId,
+  )
+
+  const customerItems = availableCustomers.map((customer) => ({
     label: customer.name,
     value: customer.id as string | null,
   }))
   const companyItems = [
     { label: 'Nenhuma empresa', value: null as string | null },
-    ...activeCompanies.map((company) => ({ label: company.name, value: company.id as string | null })),
+    ...availableCompanies.map((company) => ({ label: company.name, value: company.id as string | null })),
   ]
+
+  // Produto inativo já vinculado a cada linha, capturado uma única vez na
+  // montagem (nunca recalculado a partir do productId corrente da linha) —
+  // mesmo raciocínio já documentado em ProductCompositionForm.tsx
+  // (stableOutOfRangeByKey): recalcular a partir do valor atual faz a opção
+  // selecionada desaparecer da lista no exato render em que o usuário a
+  // troca por uma válida, o que confunde o Select do base-ui e reverte a
+  // seleção para vazio. Uma linha nova (criada depois da montagem, via
+  // "Adicionar item") nunca entra aqui — content correto: só itens que já
+  // vieram de initialValues.items podem apontar para um produto inativo.
+  const [stableInactiveProductIdByKey] = useState<Record<string, string>>(() => {
+    const map: Record<string, string> = {}
+    for (const row of items) {
+      if (row.productId && !activeProducts.some((product) => product.id === row.productId)) {
+        map[row.key] = row.productId
+      }
+    }
+    return map
+  })
+
+  // Opções do seletor de Produto de uma linha de item: sempre só produtos
+  // ativos de Catálogo, EXCETO quando a própria linha já apontava, na
+  // montagem, para um produto hoje inativo (edição de um item existente) —
+  // nesse caso o produto inativo aparece rotulado "(inativo)", visível e
+  // selecionável, nunca em branco; ele nunca entra na lista de uma linha
+  // nova, preservando o comportamento já testado de "não oferece um
+  // produto inativo como opção de item" na criação.
+  function productSelectOptions(rowKey: string): Array<{ label: string; value: string | null }> {
+    const baseOptions = activeProducts.map((product) => ({ label: product.name, value: product.id as string | null }))
+    const inactiveProductId = stableInactiveProductIdByKey[rowKey]
+    if (!inactiveProductId) return baseOptions
+    const inactiveProduct = products.find((product) => product.id === inactiveProductId)
+    if (!inactiveProduct) return baseOptions
+    return [{ label: `${inactiveProduct.name} (inativo)`, value: inactiveProduct.id }, ...baseOptions]
+  }
 
   const showShipping = deliveryMethod === 'Correios' || deliveryMethod === 'Transportadora'
 
@@ -371,7 +418,13 @@ export function OrderForm({
       }
       const product = activeProducts.find((item) => item.id === row.productId)
       if (!product) {
-        errors[row.key] = 'Produto inválido ou inativo — selecione outro.'
+        // Mensagem específica quando o produto existe mas está inativo
+        // (distinto de um id realmente desconhecido) — orienta a ação
+        // concreta esperada, nunca só "selecione outro" sem contexto.
+        const inactiveProduct = products.find((item) => item.id === row.productId)
+        errors[row.key] = inactiveProduct
+          ? `"${inactiveProduct.name}" está inativo. Reative o produto ou substitua este item por outro produto ativo antes de salvar.`
+          : 'Produto inválido — selecione outro.'
         continue
       }
 
@@ -632,10 +685,7 @@ export function OrderForm({
           </TableHeader>
           <TableBody>
             {items.map((row) => {
-              const productOptions = activeProducts.map((product) => ({
-                label: product.name,
-                value: product.id as string | null,
-              }))
+              const productOptions = productSelectOptions(row.key)
               return (
                 <Fragment key={row.key}>
                   <TableRow>

@@ -948,4 +948,131 @@ describe('OrderForm', () => {
       expect(screen.getByRole('button', { name: /cancelar/i })).not.toBeDisabled()
     })
   })
+
+  describe('vínculos desativados na edição (cliente/empresa/produto já vinculados, depois desativados)', () => {
+    const editInitialValues = {
+      companyId: null,
+      customerId: 'c1',
+      leadSourceId: 'l1',
+      paymentMethod: 'PIX' as const,
+      deliveryMethod: 'Correios',
+      shippingCost: 15.5,
+      expectedDeliveryDate: '2026-08-25',
+      notes: 'Observação existente',
+      items: [{ productId: 'p1', quantity: 2, unitPrice: 25, personalizationFee: 0 }],
+    }
+
+    it('cliente já vinculado ao pedido continua visível e selecionado, mesmo desativado depois', async () => {
+      const user = userEvent.setup()
+      renderForm({
+        mode: 'edit',
+        initialValues: { ...editInitialValues, customerId: 'c2' },
+        customers: [...customers, inactiveCustomer],
+      })
+
+      expect(screen.getByRole('combobox', { name: 'Cliente/Contato' })).toHaveTextContent('Cliente Inativo')
+      await user.click(screen.getByRole('combobox', { name: 'Cliente/Contato' }))
+      expect(await screen.findByRole('option', { name: 'Cliente Inativo' })).toBeInTheDocument()
+    })
+
+    it('empresa já vinculada ao pedido continua visível e selecionada, mesmo desativada depois', async () => {
+      const user = userEvent.setup()
+      renderForm({
+        mode: 'edit',
+        initialValues: { ...editInitialValues, companyId: 'e2' },
+        companies: [...companies, inactiveCompany],
+      })
+
+      expect(screen.getByRole('radio', { name: 'B2B' })).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByRole('combobox', { name: 'Empresa' })).toHaveTextContent('Empresa Inativa')
+      await user.click(screen.getByRole('combobox', { name: 'Empresa' }))
+      expect(await screen.findByRole('option', { name: 'Empresa Inativa' })).toBeInTheDocument()
+    })
+
+    it('cliente/empresa inativos SEM vínculo com este pedido continuam indisponíveis para nova seleção', async () => {
+      const user = userEvent.setup()
+      renderForm({
+        mode: 'edit',
+        initialValues: { ...editInitialValues, customerId: 'c1', companyId: 'e1' },
+        customers: [...customers, inactiveCustomer],
+        companies: [...companies, inactiveCompany],
+      })
+
+      await user.click(screen.getByRole('combobox', { name: 'Cliente/Contato' }))
+      expect(screen.queryByRole('option', { name: 'Cliente Inativo' })).not.toBeInTheDocument()
+      await user.click(screen.getByRole('combobox', { name: 'Cliente/Contato' }))
+
+      await user.click(screen.getByRole('combobox', { name: 'Empresa' }))
+      expect(screen.queryByRole('option', { name: 'Empresa Inativa' })).not.toBeInTheDocument()
+    })
+
+    it('salvar sem tocar em Cliente/Empresa preserva o vínculo existente, mesmo inativo (nenhuma substituição automática)', async () => {
+      const { onSubmit } = renderForm({
+        mode: 'edit',
+        initialValues: { ...editInitialValues, customerId: 'c2', companyId: 'e2' },
+        customers: [...customers, inactiveCustomer],
+        companies: [...companies, inactiveCompany],
+      })
+
+      const user = userEvent.setup()
+      await user.click(screen.getByRole('button', { name: /salvar alterações/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ customer_id: 'c2', company_id: 'e2' }))
+    })
+
+    it('produto de um item existente, já inativo, aparece rotulado "(inativo)" e continua selecionado', () => {
+      renderForm({
+        mode: 'edit',
+        initialValues: { ...editInitialValues, items: [{ productId: 'p2', quantity: 1, unitPrice: 40, personalizationFee: 0 }] },
+      })
+
+      expect(screen.getByRole('combobox', { name: 'Produto' })).toHaveTextContent('Produto descontinuado (inativo)')
+    })
+
+    it('produto inativo de um item existente não aparece como opção para OUTRA linha nova', async () => {
+      const user = userEvent.setup()
+      renderForm({
+        mode: 'edit',
+        initialValues: { ...editInitialValues, items: [{ productId: 'p2', quantity: 1, unitPrice: 40, personalizationFee: 0 }] },
+      })
+
+      await user.click(screen.getByRole('button', { name: /adicionar item/i }))
+      const productCombos = screen.getAllByRole('combobox', { name: 'Produto' })
+      await user.click(productCombos[1])
+
+      expect(screen.queryByRole('option', { name: /produto descontinuado/i })).not.toBeInTheDocument()
+    })
+
+    it('continua bloqueando o salvamento com um item de produto inativo, agora com mensagem específica de reativar/substituir', async () => {
+      const { onSubmit } = renderForm({
+        mode: 'edit',
+        initialValues: { ...editInitialValues, items: [{ productId: 'p2', quantity: 1, unitPrice: 40, personalizationFee: 0 }] },
+      })
+
+      const user = userEvent.setup()
+      await user.click(screen.getByRole('button', { name: /salvar alterações/i }))
+
+      expect(
+        await screen.findByText(
+          '"Produto descontinuado" está inativo. Reative o produto ou substitua este item por outro produto ativo antes de salvar.',
+        ),
+      ).toBeInTheDocument()
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('trocar o produto inativo por um ativo permite salvar normalmente', async () => {
+      const { onSubmit } = renderForm({
+        mode: 'edit',
+        initialValues: { ...editInitialValues, items: [{ productId: 'p2', quantity: 1, unitPrice: 40, personalizationFee: 0 }] },
+      })
+
+      const user = userEvent.setup()
+      await selectOption(user, 'Produto', 'Chaveiro')
+      await user.click(screen.getByRole('button', { name: /salvar alterações/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ items: [expect.objectContaining({ product_id: 'p1', item_name: 'Chaveiro' })] }),
+      )
+    })
+  })
 })

@@ -16,6 +16,7 @@ const {
   getOrderMock,
   updateQuoteOrderMock,
   listOrderItemsMock,
+  useOrderManagementMock,
 } = vi.hoisted(() => ({
   useOrdersMock: vi.fn(),
   useCustomersMock: vi.fn(),
@@ -32,6 +33,12 @@ const {
   getOrderMock: vi.fn(),
   updateQuoteOrderMock: vi.fn(),
   listOrderItemsMock: vi.fn(),
+  // OrderManagementPanel usa useOrderManagement por inteiro — mockado aqui
+  // pelo mesmo motivo de getOrder/listOrderItems acima: esta suíte testa só
+  // a integração (o botão abre o diálogo certo, com o orderId certo), não
+  // o comportamento interno do painel (já coberto por
+  // OrderManagementPanel.test.tsx).
+  useOrderManagementMock: vi.fn(),
 }))
 
 vi.mock('@/hooks/useOrders', () => ({ useOrders: useOrdersMock }))
@@ -43,6 +50,7 @@ vi.mock('sonner', () => ({ toast: toastMock }))
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
 vi.mock('@/lib/api/orders', () => ({ getOrder: getOrderMock, updateQuoteOrder: updateQuoteOrderMock }))
 vi.mock('@/lib/api/orderItems', () => ({ listOrderItems: listOrderItemsMock }))
+vi.mock('@/hooks/useOrderManagement', () => ({ useOrderManagement: useOrderManagementMock }))
 
 import { formatDateOnly, OrdersPage } from './OrdersPage'
 
@@ -271,6 +279,19 @@ describe('OrdersPage', () => {
     getOrderMock.mockReset().mockResolvedValue(fullOrder)
     listOrderItemsMock.mockReset().mockResolvedValue([fullOrderItem])
     updateQuoteOrderMock.mockReset().mockResolvedValue({ id: 'o1' })
+    useOrderManagementMock.mockReset().mockReturnValue({
+      summary: orderSummary,
+      payments: [],
+      statusHistory: [],
+      paymentStatusHistory: [],
+      isLoading: false,
+      loadError: null,
+      refetch: vi.fn(),
+      isChangingStatus: false,
+      changeStatus: vi.fn().mockResolvedValue(undefined),
+      isRegisteringPayment: false,
+      registerPaymentForOrder: vi.fn().mockResolvedValue(undefined),
+    })
   })
 
   it('renders the order list resolving the customer name and formatting currency, never raw UUIDs (regressão)', () => {
@@ -839,6 +860,201 @@ describe('OrdersPage', () => {
 
       expect(screen.queryByRole('button', { name: /salvar alterações/i })).not.toBeInTheDocument()
       expect(screen.getByText(/Personalizado ou Spot/i)).toBeInTheDocument()
+    })
+  })
+
+  describe('coluna Ações — "Gerenciar pedido"', () => {
+    it('o botão "Gerenciar pedido" aparece em cada linha, ao lado de "Alterar pedido"', () => {
+      const orderB = { ...orderSummary, order_id: 'o2', order_number: 'FS-26-002' }
+      mockOrders([orderSummary, orderB], {}, createMock)
+      renderPage()
+
+      const row1 = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      const row2 = screen.getByText('FS-26-002').closest('tr') as HTMLElement
+      expect(within(row1).getByRole('button', { name: /gerenciar pedido/i })).toBeInTheDocument()
+      expect(within(row1).getByRole('button', { name: /alterar pedido/i })).toBeInTheDocument()
+      expect(within(row2).getByRole('button', { name: /gerenciar pedido/i })).toBeInTheDocument()
+    })
+
+    it('clicar em "Gerenciar pedido" abre o diálogo de gerenciamento para o pedido correto', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      await user.click(within(row).getByRole('button', { name: /gerenciar pedido/i }))
+
+      expect(await screen.findByRole('heading', { name: 'Gerenciar pedido' })).toBeInTheDocument()
+      expect(useOrderManagementMock).toHaveBeenCalledWith('o1')
+    })
+
+    it('passa o Cliente/Empresa já resolvido pela própria página (nunca uma nova consulta dentro do painel)', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(
+        within(screen.getByText('FS-26-001').closest('tr') as HTMLElement).getByRole('button', {
+          name: /gerenciar pedido/i,
+        }),
+      )
+
+      const heading = await screen.findByRole('heading', { name: 'Gerenciar pedido' })
+      const dialog = heading.closest('[role="dialog"]') as HTMLElement
+      expect(within(dialog).getByText('Ana Cliente')).toBeInTheDocument()
+    })
+
+    it('uma ação bem-sucedida dentro do painel (mudança de status) refaz a listagem de Pedidos', async () => {
+      const changeStatus = vi.fn().mockResolvedValue(undefined)
+      useOrderManagementMock.mockReturnValue({
+        summary: orderSummary,
+        payments: [],
+        statusHistory: [],
+        paymentStatusHistory: [],
+        isLoading: false,
+        loadError: null,
+        refetch: vi.fn(),
+        isChangingStatus: false,
+        changeStatus,
+        isRegisteringPayment: false,
+        registerPaymentForOrder: vi.fn().mockResolvedValue(undefined),
+      })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(
+        within(screen.getByText('FS-26-001').closest('tr') as HTMLElement).getByRole('button', {
+          name: /gerenciar pedido/i,
+        }),
+      )
+      await screen.findByRole('heading', { name: 'Gerenciar pedido' })
+      await user.click(screen.getByRole('button', { name: /avançar para/i }))
+      await user.click(screen.getByRole('button', { name: /^confirmar$/i }))
+
+      await waitFor(() => expect(changeStatus).toHaveBeenCalled())
+      await waitFor(() => expect(refetchMock).toHaveBeenCalled())
+    })
+
+    it('fechar o diálogo de gerenciamento não afeta o diálogo de "Alterar pedido"', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(
+        within(screen.getByText('FS-26-001').closest('tr') as HTMLElement).getByRole('button', {
+          name: /gerenciar pedido/i,
+        }),
+      )
+      await screen.findByRole('heading', { name: 'Gerenciar pedido' })
+      await user.click(screen.getByRole('button', { name: /^fechar$/i }))
+
+      expect(screen.queryByRole('heading', { name: 'Gerenciar pedido' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Alterar pedido' })).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Filtro rápido por status', () => {
+    const quoteOrder = { ...orderSummary, order_id: 'o1', order_number: 'FS-26-001', order_status: 'QUOTE' as const }
+    const approvedOrder = {
+      ...orderSummary,
+      order_id: 'o2',
+      order_number: 'FS-26-002',
+      order_status: 'APPROVED' as const,
+    }
+    const deliveredOrder = {
+      ...orderSummary,
+      order_id: 'o3',
+      order_number: 'FS-26-003',
+      order_status: 'DELIVERED' as const,
+    }
+
+    beforeEach(() => {
+      mockOrders([quoteOrder, approvedOrder, deliveredOrder], {}, createMock)
+    })
+
+    it('mostra "Todos" selecionado por padrão, com todos os pedidos visíveis', () => {
+      renderPage()
+
+      const group = screen.getByRole('radiogroup', { name: 'Filtrar pedidos por status' })
+      expect(within(group).getByRole('radio', { name: /todos/i })).toHaveAttribute('aria-checked', 'true')
+      expect(getVisibleOrderNumbersInOrder()).toHaveLength(3)
+    })
+
+    it('mostra a contagem de pedidos ao lado de cada opção de status', () => {
+      renderPage()
+
+      const group = screen.getByRole('radiogroup', { name: 'Filtrar pedidos por status' })
+      expect(within(group).getByRole('radio', { name: /todos \(3\)/i })).toBeInTheDocument()
+      expect(within(group).getByRole('radio', { name: /orçamento \(1\)/i })).toBeInTheDocument()
+      expect(within(group).getByRole('radio', { name: /aprovado \(1\)/i })).toBeInTheDocument()
+      expect(within(group).getByRole('radio', { name: /entregue \(1\)/i })).toBeInTheDocument()
+      expect(within(group).getByRole('radio', { name: /cancelado \(0\)/i })).toBeInTheDocument()
+    })
+
+    it('clicar num status filtra a listagem para só aquele status', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const group = screen.getByRole('radiogroup', { name: 'Filtrar pedidos por status' })
+      await user.click(within(group).getByRole('radio', { name: /^aprovado/i }))
+
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['FS-26-002'])
+      expect(within(group).getByRole('radio', { name: /^aprovado/i })).toHaveAttribute('aria-checked', 'true')
+    })
+
+    it('voltar para "Todos" restaura a listagem completa', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const group = screen.getByRole('radiogroup', { name: 'Filtrar pedidos por status' })
+      await user.click(within(group).getByRole('radio', { name: /^aprovado/i }))
+      await user.click(within(group).getByRole('radio', { name: /^todos/i }))
+
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['FS-26-001', 'FS-26-002', 'FS-26-003'])
+    })
+
+    it('combina corretamente com a busca (busca primeiro, filtro de status depois)', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const group = screen.getByRole('radiogroup', { name: 'Filtrar pedidos por status' })
+      await user.type(screen.getByRole('combobox', { name: 'Buscar pedido' }), 'FS-26')
+      await user.click(within(group).getByRole('radio', { name: /^entregue/i }))
+
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['FS-26-003'])
+    })
+
+    it('um status sem nenhum pedido mostra a mensagem de vazio específica de status, distinta da de busca', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const group = screen.getByRole('radiogroup', { name: 'Filtrar pedidos por status' })
+      await user.click(within(group).getByRole('radio', { name: /^cancelado/i }))
+
+      expect(screen.getByText('Nenhum pedido encontrado para este status.')).toBeInTheDocument()
+      expect(screen.queryByText('Nenhum pedido encontrado para esta busca.')).not.toBeInTheDocument()
+    })
+
+    it('não faz nenhuma nova chamada à API ao trocar de filtro', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const group = screen.getByRole('radiogroup', { name: 'Filtrar pedidos por status' })
+      await user.click(within(group).getByRole('radio', { name: /^aprovado/i }))
+
+      expect(refetchMock).not.toHaveBeenCalled()
+      expect(createMock).not.toHaveBeenCalled()
+    })
+
+    it('cada botão de status é focável e ativável por teclado (Tab + Enter)', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const group = screen.getByRole('radiogroup', { name: 'Filtrar pedidos por status' })
+      const approvedRadio = within(group).getByRole('radio', { name: /^aprovado/i })
+      approvedRadio.focus()
+      expect(approvedRadio).toHaveFocus()
+      await user.keyboard('{Enter}')
+
+      expect(approvedRadio).toHaveAttribute('aria-checked', 'true')
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['FS-26-002'])
     })
   })
 

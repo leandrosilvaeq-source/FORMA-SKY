@@ -6,6 +6,7 @@ import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
 import { SearchAutocomplete, type SearchAutocompleteOption } from '@/components/search/SearchAutocomplete'
 import { OrderEditForm } from '@/components/orders/OrderEditForm'
 import { OrderForm } from '@/components/orders/OrderForm'
+import { OrderManagementPanel } from '@/components/orders/OrderManagementPanel'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -18,6 +19,7 @@ import { useProducts } from '@/hooks/useProducts'
 import { ApiError } from '@/lib/api/errors'
 import { updateQuoteOrder, type CreateOrderInput } from '@/lib/api/orders'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
+import { cn } from '@/lib/utils'
 import type { ItemType, OrderStatus, OrderSummary, PaymentMethod, PaymentStatus } from '@/types/domain'
 
 const ORDER_SEARCH_LISTBOX_ID = 'order-search-listbox'
@@ -222,6 +224,75 @@ function buildOrderSuggestions(rows: OrderRow[], normalizedTerm: string): Search
   return suggestions
 }
 
+type OrderStatusFilterValue = 'all' | OrderStatus
+
+// Mesma ordem/rótulos de ORDER_STATUS_LABELS, com "Todos" primeiro (padrão)
+// — nenhum status novo inventado, os 8 valores são exatamente os de
+// orders.order_status (Migration 7).
+const ORDER_STATUS_FILTER_OPTIONS: Array<{ value: OrderStatusFilterValue; label: string }> = [
+  { value: 'all', label: 'Todos' },
+  { value: 'QUOTE', label: ORDER_STATUS_LABELS.QUOTE },
+  { value: 'WAITING_APPROVAL', label: ORDER_STATUS_LABELS.WAITING_APPROVAL },
+  { value: 'APPROVED', label: ORDER_STATUS_LABELS.APPROVED },
+  { value: 'IN_PRODUCTION_QUEUE', label: ORDER_STATUS_LABELS.IN_PRODUCTION_QUEUE },
+  { value: 'IN_PRODUCTION', label: ORDER_STATUS_LABELS.IN_PRODUCTION },
+  { value: 'WAITING_DELIVERY', label: ORDER_STATUS_LABELS.WAITING_DELIVERY },
+  { value: 'DELIVERED', label: ORDER_STATUS_LABELS.DELIVERED },
+  { value: 'CANCELLED', label: ORDER_STATUS_LABELS.CANCELLED },
+]
+
+function matchesOrderStatusFilter(row: OrderRow, filter: OrderStatusFilterValue): boolean {
+  return filter === 'all' || row.order.order_status === filter
+}
+
+// Mesmo idioma visual/semântico de StatusFilter em InventoryPage.tsx
+// (radiogroup de botões nativos, focáveis/ativáveis por teclado sem roving
+// tabindex) — reaproveitado aqui, nunca uma interação nova inventada.
+// Contagem por status calculada sobre `rows` (já filtradas pela busca, mas
+// nunca pelo próprio filtro de status — senão a contagem de cada opção
+// mudaria conforme a opção ativa, o que confundiria mais do que ajudaria) —
+// sempre local, nenhuma chamada nova à API.
+function OrderStatusFilterBar({
+  rows,
+  value,
+  onChange,
+}: {
+  rows: OrderRow[]
+  value: OrderStatusFilterValue
+  onChange: (next: OrderStatusFilterValue) => void
+}) {
+  const counts = useMemo(() => {
+    const map = new Map<OrderStatusFilterValue, number>()
+    map.set('all', rows.length)
+    for (const row of rows) {
+      map.set(row.order.order_status, (map.get(row.order.order_status) ?? 0) + 1)
+    }
+    return map
+  }, [rows])
+
+  return (
+    <div role="radiogroup" aria-label="Filtrar pedidos por status" className="flex flex-wrap gap-2">
+      {ORDER_STATUS_FILTER_OPTIONS.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={value === option.value}
+          onClick={() => onChange(option.value)}
+          className={cn(
+            'focus-visible:ring-brand-accent rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2',
+            value === option.value
+              ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
+              : 'border-input text-muted-foreground hover:bg-muted hover:text-foreground',
+          )}
+        >
+          {option.label} ({counts.get(option.value) ?? 0})
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export function OrdersPage() {
   const { orders, isLoading, error, refetch, create } = useOrders()
   const { customers } = useCustomers()
@@ -234,6 +305,7 @@ export function OrdersPage() {
   const [formError, setFormError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [sort, setSort] = useState<SortState<OrderSortColumn> | null>(null)
+  const [statusFilter, setStatusFilter] = useState<OrderStatusFilterValue>('all')
 
   // Diálogo de edição ("Alterar pedido") — orderId presente = aberto, nulo
   // = fechado. isSubmitting/submitError seguem o MESMO padrão já usado
@@ -244,6 +316,13 @@ export function OrdersPage() {
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
   const [isEditSubmitting, setIsEditSubmitting] = useState(false)
   const [editFormError, setEditFormError] = useState<string | null>(null)
+
+  // Diálogo de gerenciamento ("Gerenciar pedido") — orderId presente =
+  // aberto. Todo o estado de ações (mudança de status, pagamento) fica
+  // dentro de OrderManagementPanel/useOrderManagement; esta página só
+  // precisa saber QUAL pedido está aberto e reagir quando uma ação
+  // terminar (onChanged -> refetch da listagem).
+  const [managingOrderId, setManagingOrderId] = useState<string | null>(null)
 
   // Nome do cliente resolvido a partir dos dados já carregados por
   // useCustomers — nenhuma consulta nova, nunca exibe UUID.
@@ -274,9 +353,19 @@ export function OrdersPage() {
     return rows.filter((row) => orderMatchesSearch(row, term))
   }, [rows, searchTerm])
 
+  // Passo 2.5: filtro rápido por status — sempre local sobre `filteredRows`
+  // (já filtradas pela busca), nunca uma nova chamada à API. Combina
+  // corretamente com a busca: os dois filtros são independentes (AND
+  // lógico), a ordem entre eles não importa matematicamente, só a
+  // convenção já usada nas demais listagens (busca → filtro → ordenação).
+  const statusFilteredRows = useMemo(
+    () => filteredRows.filter((row) => matchesOrderStatusFilter(row, statusFilter)),
+    [filteredRows, statusFilter],
+  )
+
   // Passo 3: ordenar os pedidos filtrados. Nunca muta `orders`/`rows` —
   // sortByColumn sempre retorna uma cópia nova.
-  const sortedRows = useMemo(() => sortByColumn(filteredRows, sort, getOrderSortValue), [filteredRows, sort])
+  const sortedRows = useMemo(() => sortByColumn(statusFilteredRows, sort, getOrderSortValue), [statusFilteredRows, sort])
 
   // Passo 4: tabela e sugestões usam o mesmo `sortedRows` — sugestões
   // sempre coerentes com a ordenação/filtro visualmente aplicados.
@@ -298,6 +387,22 @@ export function OrdersPage() {
   function closeEditDialog() {
     setEditingOrderId(null)
   }
+
+  function openManageDialog(orderId: string) {
+    setManagingOrderId(orderId)
+  }
+
+  function closeManageDialog() {
+    setManagingOrderId(null)
+  }
+
+  // Cliente/Empresa já resolvido a partir de `rows` (mesma técnica exibida
+  // na coluna Cliente da tabela) — repassado ao painel de gerenciamento
+  // como texto pronto, nunca uma nova consulta a customers/companies
+  // dentro do painel.
+  const managingOrderClientLabel = managingOrderId
+    ? (rows.find((row) => row.order.order_id === managingOrderId)?.clientText ?? null)
+    : null
 
   // Único caminho de escrita do modo edição: PUT /orders/:id/full ->
   // update_quote_order(), atômico (cabeçalho + itens numa só chamada) —
@@ -375,6 +480,12 @@ export function OrdersPage() {
         noResultsText="Nenhum pedido encontrado."
       />
 
+      {!isLoading && orders.length > 0 && (
+        <div className="mt-3">
+          <OrderStatusFilterBar rows={filteredRows} value={statusFilter} onChange={setStatusFilter} />
+        </div>
+      )}
+
       <div className="mt-3">
         {isLoading ? (
           <div className="flex flex-col gap-2">
@@ -385,7 +496,9 @@ export function OrdersPage() {
         ) : orders.length === 0 ? (
           <p className="text-muted-foreground text-sm">Nenhum pedido cadastrado.</p>
         ) : sortedRows.length === 0 ? (
-          <p className="text-muted-foreground text-sm">Nenhum pedido encontrado para esta busca.</p>
+          <p className="text-muted-foreground text-sm">
+            {searchTerm.trim() ? 'Nenhum pedido encontrado para esta busca.' : 'Nenhum pedido encontrado para este status.'}
+          </p>
         ) : (
           // 12 colunas (Ações incluída): overflow-x-auto + min-w garante
           // rolagem horizontal controlada só em telas estreitas (nunca em
@@ -394,7 +507,7 @@ export function OrdersPage() {
           // truncamento/title previsível por coluna, mesmo padrão já
           // aprovado em Empresas.
           <div className="overflow-x-auto">
-            <Table className="min-w-[1300px] table-fixed text-[16px]">
+            <Table className="min-w-[1360px] table-fixed text-[16px]">
               <TableHeader>
                 <TableRow>
                   <SortableColumnHeader
@@ -423,7 +536,7 @@ export function OrdersPage() {
                     label="Produto(s)"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[12%]"
+                    className="w-[9%]"
                   />
                   <SortableColumnHeader
                     column="order_status"
@@ -474,7 +587,7 @@ export function OrdersPage() {
                     onSortChange={setSort}
                     className="w-[7%]"
                   />
-                  <TableHead className="h-auto w-[8%] py-2 whitespace-normal">Ações</TableHead>
+                  <TableHead className="h-auto w-[11%] py-2 whitespace-normal">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -528,15 +641,26 @@ export function OrdersPage() {
                       <TableCell className="truncate">{formatCurrency(order.balance_due)}</TableCell>
                       <TableCell className="truncate">{formatDateOnly(order.expected_delivery_date)}</TableCell>
                       <TableCell>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => openEditDialog(order.order_id)}
-                          className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-                        >
-                          Alterar pedido
-                        </Button>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openEditDialog(order.order_id)}
+                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                          >
+                            Alterar pedido
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openManageDialog(order.order_id)}
+                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                          >
+                            Gerenciar pedido
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ),
@@ -604,6 +728,26 @@ export function OrdersPage() {
               submitError={editFormError}
               onSubmit={(values) => void handleEditSubmit(values)}
               onCancel={closeEditDialog}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={managingOrderId !== null} onOpenChange={(open) => !open && closeManageDialog()}>
+        <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Gerenciar pedido</DialogTitle>
+            <DialogDescription>
+              Status, aprovação, pagamentos e histórico do pedido, usando só a máquina de estados e as
+              funções já existentes no backend.
+            </DialogDescription>
+          </DialogHeader>
+          {managingOrderId && (
+            <OrderManagementPanel
+              orderId={managingOrderId}
+              clientLabel={managingOrderClientLabel}
+              onClose={closeManageDialog}
+              onChanged={refetch}
             />
           )}
         </DialogContent>
