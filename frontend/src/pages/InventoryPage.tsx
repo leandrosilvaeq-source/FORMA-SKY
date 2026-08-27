@@ -6,6 +6,7 @@ import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeade
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { InventoryItemForm, type InventoryItemFormValues } from '@/components/inventory/InventoryItemForm'
+import { StockMovementPanel, StockLevelBadge, getStockLevel } from '@/components/inventory/StockMovementPanel'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -44,6 +45,11 @@ interface InventoryItem {
   variant: string | null
   unit_cost: number | null
   minimum_stock: number | null
+  // Módulo 3, Incremento 2 — accessories/packaging.current_stock sempre
+  // existiu no schema (Migration 18), mas só passa a ser exibido/usado
+  // nesta rodada; nunca editável na tabela (só via
+  // "Movimentar estoque" -> register_stock_movement).
+  current_stock: number
   is_active: boolean
 }
 
@@ -64,7 +70,7 @@ function formatMinimumStock(value: number | null): string {
   return value !== null ? String(value) : '—'
 }
 
-type InventorySortColumn = 'name' | 'size' | 'variant' | 'unit_cost' | 'minimum_stock' | 'is_active'
+type InventorySortColumn = 'name' | 'size' | 'variant' | 'unit_cost' | 'minimum_stock' | 'current_stock' | 'is_active'
 
 // PP/P/M/G/GG têm uma ordem semântica (tamanho crescente) que não é a
 // mesma da ordem alfabética ("GG" viria antes de "M") — mapeado para um
@@ -91,6 +97,8 @@ function getInventorySortValue(
       return item.unit_cost
     case 'minimum_stock':
       return item.minimum_stock
+    case 'current_stock':
+      return item.current_stock
     case 'is_active':
       return item.is_active
   }
@@ -196,6 +204,9 @@ interface InventoryAreaPanelProps {
   // definitivamente" no diálogo (ver AccessoriesInventoryPage/
   // PackagingInventoryPage).
   onDeleteItem: (item: InventoryItem) => void
+  // Abre o painel de movimentação de estoque (Módulo 3, Incremento 2) — um
+  // único botão por linha, nunca uma ação direta na tabela.
+  onManageStock: (item: InventoryItem) => void
 }
 
 // Painel completo de uma área (busca + filtro + ordenação + tabela +
@@ -224,6 +235,7 @@ function InventoryAreaPanel({
   onToggleActive,
   pendingToggleId,
   onDeleteItem,
+  onManageStock,
 }: InventoryAreaPanelProps) {
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all')
@@ -340,46 +352,54 @@ function InventoryAreaPanel({
           // Produtos/Empresas/Pedidos) — nenhuma coluna cortada em desktop
           // amplo.
           <div className="overflow-x-auto">
-            <Table className="min-w-[1080px] table-fixed text-[16px]">
+            <Table className="min-w-[1220px] table-fixed text-[16px]">
               <TableHeader>
                 <TableRow>
-                  <SortableColumnHeader column="name" label="Nome" sort={sort} onSortChange={setSort} className="w-[18%]" />
-                  <SortableColumnHeader column="size" label="Tamanho" sort={sort} onSortChange={setSort} className="w-[10%]" />
+                  <SortableColumnHeader column="name" label="Nome" sort={sort} onSortChange={setSort} className="w-[15%]" />
+                  <SortableColumnHeader column="size" label="Tamanho" sort={sort} onSortChange={setSort} className="w-[8%]" />
                   <SortableColumnHeader
                     column="variant"
                     label="Variante"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[15%]"
+                    className="w-[12%]"
                   />
                   <SortableColumnHeader
                     column="unit_cost"
                     label="Custo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[13%]"
+                    className="w-[10%]"
                   />
                   <SortableColumnHeader
                     column="minimum_stock"
                     label="Estoque mínimo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[11%]"
+                    className="w-[9%]"
+                  />
+                  <SortableColumnHeader
+                    column="current_stock"
+                    label="Saldo atual"
+                    sort={sort}
+                    onSortChange={setSort}
+                    className="w-[13%]"
                   />
                   <SortableColumnHeader
                     column="is_active"
                     label="Ativo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[11%]"
+                    className="w-[8%]"
                   />
-                  <TableHead className="h-auto w-[22%] py-2" />
+                  <TableHead className="h-auto w-[25%] py-2" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {sortedItems.map((item) => {
                   const sizeText = formatSize(item.size)
                   const costText = formatCost(item.unit_cost)
+                  const stockLevel = getStockLevel(item.current_stock, item.minimum_stock)
                   return (
                     <TableRow
                       key={item.id}
@@ -401,6 +421,12 @@ function InventoryAreaPanel({
                       </TableCell>
                       <TableCell>{formatMinimumStock(item.minimum_stock)}</TableCell>
                       <TableCell>
+                        <div className="flex items-center gap-2">
+                          <span className="tabular-nums">{item.current_stock}</span>
+                          <StockLevelBadge level={stockLevel} />
+                        </div>
+                      </TableCell>
+                      <TableCell>
                         <Switch
                           checked={item.is_active}
                           disabled={pendingToggleId === item.id}
@@ -418,6 +444,15 @@ function InventoryAreaPanel({
                             className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
                           >
                             Editar
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => onManageStock(item)}
+                            aria-label={`Movimentar estoque — ${itemNounSingular} ${item.name}`}
+                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                          >
+                            Movimentar estoque
                           </Button>
                           {/* variant="destructive" é intencionalmente sutil
                               (bg-destructive/10, não um vermelho sólido) —
@@ -511,7 +546,16 @@ function InventoryPageShell({ area, children }: { area: InventoryArea; children:
 // sucesso, e a listagem já reflete o novo item imediatamente (o hook
 // insere localmente, sem precisar de refetch).
 function AccessoriesInventoryPage() {
-  const { accessories, isLoading, error, refetch, create, update, delete: deleteAccessoryItem } = useAccessories()
+  const {
+    accessories,
+    isLoading,
+    error,
+    refetch,
+    create,
+    update,
+    delete: deleteAccessoryItem,
+    setLocalStock,
+  } = useAccessories()
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -543,6 +587,12 @@ function AccessoriesInventoryPage() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  // Movimentação de estoque (Módulo 3, Incremento 2): estado próprio,
+  // independente de criação/edição/ativação/exclusão — mesmo padrão dos
+  // demais diálogos desta página.
+  const [managingItem, setManagingItem] = useState<InventoryItem | null>(null)
+  const [isManageStockDialogOpen, setIsManageStockDialogOpen] = useState(false)
 
   function openCreateDialog() {
     setCreateError(null)
@@ -657,6 +707,11 @@ function AccessoriesInventoryPage() {
     }
   }
 
+  function openManageStockDialog(item: InventoryItem) {
+    setManagingItem(item)
+    setIsManageStockDialogOpen(true)
+  }
+
   return (
     <InventoryPageShell area="acessorios">
       <InventoryAreaPanel
@@ -679,6 +734,7 @@ function AccessoriesInventoryPage() {
         onToggleActive={openToggleDialog}
         pendingToggleId={pendingToggleId}
         onDeleteItem={openDeleteDialog}
+        onManageStock={openManageStockDialog}
       />
 
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
@@ -797,12 +853,45 @@ function AccessoriesInventoryPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={isManageStockDialogOpen} onOpenChange={setIsManageStockDialogOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Movimentar estoque</DialogTitle>
+            <DialogDescription>{managingItem?.name}</DialogDescription>
+          </DialogHeader>
+          {managingItem && (
+            <StockMovementPanel
+              key={managingItem.id}
+              itemType="ACCESSORY"
+              itemId={managingItem.id}
+              itemName={managingItem.name}
+              itemCategoryLabel="Acessório"
+              currentStock={managingItem.current_stock}
+              minimumStock={managingItem.minimum_stock}
+              isActive={managingItem.is_active}
+              onStockChanged={(newStock) => setLocalStock(managingItem.id, newStock)}
+              onSuccess={() => setIsManageStockDialogOpen(false)}
+              onClose={() => setIsManageStockDialogOpen(false)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </InventoryPageShell>
   )
 }
 
 function PackagingInventoryPage() {
-  const { packaging, isLoading, error, refetch, create, update, delete: deletePackagingItem } = usePackaging()
+  const {
+    packaging,
+    isLoading,
+    error,
+    refetch,
+    create,
+    update,
+    delete: deletePackagingItem,
+    setLocalStock,
+  } = usePackaging()
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -822,6 +911,9 @@ function PackagingInventoryPage() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const [managingItem, setManagingItem] = useState<InventoryItem | null>(null)
+  const [isManageStockDialogOpen, setIsManageStockDialogOpen] = useState(false)
 
   function openCreateDialog() {
     setCreateError(null)
@@ -918,6 +1010,11 @@ function PackagingInventoryPage() {
     }
   }
 
+  function openManageStockDialog(item: InventoryItem) {
+    setManagingItem(item)
+    setIsManageStockDialogOpen(true)
+  }
+
   return (
     <InventoryPageShell area="embalagens">
       <InventoryAreaPanel
@@ -940,6 +1037,7 @@ function PackagingInventoryPage() {
         onToggleActive={openToggleDialog}
         pendingToggleId={pendingToggleId}
         onDeleteItem={openDeleteDialog}
+        onManageStock={openManageStockDialog}
       />
 
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
@@ -1056,6 +1154,30 @@ function PackagingInventoryPage() {
               {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isManageStockDialogOpen} onOpenChange={setIsManageStockDialogOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Movimentar estoque</DialogTitle>
+            <DialogDescription>{managingItem?.name}</DialogDescription>
+          </DialogHeader>
+          {managingItem && (
+            <StockMovementPanel
+              key={managingItem.id}
+              itemType="PACKAGING"
+              itemId={managingItem.id}
+              itemName={managingItem.name}
+              itemCategoryLabel="Embalagem"
+              currentStock={managingItem.current_stock}
+              minimumStock={managingItem.minimum_stock}
+              isActive={managingItem.is_active}
+              onStockChanged={(newStock) => setLocalStock(managingItem.id, newStock)}
+              onSuccess={() => setIsManageStockDialogOpen(false)}
+              onClose={() => setIsManageStockDialogOpen(false)}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </InventoryPageShell>

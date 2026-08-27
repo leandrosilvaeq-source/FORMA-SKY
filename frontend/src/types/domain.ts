@@ -286,6 +286,46 @@ export interface Packaging {
   updated_at: string
 }
 
+// Módulo 3, Incremento 1 (supabase/migrations/20260827090000_create_stock_movements_table.sql).
+// Extensível a 'FILAMENT_SPOOL' no futuro (Incremento 5) — nunca inventado
+// aqui antes de existir no banco.
+export type StockItemType = 'ACCESSORY' | 'PACKAGING'
+
+// Entradas: INITIAL_BALANCE/PURCHASE/RETURN/POSITIVE_ADJUSTMENT (delta
+// positivo). Saídas: LOSS/SAMPLE_DONATION/INTERNAL_USE/NEGATIVE_ADJUSTMENT
+// (delta negativo). Extensível a RESERVATION/RELEASE/CONSUMPTION/WEIGHING
+// no futuro (Incrementos 5/7/8) — nenhum dos 4 é aceito por
+// register_stock_movement() nesta etapa.
+export type StockMovementType =
+  | 'INITIAL_BALANCE'
+  | 'PURCHASE'
+  | 'RETURN'
+  | 'POSITIVE_ADJUSTMENT'
+  | 'LOSS'
+  | 'SAMPLE_DONATION'
+  | 'INTERNAL_USE'
+  | 'NEGATIVE_ADJUSTMENT'
+
+// Ledger imutável — nunca editado nem excluído pelo frontend (nenhuma rota
+// de UPDATE/DELETE existe para esta tabela). balance_after já é o novo
+// saldo do item após esta movimentação.
+export interface StockMovement {
+  id: string
+  item_type: StockItemType
+  item_id: string
+  movement_type: StockMovementType
+  quantity_delta: number
+  balance_before: number
+  balance_after: number
+  reason: string | null
+  reference_type: string | null
+  reference_id: string | null
+  idempotency_key: string | null
+  occurred_at: string
+  created_by: string
+  created_at: string
+}
+
 export interface ProductAccessory {
   id: string
   product_id: string

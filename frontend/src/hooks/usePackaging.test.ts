@@ -258,4 +258,34 @@ describe('usePackaging', () => {
 
     expect(result.current.packaging).toEqual([packagingItem, otherPackagingItem])
   })
+
+  // Módulo 3, Incremento 2: mesmo teste de regressão de useAccessories,
+  // espelhado para packaging.
+  it('setLocalStock() atualiza current_stock do item correto sem chamar a API', async () => {
+    listPackagingMock.mockResolvedValue([packagingItem, otherPackagingItem])
+
+    const { result } = renderHook(() => usePackaging())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    act(() => {
+      result.current.setLocalStock('1', 42)
+    })
+
+    expect(result.current.packaging.find((item) => item.id === '1')?.current_stock).toBe(42)
+    expect(createPackagingMock).not.toHaveBeenCalled()
+    expect(updatePackagingMock).not.toHaveBeenCalled()
+  })
+
+  it('setLocalStock() para um id inexistente não altera nenhum item', async () => {
+    listPackagingMock.mockResolvedValue([packagingItem, otherPackagingItem])
+
+    const { result } = renderHook(() => usePackaging())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    act(() => {
+      result.current.setLocalStock('999', 42)
+    })
+
+    expect(result.current.packaging).toEqual([packagingItem, otherPackagingItem])
+  })
 })

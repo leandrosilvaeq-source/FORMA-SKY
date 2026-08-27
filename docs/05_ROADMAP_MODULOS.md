@@ -433,17 +433,105 @@ teste automatizado real contra o banco remoto** — mas isso ainda não substitu
 do usuário nem a existência de uma interface (Incremento 2, ainda não implementado). Checkpoint
 local: commit `docs: record inventory ledger deployment`, sem push.
 
+## Incrementos 2/3 — interface de movimentações e histórico (MVP) — IMPLEMENTADOS LOCALMENTE
+
+Implementados em 2026-08-27, na branch `feature/inventory-operations`, reunindo os dois
+incrementos numa só rodada (interface de saldo/entrada/saída/ajuste + histórico/rastreabilidade —
+o pedido do usuário explicitamente os agrupou, por serem uma única superfície de UI coesa). As 22
+regras aprovadas continuam **provisórias do MVP** (disclaimer completo em
+`01_ESPECIFICACAO_FUNCIONAL.md` §20) — esta interface existe para o usuário **validar** as regras
+na prática, não para confirmá-las como definitivas.
+
+**Backend (nenhuma migration nova — só código de aplicação, conforme o escopo desta rodada)**:
+
+- `supabase/functions/stock-movements/` — nova Edge Function (`index.ts`/`handler.ts`/
+  `handler.test.ts`), única rota `POST /stock-movements`, chamando exclusivamente
+  `register_stock_movement()` (RPC já aplicada e testada na rodada anterior). Validação estrutural
+  do payload (item_type/movement_type/quantity inteiro positivo/motivo obrigatório por tipo) vive
+  na Edge Function; regras que dependem do banco (saldo insuficiente, INITIAL_BALANCE repetido/
+  exige saldo zero, item existe, idempotência) continuam exclusivas da RPC — mesmo critério já
+  usado por `accessories`/`packaging`. Nenhuma escrita direta em `stock_movements` nem em
+  `current_stock` a partir desta função. **Ainda NÃO publicada** — só criada localmente.
+- `supabase/functions/_shared/errors.ts` — 8 novos padrões estáveis mapeados
+  (`STOCK_INSUFFICIENT_BALANCE:`, `INITIAL_BALANCE_ALREADY_EXISTS:`, `INITIAL_BALANCE_REQUIRES_ZERO:`,
+  `IDEMPOTENCY_KEY_CONFLICT:`, `ACCESSORY_HAS_STOCK_HISTORY:`, `PACKAGING_HAS_STOCK_HISTORY:`, mais
+  as mensagens de validação estrutural de `register_stock_movement`), preparando o mapeamento de
+  erro compreensível pedido para quando a Edge Function for publicada.
+- `supabase/config.toml` — `[functions.stock-movements]` registrada (`verify_jwt = false`, mesmo
+  padrão das demais — a Edge Function resolve o operador via `resolveOperator()`, não pelo gateway).
+
+**Frontend**:
+
+- Tipos novos em `types/domain.ts`: `StockItemType`, `StockMovementType` (8 valores manuais desta
+  etapa), `StockMovement` (ledger completo, incl. `balance_before`/`balance_after`).
+  `Accessory`/`Packaging.current_stock` já existiam no tipo desde antes — só passam a ser
+  exibidos/usados agora.
+- `lib/api/stockMovements.ts` — `listStockMovements` (leitura direta via supabase-js, RLS já
+  aplicada, `authenticated` só SELECT) e `registerStockMovement` (via Edge Function). Histórico
+  limitado a 50 registros mais recentes por item (`occurred_at`/`created_at` decrescente) — **sem
+  paginação real neste MVP**, documentado aqui como pendência futura caso um item acumule mais
+  movimentações do que isso (nenhuma é apagada do banco, só não aparece nesta consulta).
+- `hooks/useStockMovements.ts` — histórico + registro por item, sem refetch após `register`
+  (a RPC já devolve a movimentação completa, incl. `balance_after`).
+- `hooks/useAccessories.ts`/`usePackaging.ts` — novo `setLocalStock(id, currentStock)`: atualização
+  local pura (sem rede), usada pelo painel depois de uma movimentação bem-sucedida.
+- `components/inventory/StockMovementForm.tsx` — action buttons com ícones Lucide (padrão de
+  `RegisterPaymentForm.tsx`/`OrderForm.tsx`): 1º nível Entrada/Saída/Ajuste, 2º nível conforme a
+  categoria (Saldo inicial/Compra/Devolução; Ajuste positivo/negativo; Perda-Avaria/
+  Amostra-Doação/Uso interno). Quantidade inteira positiva, projeção "Saldo após movimentação",
+  bloqueio de saída acima do saldo também no cliente (backend continua a proteção definitiva),
+  motivo obrigatório por tipo, idempotência (ver abaixo).
+- `components/inventory/StockMovementHistory.tsx` — histórico imutável (sem editar/excluir),
+  estados de carregando/vazio/erro-com-retry, fallback legível para `movement_type` desconhecido
+  (nunca quebra a tela), nenhum UUID exibido.
+- `components/inventory/StockMovementPanel.tsx` — painel único (nome/categoria/saldo/estoque
+  mínimo/situação + formulário + histórico), com `getStockLevel()`/`StockLevelBadge`
+  (Sem estoque/Estoque baixo/Estoque normal — baixo só quando `minimum_stock > 0` e
+  `current_stock <= minimum_stock`).
+- `pages/InventoryPage.tsx` — nova coluna "Saldo atual" (ordenável), badge de situação, botão único
+  "Movimentar estoque" por linha (Editar/Movimentar estoque/Excluir — sem poluição visual), abrindo
+  o painel num `Dialog`. `delete_accessory`/`delete_packaging` (já bloqueados por histórico desde a
+  rodada anterior) mapeados no frontend com a mesma mensagem real do backend.
+
+**Decisões de UX sem regra documentada explícita (sinalizadas conforme pedido)**:
+
+- Item inativo: Saldo inicial e Compra ficam indisponíveis; **Devolução permanece disponível**
+  (decisão desta rodada) — `register_stock_movement()` não verifica `is_active` em nenhum
+  `movement_type`, então bloquear Devolução na interface seria uma restrição só de UI sem
+  correspondência no contrato real do backend.
+- O painel fecha automaticamente após uma movimentação bem-sucedida (mesmo padrão de
+  `RegisterPaymentForm`/`InventoryItemForm` — nenhum diálogo deste projeto permanece aberto após
+  sucesso); para registrar uma segunda movimentação em seguida, o usuário reabre "Movimentar
+  estoque" (a coluna "Saldo atual" já reflete o novo valor imediatamente, sem precisar reabrir).
+
+**Idempotência no frontend**: `idempotency_key` gerada com `crypto.randomUUID()` só dentro de
+`handleSubmit`, nunca a cada render; a mesma chave é reenviada enquanto
+movement_type/quantidade/motivo/data não mudam (retry seguro de duplo clique/falha de rede);
+qualquer mudança nesses campos gera uma chave nova; descartada implicitamente no sucesso (o painel
+fecha, desmontando o formulário — a próxima abertura sempre começa do zero).
+
+**Testes**: Deno (`stock-movements/handler.test.ts`, `_shared/errors.test.ts`) escritos mas **não
+executados nesta sessão** — ambiente sem Deno instalado, mesma limitação já registrada em todas as
+rodadas anteriores; revisados por leitura, seguindo a mesma disciplina de `accessories`/
+`packaging`. Frontend: suíte completa 1167 → **1261 testes, todos passando**; lint 0 erros (1 aviso
+novo, mesma categoria já tolerada em outros arquivos do projeto — export de `getStockLevel`/
+`StockLevelBadge` junto do componente); build sem erros; `git diff --check` limpo; scan de segredos
+sem ocorrências reais.
+
+**Não publicada nesta rodada**: a Edge Function `stock-movements` existe só localmente — publicá-la
+exige autorização explícita separada, fora do escopo desta entrada. **Nenhum dado oficial ou
+Petlink foi cadastrado ou alterado.**
+
 **Percentual macro**: **não alterado por esta entrada**, deliberadamente — mesmo critério já
 aplicado a Módulo 3 em rodadas anteriores (ex.: entrada de 2026-08-22/23, que registrou "nenhum
 percentual macro alterado — trabalho local/testado ainda não atende ao critério 'deployado e
-validado em produção' exigido pela regra de §1"). O backend deste Incremento 1 agora está
-deployado e testado automaticamente, mas o padrão já estabelecido neste módulo (ex.: entrada de
-2026-08-23, cadastro mestre) só reconhece uma fase como completa quando backend **e** interface
-**e** validação manual do usuário existem juntos — só o backend não move o percentual sozinho. A
-fórmula oficial (`# 1`) só concede peso de
-fase quando há artefato real *deployado e validado*, não só implementado localmente — o Incremento
-1 é implementação real, mas local; recalcular o percentual fica para quando a migration for
-aplicada e (idealmente) minimamente validada.
+validado em produção' exigido pela regra de §1"). O backend do Incremento 1 está deployado e
+testado; a interface dos Incrementos 2/3 agora existe localmente, mas a Edge Function que ela
+depende **não está publicada** e **nenhuma validação manual do usuário ocorreu ainda** — o padrão já
+estabelecido neste módulo só reconhece uma fase como completa quando backend **e** interface **e**
+validação manual existem juntos, com tudo publicado. A fórmula oficial (`# 1`) só concede peso de
+fase quando há artefato real *deployado e validado*, não só implementado localmente — recalcular o
+percentual fica para quando a Edge Function for publicada e a validação manual ocorrer.
 
 ---
 
@@ -470,3 +558,4 @@ aplicada e (idealmente) minimamente validada.
 | 2026-08-27 | **Decisão do usuário**: antes de finalizar as Fases 6 (Piloto real) e 7 (Estabilização/release) do Módulo 1, será concluída a continuação do Módulo 3 (Estoque e Inventário) — quantidade disponível, entradas/saídas, histórico de movimentações, filamentos por rolo/peso, consumo automático de estoque pelo pedido, integração completa entre Pedidos/Produtos/Estoque, nessa ordem. Nova branch `feature/inventory-operations` criada a partir de `45dac99` (tip de `feature/customers-orders`, que continua a base — `main` só tem o commit inicial de documentação). Auditoria completa (documentação, banco, backend, frontend) executada antes da implementação, seguida da aprovação de 22 regras operacionais de estoque pelo usuário — ver detalhamento completo em §9b. **Incremento 1 do novo plano (saldo e motor de movimentações para Acessórios/Embalagens) implementado localmente nesta rodada**: `public.stock_movements` (ledger imutável, extensível a filamentos) + `public.register_stock_movement()` (única função que atualiza saldo, com lock/atomicidade, bloqueio de saldo negativo, motivo obrigatório por tipo, idempotência) — migrations `20260827090000_create_stock_movements_table.sql` e `20260827093000_update_accessory_packaging_delete_guards.sql` (esta última atualiza `delete_accessory`/`delete_packaging` para também bloquear exclusão quando há histórico de movimentação). Teste de integração SQL completo criado (`supabase/tests/inventory_movements_test.sql`), mas **não executado nesta sessão** — sem Docker/Postgres local e migration não aplicada ao remoto (restrição desta rodada); revisado por leitura linha a linha. Suíte completa do frontend reexecutada (1167/1167, sem regressão — nenhum arquivo TypeScript alterado), lint 0 erros, build sem erros, `git diff --check` limpo. Documentação atualizada em `01_ESPECIFICACAO_FUNCIONAL.md` §16/§18/§19/§20, `02_ESPECIFICACAO_TECNICA.md` §6.9 e `03_MODELO_BANCO_DADOS.md` §13/§15.1 — incluindo correção de informações desatualizadas: cadastro mestre de Acessórios/Embalagens confirmado implementado/publicado/validado (não mais "ainda não iniciado"), gatilho de §6 corrigido (a interface de Estoque existe desde 2026-08-24; só a autorização para cadastro oficial, incl. Petlink, continua pendente), e o schema real de `stock_movements` documentado em substituição ao esboço especulativo anterior. **Percentual do Módulo 3 não foi elevado por esta entrada** — a fórmula oficial (§1) só concede peso quando há artefato deployado e validado, e a migration deste Incremento 1 continua só local, mesmo critério já aplicado a este módulo em rodadas anteriores. **Nenhuma migration aplicada ao Supabase remoto, nenhuma Edge Function publicada, nenhum deploy, nenhum dado oficial/Petlink alterado.** Checkpoint local: commit `feat: add inventory movement ledger`, sem push. |
 | 2026-08-27 | Revisão corretiva do Incremento 1 (Módulo 3), antes de qualquer aplicação remota. Corrigida uma lacuna real de idempotência concorrente em `register_stock_movement()`: duas chamadas com a mesma `idempotency_key` para itens DIFERENTES, sob concorrência real (duas conexões), podiam terminar com `unique_violation` bruto em vez da mensagem estável `IDEMPOTENCY_KEY_CONFLICT:` — corrigido com bloco `BEGIN/EXCEPTION WHEN unique_violation` em volta do `INSERT` (usando `CONSTRAINT_NAME` via `GET STACKED DIAGNOSTICS` para confirmar a causa exata), mais normalização de `reference_type` consistente com `reason`. Novo teste 5.3 adicionado ao script SQL cobrindo o caminho antecipado dessa checagem (a corrida real entre duas conexões continua não-testável num script de transação única, documentado como tal). As 22 regras aprovadas foram explicitamente rotuladas nos 4 documentos (`01`/`02`/`03`/`05`) como **"Regras operacionais do MVP — versão inicial para validação, sujeitas a revisão após o teste prático do usuário"** — aprovação autoriza construir o MVP, não torna as regras definitivas; tipos de movimentação poderão ser ampliados/revisados; reserva/consumo/cancelamento/pesagem/escolha de rolo/perdas continuam só intenção aprovada (zero código); ledger permanece imutável mesmo sob revisão futura; correções futuras via novas movimentações/migrations, nunca reescrevendo histórico; Módulo 3 só avança para validação operacional com interface utilizável. Auditoria confirmou ausência de menções incorretas de contagem de migrations em qualquer arquivo. Suíte completa do frontend reexecutada (1167/1167), lint 0 erros, build sem erros, `git diff --check` limpo. Checkpoint local: commit `fix: harden inventory ledger validation`, sem push, sem migration aplicada. |
 | 2026-08-27 | **Migrations `20260827090000_create_stock_movements_table.sql` e `20260827093000_update_accessory_packaging_delete_guards.sql` aplicadas ao projeto Supabase remoto `tjhacqreupfqefntjevf`** via `npx supabase db push --linked` — 31/31 migrations agora sincronizadas local/remoto (antes 29/31), sem seed, sem alteração de role. Verificação somente leitura confirmou que tabela `stock_movements` (colunas/constraints/índices, incl. índice único parcial de `idempotency_key`), RLS/policies/grants e as três funções (`register_stock_movement`, `delete_accessory`, `delete_packaging`, cada uma com assinatura única) correspondem exatamente aos arquivos locais — nenhuma sobrecarga duplicada. Teste de integração SQL (`inventory_movements_test.sql`) executado contra o remoto dentro de `BEGIN...ROLLBACK` — **40 PASS, 1 SKIP, 0 FAIL**; consultas pós-teste confirmaram **zero resíduo** (nenhum dado de teste persistido, `stock_movements` com 0 linhas, nenhum `current_stock` oficial alterado, nenhum usuário oficial alterado). Smoke test do CRUD existente: `InventoryPage`/`InventoryItemForm` (108/108, sem regressão); testes Deno de `accessories`/`packaging` não executados (ambiente sem Deno). **Backend do Incremento 1 (Módulo 3) está agora aplicado e validado por teste automatizado real contra produção** — regras operacionais continuam provisórias do MVP (ver entrada anterior); interface (Incremento 2) e validação manual do usuário continuam pendentes; Incrementos 2–9 continuam pendentes. Módulo 1 continua aguardando a conclusão da integração de Estoque antes das Fases 6/7 (decisão registrada em 2026-08-27, entrada anterior). Percentual macro do Módulo 3 **não alterado** — critério já estabelecido exige backend + interface + validação manual juntos, não só backend. Nenhuma Edge Function publicada, nenhum deploy de frontend, nenhum dado oficial/Petlink alterado, nenhum push Git. Checkpoint local: commit `docs: record inventory ledger deployment`, sem push. |
+| 2026-08-27 | **Incrementos 2/3 do Módulo 3 (interface de saldo/entrada/saída/ajuste + histórico) implementados localmente**: nova Edge Function `stock-movements` (não publicada) chamando exclusivamente `register_stock_movement()`; 8 novos padrões estáveis mapeados em `_shared/errors.ts`; `StockMovementForm.tsx`/`StockMovementHistory.tsx`/`StockMovementPanel.tsx` (ação "Movimentar estoque" por linha na listagem, action buttons com ícones, projeção de saldo, motivo obrigatório por tipo, idempotência via `crypto.randomUUID()` estável entre retries do mesmo payload); coluna "Saldo atual" ordenável e badge de situação (Sem estoque/Estoque baixo/Estoque normal) na listagem. As 22 regras aprovadas permanecem **provisórias do MVP** — esta interface existe para o usuário validar as regras na prática, não para confirmá-las. Decisões de UX sem regra documentada explícita, sinalizadas: Devolução permanece disponível em item inativo (backend não verifica `is_active`); painel fecha automaticamente após sucesso. Suíte completa 1167 → 1261 testes, lint 0 erros, build sem erros, `git diff --check` limpo. Testes Deno (`stock-movements/handler.test.ts`, `_shared/errors.test.ts`) escritos, **não executados** — ambiente sem Deno, mesma limitação já registrada. **Edge Function ainda não publicada, nenhuma validação manual do usuário ainda ocorreu, nenhum dado oficial/Petlink cadastrado ou alterado.** Fase 5/6/7 do Módulo 1 e percentual macro do Módulo 3 **não alterados** por esta entrada — Incrementos 4–9 do plano de estoque continuam pendentes (filamentos, rolos, pesagens, reservas, consumo automático, produção, integração com `change_order_status`). Checkpoint local: commit `feat: add inventory movement interface`, sem push, sem migration criada/aplicada, sem Edge Function publicada, sem deploy. |

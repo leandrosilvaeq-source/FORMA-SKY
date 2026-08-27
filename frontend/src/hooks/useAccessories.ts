@@ -22,6 +22,12 @@ interface UseAccessoriesResult {
   // chama (deleteAccessory) — reservado como palavra-chave só em posição de
   // identificador solto, nunca como chave de objeto/propriedade.
   delete: (id: string) => Promise<void>
+  // Atualização local pura (sem chamada de rede) — usada depois de uma
+  // movimentação de estoque bem-sucedida (Módulo 3, Incremento 2):
+  // register_stock_movement já devolve balance_after (o novo saldo), então
+  // buscar o item de novo só para saber um valor que a própria resposta já
+  // trouxe seria uma requisição desnecessária.
+  setLocalStock: (id: string, currentStock: number) => void
 }
 
 function toApiError(err: unknown): ApiError {
@@ -96,5 +102,11 @@ export function useAccessories(): UseAccessoriesResult {
     setAccessories((current) => current.filter((item) => item.id !== id))
   }, [])
 
-  return { accessories, isLoading, error, refetch, create, update, delete: deleteItem }
+  const setLocalStock = useCallback((id: string, currentStock: number) => {
+    setAccessories((current) =>
+      current.map((item) => (item.id === id ? { ...item, current_stock: currentStock } : item)),
+    )
+  }, [])
+
+  return { accessories, isLoading, error, refetch, create, update, delete: deleteItem, setLocalStock }
 }

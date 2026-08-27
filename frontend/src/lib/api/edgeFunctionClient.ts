@@ -17,8 +17,9 @@ const PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 
 // As 6 Edge Functions do Módulo 1 + `accessories`/`packaging` (Módulo 3,
 // Incrementos 2 e 3 — backend protegido dos cadastros mestre de Acessórios
-// e Embalagens, docs/05_ROADMAP_MODULOS.md §9) (supabase/config.toml
-// [functions.*]).
+// e Embalagens, docs/05_ROADMAP_MODULOS.md §9) + `stock-movements` (Módulo
+// 3, Incremento 1 — register_stock_movement, docs/05_ROADMAP_MODULOS.md
+// §9b) (supabase/config.toml [functions.*]).
 export type EdgeFunctionName =
   | 'products'
   | 'orders'
@@ -28,6 +29,7 @@ export type EdgeFunctionName =
   | 'order-approvals'
   | 'accessories'
   | 'packaging'
+  | 'stock-movements'
 
 type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
 

@@ -267,4 +267,36 @@ describe('useAccessories', () => {
 
     expect(result.current.accessories).toEqual([accessory, otherAccessory])
   })
+
+  // Módulo 3, Incremento 2: setLocalStock é usado pelo painel de
+  // movimentação depois de um register_stock_movement bem-sucedido —
+  // atualização local pura, sem nenhuma chamada de rede.
+  it('setLocalStock() atualiza current_stock do item correto sem chamar a API', async () => {
+    listAccessoriesMock.mockResolvedValue([accessory, otherAccessory])
+
+    const { result } = renderHook(() => useAccessories())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    act(() => {
+      result.current.setLocalStock('1', 42)
+    })
+
+    expect(result.current.accessories.find((item) => item.id === '1')?.current_stock).toBe(42)
+    expect(result.current.accessories.find((item) => item.id === '2')?.current_stock).toBe(0)
+    expect(createAccessoryMock).not.toHaveBeenCalled()
+    expect(updateAccessoryMock).not.toHaveBeenCalled()
+  })
+
+  it('setLocalStock() para um id inexistente não altera nenhum item', async () => {
+    listAccessoriesMock.mockResolvedValue([accessory, otherAccessory])
+
+    const { result } = renderHook(() => useAccessories())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    act(() => {
+      result.current.setLocalStock('999', 42)
+    })
+
+    expect(result.current.accessories).toEqual([accessory, otherAccessory])
+  })
 })

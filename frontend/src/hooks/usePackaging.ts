@@ -19,6 +19,9 @@ interface UsePackagingResult {
   create: (input: CreatePackagingInput) => Promise<Packaging>
   update: (id: string, input: UpdatePackagingInput) => Promise<Packaging>
   delete: (id: string) => Promise<void>
+  // Mesmo raciocínio de useAccessories.setLocalStock: atualização local pura
+  // (sem chamada de rede) depois de uma movimentação de estoque bem-sucedida.
+  setLocalStock: (id: string, currentStock: number) => void
 }
 
 function toApiError(err: unknown): ApiError {
@@ -89,5 +92,11 @@ export function usePackaging(): UsePackagingResult {
     setPackaging((current) => current.filter((item) => item.id !== id))
   }, [])
 
-  return { packaging, isLoading, error, refetch, create, update, delete: deleteItem }
+  const setLocalStock = useCallback((id: string, currentStock: number) => {
+    setPackaging((current) =>
+      current.map((item) => (item.id === id ? { ...item, current_stock: currentStock } : item)),
+    )
+  }, [])
+
+  return { packaging, isLoading, error, refetch, create, update, delete: deleteItem, setLocalStock }
 }

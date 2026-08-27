@@ -154,6 +154,47 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
   // ACCESSORY_IN_USE:, marcador PACKAGING_IN_USE: (independente, nunca
   // confundido com o de accessories por serem strings distintas).
   ["PACKAGING_IN_USE:", (message) => new BusinessRuleError(message.replace(/^PACKAGING_IN_USE:\s*/, ""))],
+  // register_stock_movement (Módulo 3, migration 20260827090000): erros de
+  // entrada inválida (a Edge Function `stock-movements` já valida tudo isso
+  // antes de chamar a RPC — só aparecem se a RPC for chamada diretamente).
+  ["stock_movements.item_type inválido", (message) => new ValidationError(message)],
+  ["stock_movements.movement_type inválido", (message) => new ValidationError(message)],
+  // Cobre as duas mensagens de p_quantity ("deve ser um inteiro positivo" e
+  // "deve ser um número inteiro, sem casas decimais") com um único padrão —
+  // ambas começam com o mesmo prefixo de função.
+  ["register_stock_movement: p_quantity deve ser", (message) => new ValidationError(message)],
+  ["register_stock_movement: motivo obrigatório", (message) => new ValidationError(message)],
+  // Regras de negócio (409) — cada uma com marcador estável próprio, mesmo
+  // padrão de ACCESSORY_IN_USE:/PACKAGING_IN_USE: acima: a mensagem
+  // devolvida ao cliente é a mesma exceção sem o prefixo do marcador.
+  [
+    "STOCK_INSUFFICIENT_BALANCE:",
+    (message) => new BusinessRuleError(message.replace(/^STOCK_INSUFFICIENT_BALANCE:\s*/, "")),
+  ],
+  [
+    "INITIAL_BALANCE_ALREADY_EXISTS:",
+    (message) => new BusinessRuleError(message.replace(/^INITIAL_BALANCE_ALREADY_EXISTS:\s*/, "")),
+  ],
+  [
+    "INITIAL_BALANCE_REQUIRES_ZERO:",
+    (message) => new BusinessRuleError(message.replace(/^INITIAL_BALANCE_REQUIRES_ZERO:\s*/, "")),
+  ],
+  [
+    "IDEMPOTENCY_KEY_CONFLICT:",
+    (message) => new BusinessRuleError(message.replace(/^IDEMPOTENCY_KEY_CONFLICT:\s*/, "")),
+  ],
+  // delete_accessory/delete_packaging (migration 20260827093000): novo
+  // bloqueio de exclusão por histórico de estoque, além do já existente por
+  // vínculo em product_accessories/product_packaging (ACCESSORY_IN_USE:/
+  // PACKAGING_IN_USE: acima).
+  [
+    "ACCESSORY_HAS_STOCK_HISTORY:",
+    (message) => new BusinessRuleError(message.replace(/^ACCESSORY_HAS_STOCK_HISTORY:\s*/, "")),
+  ],
+  [
+    "PACKAGING_HAS_STOCK_HISTORY:",
+    (message) => new BusinessRuleError(message.replace(/^PACKAGING_HAS_STOCK_HISTORY:\s*/, "")),
+  ],
 ];
 
 export function mapPgError(err: PgErrorLike): AppError {

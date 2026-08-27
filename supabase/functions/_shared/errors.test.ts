@@ -191,3 +191,108 @@ Deno.test("mapPgError não confunde accessories.size inválido com packaging.siz
   assertEquals(accessoriesErr.message.includes("accessories"), true);
   assertEquals(packagingErr.message.includes("packaging"), true);
 });
+
+// ---------------------------------------------------------------------------
+// Módulo 3, Incremento 1/2 — register_stock_movement / delete_accessory /
+// delete_packaging (migrations 20260827090000/20260827093000)
+// ---------------------------------------------------------------------------
+
+Deno.test("mapPgError mapeia STOCK_INSUFFICIENT_BALANCE: para BusinessRuleError (409) e remove o marcador", () => {
+  const err = mapPgError({
+    code: "P0001",
+    message: "STOCK_INSUFFICIENT_BALANCE: saldo insuficiente para INTERNAL_USE em ACCESSORY id — saldo atual: 4, quantidade solicitada: 6",
+  });
+  if (!(err instanceof BusinessRuleError)) throw new Error(`esperado BusinessRuleError, obtido ${err.constructor.name}`);
+  assertEquals(err.status, 409);
+  assertEquals(err.message.includes("STOCK_INSUFFICIENT_BALANCE"), false);
+  assertEquals(err.message.includes("saldo insuficiente"), true);
+});
+
+Deno.test("mapPgError mapeia INITIAL_BALANCE_ALREADY_EXISTS: para BusinessRuleError (409) e remove o marcador", () => {
+  const err = mapPgError({
+    code: "P0001",
+    message: "INITIAL_BALANCE_ALREADY_EXISTS: INITIAL_BALANCE só pode ser a primeira movimentação do item",
+  });
+  if (!(err instanceof BusinessRuleError)) throw new Error(`esperado BusinessRuleError, obtido ${err.constructor.name}`);
+  assertEquals(err.status, 409);
+  assertEquals(err.message.includes("INITIAL_BALANCE_ALREADY_EXISTS"), false);
+});
+
+Deno.test("mapPgError mapeia INITIAL_BALANCE_REQUIRES_ZERO: para BusinessRuleError (409) e remove o marcador", () => {
+  const err = mapPgError({
+    code: "P0001",
+    message: "INITIAL_BALANCE_REQUIRES_ZERO: INITIAL_BALANCE exige saldo atual igual a zero (saldo atual: 4)",
+  });
+  if (!(err instanceof BusinessRuleError)) throw new Error(`esperado BusinessRuleError, obtido ${err.constructor.name}`);
+  assertEquals(err.status, 409);
+  assertEquals(err.message.includes("INITIAL_BALANCE_REQUIRES_ZERO"), false);
+});
+
+Deno.test("mapPgError mapeia IDEMPOTENCY_KEY_CONFLICT: para BusinessRuleError (409) e remove o marcador", () => {
+  const err = mapPgError({
+    code: "P0001",
+    message: "IDEMPOTENCY_KEY_CONFLICT: idempotency_key abc já foi usada com um payload diferente",
+  });
+  if (!(err instanceof BusinessRuleError)) throw new Error(`esperado BusinessRuleError, obtido ${err.constructor.name}`);
+  assertEquals(err.status, 409);
+  assertEquals(err.message.includes("IDEMPOTENCY_KEY_CONFLICT"), false);
+});
+
+Deno.test("mapPgError mapeia ACCESSORY_HAS_STOCK_HISTORY: para BusinessRuleError (409) e remove o marcador", () => {
+  const err = mapPgError({
+    code: "P0001",
+    message: "ACCESSORY_HAS_STOCK_HISTORY: Este acessório já teve movimentação de estoque registrada e não pode ser excluído. Desative o item.",
+  });
+  if (!(err instanceof BusinessRuleError)) throw new Error(`esperado BusinessRuleError, obtido ${err.constructor.name}`);
+  assertEquals(err.status, 409);
+  assertEquals(err.message.includes("ACCESSORY_HAS_STOCK_HISTORY"), false);
+  // Nunca confundido com o marcador de vínculo por composição — string
+  // distinta, sem sobreposição de substring.
+  assertEquals(err.message.includes("ACCESSORY_IN_USE"), false);
+});
+
+Deno.test("mapPgError mapeia PACKAGING_HAS_STOCK_HISTORY: para BusinessRuleError (409) e remove o marcador", () => {
+  const err = mapPgError({
+    code: "P0001",
+    message: "PACKAGING_HAS_STOCK_HISTORY: Esta embalagem já teve movimentação de estoque registrada e não pode ser excluída. Desative o item.",
+  });
+  if (!(err instanceof BusinessRuleError)) throw new Error(`esperado BusinessRuleError, obtido ${err.constructor.name}`);
+  assertEquals(err.status, 409);
+  assertEquals(err.message.includes("PACKAGING_HAS_STOCK_HISTORY"), false);
+});
+
+Deno.test("mapPgError mapeia stock_movements.item_type inválido para ValidationError (400), não business_rule", () => {
+  const err = mapPgError({ code: "P0001", message: "stock_movements.item_type inválido: FILAMENT_SPOOL (esperado ACCESSORY ou PACKAGING)" });
+  assertEquals(err instanceof ValidationError, true);
+  assertEquals(err.status, 400);
+});
+
+Deno.test("mapPgError mapeia stock_movements.movement_type inválido para ValidationError (400)", () => {
+  const err = mapPgError({ code: "P0001", message: "stock_movements.movement_type inválido: RESERVATION" });
+  assertEquals(err instanceof ValidationError, true);
+  assertEquals(err.status, 400);
+});
+
+Deno.test("mapPgError mapeia as duas mensagens de p_quantity para ValidationError (400)", () => {
+  const zero = mapPgError({ code: "P0001", message: "register_stock_movement: p_quantity deve ser um inteiro positivo (recebido 0)" });
+  const fraction = mapPgError({ code: "P0001", message: "register_stock_movement: p_quantity deve ser um número inteiro, sem casas decimais (recebido 1.5)" });
+  assertEquals(zero instanceof ValidationError, true);
+  assertEquals(fraction instanceof ValidationError, true);
+});
+
+Deno.test("mapPgError mapeia motivo obrigatório para ValidationError (400)", () => {
+  const err = mapPgError({ code: "P0001", message: "register_stock_movement: motivo obrigatório para movement_type LOSS" });
+  assertEquals(err instanceof ValidationError, true);
+  assertEquals(err.status, 400);
+});
+
+Deno.test("mapPgError mantém accessories.id não encontrado e ACCESSORY_IN_USE: funcionando após a adição dos padrões do Módulo 3 — regressão cruzada", () => {
+  const notFound = mapPgError({ code: "P0001", message: "accessories.id 123 não encontrado" });
+  const inUse = mapPgError({
+    code: "P0001",
+    message: "ACCESSORY_IN_USE: Este acessório está vinculado a um produto e não pode ser excluído. Desative o item.",
+  });
+  assertEquals(notFound instanceof NotFoundError, true);
+  assertEquals(inUse instanceof BusinessRuleError, true);
+  assertEquals(inUse.message.includes("ACCESSORY_IN_USE"), false);
+});

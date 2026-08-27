@@ -5,15 +5,22 @@ import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
 import type { Accessory, Packaging } from '@/types/domain'
 
-const { useAccessoriesMock, usePackagingMock, useAuthMock, toastMock } = vi.hoisted(() => ({
+const { useAccessoriesMock, usePackagingMock, useStockMovementsMock, useAuthMock, toastMock } = vi.hoisted(() => ({
   useAccessoriesMock: vi.fn(),
   usePackagingMock: vi.fn(),
+  useStockMovementsMock: vi.fn(),
   useAuthMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
 }))
 
 vi.mock('@/hooks/useAccessories', () => ({ useAccessories: useAccessoriesMock }))
 vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
+// StockMovementPanel (Módulo 3, Incremento 2) usa useStockMovements
+// internamente — mockado aqui para que abrir "Movimentar estoque" nesta
+// suíte nunca dependa de rede real. Default: histórico vazio, sem
+// carregamento/erro — cada teste que precisa de outro cenário sobrescreve
+// via useStockMovementsMock.mockReturnValue(...).
+vi.mock('@/hooks/useStockMovements', () => ({ useStockMovements: useStockMovementsMock }))
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
 vi.mock('sonner', () => ({ toast: toastMock }))
 
@@ -62,6 +69,7 @@ function mockAccessories(
     create: ReturnType<typeof vi.fn>
     update: ReturnType<typeof vi.fn>
     delete: ReturnType<typeof vi.fn>
+    setLocalStock: ReturnType<typeof vi.fn>
   }> = {},
 ) {
   useAccessoriesMock.mockReturnValue({
@@ -72,6 +80,7 @@ function mockAccessories(
     create: overrides.create ?? vi.fn().mockResolvedValue(accessoryFixture()),
     update: overrides.update ?? vi.fn().mockResolvedValue(accessoryFixture()),
     delete: overrides.delete ?? vi.fn().mockResolvedValue(undefined),
+    setLocalStock: overrides.setLocalStock ?? vi.fn(),
   })
 }
 
@@ -84,6 +93,7 @@ function mockPackaging(
     create: ReturnType<typeof vi.fn>
     update: ReturnType<typeof vi.fn>
     delete: ReturnType<typeof vi.fn>
+    setLocalStock: ReturnType<typeof vi.fn>
   }> = {},
 ) {
   usePackagingMock.mockReturnValue({
@@ -94,6 +104,7 @@ function mockPackaging(
     create: overrides.create ?? vi.fn().mockResolvedValue(packagingFixture()),
     update: overrides.update ?? vi.fn().mockResolvedValue(packagingFixture()),
     delete: overrides.delete ?? vi.fn().mockResolvedValue(undefined),
+    setLocalStock: overrides.setLocalStock ?? vi.fn(),
   })
 }
 
@@ -1531,6 +1542,39 @@ describe('InventoryPage — exclusão física segura', () => {
     expect(within(getTableBody()).getByText('Ímã 6x2')).toBeInTheDocument()
   })
 
+  // Módulo 3, Incremento 1 (migration 20260827093000_update_accessory_
+  // packaging_delete_guards.sql): delete_accessory agora também bloqueia
+  // por histórico de movimentação de estoque, além do bloqueio já existente
+  // por vínculo a produto — mesmo contrato de erro (business_rule/409), a
+  // mensagem chega ao frontend já sem o marcador ACCESSORY_HAS_STOCK_HISTORY:
+  // (removido por _shared/errors.ts no backend).
+  it('item de acessório com histórico de movimentação de estoque (bloqueio 409) permanece na lista e orienta desativar', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiError(
+          'business_rule',
+          409,
+          'Este acessório já teve movimentação de estoque registrada e não pode ser excluído. Desative o item.',
+        ),
+      )
+    mockAccessories([accessoryFixture()], { delete: deleteFn })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+
+    expect(
+      await screen.findByText('Este acessório já teve movimentação de estoque registrada e não pode ser excluído. Desative o item.'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText('Ímã 6x2')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Cancelar' }))
+    expect(within(getTableBody()).getByText('Ímã 6x2')).toBeInTheDocument()
+  })
+
   it('erro inesperado na exclusão mantém o item e a tela funcional, com mensagem clara', async () => {
     const user = userEvent.setup()
     const deleteFn = vi.fn().mockRejectedValue(new ApiError('database', 500, 'Falha ao excluir acessório.'))
@@ -1603,6 +1647,32 @@ describe('InventoryPage — exclusão física segura', () => {
     expect(within(getTableBody()).getByText('Caixa M')).toBeInTheDocument()
   })
 
+  it('item de embalagem com histórico de movimentação de estoque (bloqueio 409) permanece na lista e orienta desativar', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiError(
+          'business_rule',
+          409,
+          'Esta embalagem já teve movimentação de estoque registrada e não pode ser excluída. Desative o item.',
+        ),
+      )
+    mockPackaging([packagingFixture()], { delete: deleteFn })
+    renderPage('embalagens')
+
+    await user.click(screen.getByRole('button', { name: 'Excluir embalagem Caixa M' }))
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+
+    expect(
+      await screen.findByText('Esta embalagem já teve movimentação de estoque registrada e não pode ser excluída. Desative o item.'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Caixa M')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Cancelar' }))
+    expect(within(getTableBody()).getByText('Caixa M')).toBeInTheDocument()
+  })
+
   it('cancelar a exclusão de um item não afeta o estado de busca/filtro da outra área (independência)', async () => {
     const user = userEvent.setup()
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2' })])
@@ -1615,5 +1685,234 @@ describe('InventoryPage — exclusão física segura', () => {
     renderPage('embalagens')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(within(getTableBody()).getByText('Caixa M')).toBeInTheDocument()
+  })
+})
+
+// =============================================================================
+// Módulo 3, Incremento 2 — coluna "Saldo atual", situação de estoque e
+// painel "Movimentar estoque" (StockMovementPanel, via useStockMovements
+// mockado no topo do arquivo).
+// =============================================================================
+
+describe('InventoryPage — coluna Saldo atual e situação de estoque', () => {
+  it('exibe o saldo atual numérico na coluna correspondente', () => {
+    mockAccessories([accessoryFixture({ current_stock: 42 })])
+    renderPage('acessorios')
+    expect(within(getTableBody()).getByText('42')).toBeInTheDocument()
+  })
+
+  it('saldo zero mostra o badge "Sem estoque"', () => {
+    mockAccessories([accessoryFixture({ current_stock: 0, minimum_stock: 5 })])
+    renderPage('acessorios')
+    expect(screen.getByText('Sem estoque')).toBeInTheDocument()
+  })
+
+  it('estoque baixo (minimum_stock > 0 e current_stock <= minimum_stock) mostra o badge "Estoque baixo"', () => {
+    mockAccessories([accessoryFixture({ current_stock: 3, minimum_stock: 5 })])
+    renderPage('acessorios')
+    expect(screen.getByText('Estoque baixo')).toBeInTheDocument()
+  })
+
+  it('current_stock igual a minimum_stock também conta como "Estoque baixo" (<=, não <)', () => {
+    mockAccessories([accessoryFixture({ current_stock: 5, minimum_stock: 5 })])
+    renderPage('acessorios')
+    expect(screen.getByText('Estoque baixo')).toBeInTheDocument()
+  })
+
+  it('saldo acima do mínimo mostra "Estoque normal"', () => {
+    mockAccessories([accessoryFixture({ current_stock: 20, minimum_stock: 5 })])
+    renderPage('acessorios')
+    expect(screen.getByText('Estoque normal')).toBeInTheDocument()
+  })
+
+  it('estoque mínimo null nunca produz "Estoque baixo", mesmo com saldo pequeno', () => {
+    mockAccessories([accessoryFixture({ current_stock: 1, minimum_stock: null })])
+    renderPage('acessorios')
+    expect(screen.getByText('Estoque normal')).toBeInTheDocument()
+    expect(screen.queryByText('Estoque baixo')).not.toBeInTheDocument()
+  })
+
+  it('estoque mínimo zero nunca produz "Estoque baixo" (0 = sem limiar definido, não "qualquer saldo é baixo")', () => {
+    mockAccessories([accessoryFixture({ current_stock: 1, minimum_stock: 0 })])
+    renderPage('acessorios')
+    expect(screen.getByText('Estoque normal')).toBeInTheDocument()
+  })
+
+  it('permite ordenar a listagem por Saldo atual', async () => {
+    const user = userEvent.setup()
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Baixo saldo', current_stock: 2 }),
+      accessoryFixture({ id: 'a2', name: 'Alto saldo', current_stock: 50 }),
+    ])
+    renderPage('acessorios')
+
+    await applySort(user, 'Saldo atual', 'Ordenar crescente')
+    expect(getVisibleNamesInOrder()).toEqual(['Baixo saldo', 'Alto saldo'])
+
+    await applySort(user, 'Saldo atual', 'Ordenar decrescente')
+    expect(getVisibleNamesInOrder()).toEqual(['Alto saldo', 'Baixo saldo'])
+  })
+})
+
+describe('InventoryPage — painel "Movimentar estoque" (StockMovementPanel)', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+    useStockMovementsMock.mockReturnValue({
+      movements: [],
+      isLoading: false,
+      loadError: null,
+      refetch: vi.fn(),
+      isRegistering: false,
+      register: vi.fn().mockResolvedValue({
+        id: 'm1',
+        item_type: 'ACCESSORY',
+        item_id: 'a1',
+        movement_type: 'PURCHASE',
+        quantity_delta: 10,
+        balance_before: 0,
+        balance_after: 10,
+        reason: null,
+        reference_type: null,
+        reference_id: null,
+        idempotency_key: 'key-1',
+        occurred_at: '2026-08-27T12:00:00Z',
+        created_by: 'u1',
+        created_at: '2026-08-27T12:00:00Z',
+      }),
+    })
+  })
+
+  it('um único botão "Movimentar estoque" por linha abre o painel', async () => {
+    const user = userEvent.setup()
+    mockAccessories([accessoryFixture({ current_stock: 10 })])
+    renderPage('acessorios')
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — acessório Ímã 6x2' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Movimentar estoque' })
+    expect(dialog).toBeInTheDocument()
+    // "Ímã 6x2" aparece duas vezes dentro do diálogo (DialogDescription +
+    // resumo do próprio StockMovementPanel) — nunca ambíguo para o usuário
+    // (são duas exibições legítimas do mesmo nome), mas exige getAllByText
+    // aqui em vez de getByText.
+    expect(within(dialog).getAllByText('Ímã 6x2').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('o painel mostra o resumo correto: categoria, saldo atual e estoque mínimo', async () => {
+    const user = userEvent.setup()
+    mockAccessories([accessoryFixture({ current_stock: 15, minimum_stock: 5 })])
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — acessório Ímã 6x2' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Movimentar estoque' })
+    expect(within(dialog).getByText('Acessório')).toBeInTheDocument()
+    expect(within(dialog).getByText('15')).toBeInTheDocument()
+    expect(within(dialog).getByText('5')).toBeInTheDocument()
+  })
+
+  it('embalagens abrem o painel com itemType/categoria corretos (independência entre áreas)', async () => {
+    const user = userEvent.setup()
+    mockPackaging([packagingFixture({ current_stock: 8 })])
+    renderPage('embalagens')
+
+    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — embalagem Caixa M' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Movimentar estoque' })
+    expect(within(dialog).getByText('Embalagem')).toBeInTheDocument()
+  })
+
+  it('registrar uma movimentação com sucesso: toast, atualização local do saldo (setLocalStock) e fechamento do painel', async () => {
+    const setLocalStock = vi.fn()
+    mockAccessories([accessoryFixture({ id: 'a1', current_stock: 0 })], { setLocalStock })
+    const user = userEvent.setup()
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('radio', { name: 'Entrada' }))
+    await user.click(screen.getByRole('radio', { name: 'Compra' }))
+    await user.type(screen.getByLabelText('Quantidade'), '10')
+    await user.click(screen.getByRole('button', { name: /^registrar movimentação$/i }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(toastMock.success).toHaveBeenCalledWith('Movimentação registrada.')
+    expect(setLocalStock).toHaveBeenCalledWith('a1', 10)
+  })
+
+  it('erro real do backend mantém o painel aberto com a mensagem exibida', async () => {
+    useStockMovementsMock.mockReturnValue({
+      movements: [],
+      isLoading: false,
+      loadError: null,
+      refetch: vi.fn(),
+      isRegistering: false,
+      register: vi.fn().mockRejectedValue(new ApiError('business_rule', 409, 'saldo insuficiente para esta operação')),
+    })
+    mockAccessories([accessoryFixture({ current_stock: 2 })])
+    const user = userEvent.setup()
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('radio', { name: 'Saída' }))
+    await user.click(screen.getByRole('radio', { name: 'Uso interno' }))
+    await user.type(screen.getByLabelText('Quantidade'), '1')
+    await user.type(screen.getByLabelText(/motivo\/observação/i), 'teste')
+    await user.click(screen.getByRole('button', { name: /^registrar movimentação$/i }))
+
+    expect(await screen.findByText('saldo insuficiente para esta operação')).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('item inativo: painel abre normalmente e sinaliza "Inativo"', async () => {
+    const user = userEvent.setup()
+    mockAccessories([accessoryFixture({ is_active: false })])
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — acessório Ímã 6x2' }))
+    const dialog = screen.getByRole('dialog', { name: 'Movimentar estoque' })
+    expect(within(dialog).getByText('Inativo')).toBeInTheDocument()
+    expect(within(dialog).getByRole('radiogroup', { name: 'Movimentação' })).toBeInTheDocument()
+  })
+
+  it('histórico carregando é exibido dentro do painel', async () => {
+    useStockMovementsMock.mockReturnValue({
+      movements: [],
+      isLoading: true,
+      loadError: null,
+      refetch: vi.fn(),
+      isRegistering: false,
+      register: vi.fn(),
+    })
+    const user = userEvent.setup()
+    mockAccessories([accessoryFixture()])
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — acessório Ímã 6x2' }))
+    expect(screen.getAllByRole('status').length).toBeGreaterThan(0)
+  })
+
+  it('fechar o painel sem salvar (Cancelar) não chama register nem setLocalStock', async () => {
+    const register = vi.fn()
+    const setLocalStock = vi.fn()
+    useStockMovementsMock.mockReturnValue({
+      movements: [],
+      isLoading: false,
+      loadError: null,
+      refetch: vi.fn(),
+      isRegistering: false,
+      register,
+    })
+    mockAccessories([accessoryFixture()], { setLocalStock })
+    const user = userEvent.setup()
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — acessório Ímã 6x2' }))
+    await user.click(screen.getByRole('button', { name: /^cancelar$/i }))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(register).not.toHaveBeenCalled()
+    expect(setLocalStock).not.toHaveBeenCalled()
   })
 })
