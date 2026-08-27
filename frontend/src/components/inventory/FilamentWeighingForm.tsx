@@ -8,7 +8,7 @@ import { parseNumberField } from '@/lib/forms/numberField'
 import { cn } from '@/lib/utils'
 
 // Espelha exatamente as regras de register_filament_weighing()
-// (supabase/migrations/20260827106000_create_filament_movements_table.sql):
+// (supabase/migrations/20260827110000_create_filament_movements_table.sql):
 // peso disponível = peso bruto medido - peso do carretel vazio (quando
 // conhecido) OU o peso líquido informado diretamente (quando não é — nunca
 // inventamos uma tara). Motivo é sempre obrigatório — nenhuma tolerância

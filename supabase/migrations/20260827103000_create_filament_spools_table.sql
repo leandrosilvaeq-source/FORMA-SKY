@@ -346,7 +346,7 @@ grant execute on function public.update_filament_spool(uuid, jsonb, uuid)
 -- delete_filament_spool — exclusão física protegida
 -- ---------------------------------------------------------------------------
 -- Bloqueio por histórico de movimentação é adicionado em
--- 20260827106000_create_filament_movements_table.sql via CREATE OR REPLACE
+-- 20260827110000_create_filament_movements_table.sql via CREATE OR REPLACE
 -- (filament_movements ainda não existe neste ponto) — mesmo padrão já usado
 -- por delete_accessory/delete_packaging
 -- (20260827093000_update_accessory_packaging_delete_guards.sql).
@@ -410,7 +410,7 @@ end;
 $$;
 
 comment on function public.delete_filament_type(uuid, uuid) is
-  'Exclusão física protegida de um tipo de filamento: bloqueada quando há rolo (filament_spools) vinculado — FILAMENT_TYPE_HAS_SPOOLS:. O bloqueio por composição de produto (product_filaments) é adicionado em 20260827109000_create_product_filaments_table.sql. Nenhuma exclusão em cascata.';
+  'Exclusão física protegida de um tipo de filamento: bloqueada quando há rolo (filament_spools) vinculado — FILAMENT_TYPE_HAS_SPOOLS:. O bloqueio por composição de produto (product_filaments) é adicionado em 20260827113000_create_product_filaments_table.sql. Nenhuma exclusão em cascata.';
 
 revoke execute on function public.delete_filament_type(uuid, uuid)
   from public, anon, authenticated;

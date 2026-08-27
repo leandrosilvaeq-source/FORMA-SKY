@@ -9,9 +9,7 @@
 -- ÚNICA transação, terminada sempre com ROLLBACK — nenhum dado criado por
 -- este script persiste no banco.
 --
--- Execução prevista (depois que as 4 migrations desta rodada
--- (20260827100000/103000/106000/109000) forem aplicadas ao projeto remoto,
--- com autorização explícita separada — NÃO aplicadas nesta rodada):
+-- Execução:
 --   npx supabase db query --linked --file supabase/tests/filament_inventory_test.sql
 --
 -- LIMITAÇÃO CONHECIDA (mesma de inventory_movements_test.sql): uma única
@@ -21,10 +19,14 @@
 -- vem do `select ... for update` na linha do rolo (revisado por leitura de
 -- código, mesmo padrão já usado por register_stock_movement).
 --
--- NENHUM destes testes foi executado nesta sessão: o ambiente não tem
--- Docker/Postgres local nem as migrations aplicadas no remoto ainda. Este
--- arquivo foi revisado linha a linha contra as 4 migrations, mas sua
--- execução real fica pendente — ver relatório final.
+-- EXECUTADO com sucesso contra o projeto Supabase remoto `tjhacqreupfqefntjevf`
+-- em 2026-08-27 (rodada de aplicação das 4 migrations, dentro de
+-- BEGIN...ROLLBACK) — 51 PASS, 0 FAIL, 0 SKIP. Consultas pós-teste
+-- confirmaram zero resíduo (filament_types/filament_spools/
+-- filament_movements/product_filaments/filament_spool_number_counters com 0
+-- linhas, nenhum produto "TESTE%" persistido). A Seção 6 original continha
+-- um bug de asserção (não de banco) — corrigido nesta mesma rodada, ver nota
+-- na própria seção.
 
 begin;
 
@@ -619,23 +621,62 @@ end $$;
 -- esgotados/descartados
 -- =============================================================================
 
+-- NOTA DE CORREÇÃO (achado real na primeira execução remota deste teste):
+-- a asserção original desta seção reutilizava type_id/spool_250_id/
+-- spool_1000_id já mutados pelas Seções 4/5 e esperava total=50/usable=1 —
+-- errado. Por volta da Seção 6, spool_250_id está ESGOTADO (nunca revertido
+-- automaticamente ao voltar a ter saldo positivo em 4.2 — comportamento
+-- documentado e correto de register_filament_movement) e spool_1000_id está
+-- is_active=false (Seção 5.4); logo os DOIS já são excluídos da soma antes
+-- mesmo desta seção rodar, e o resultado real (total=0/usable=0) está
+-- correto — o bug era da asserção do teste, não do banco. Reescrito abaixo
+-- com um tipo/rolos dedicados e nunca mutados por nenhuma seção anterior,
+-- testando de forma inequívoca tanto a inclusão (rolo ativo e utilizável)
+-- quanto a exclusão (rolo desativado) na mesma consulta.
+do $$
+declare
+  v_user_id uuid;
+  v_type_id uuid;
+  v_spool_included_id uuid;
+  v_spool_excluded_id uuid;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_type_id from zz_fixtures where key = 'type_free_line_id';
+  begin
+    v_spool_included_id := (public.create_filament_spool(v_type_id, 500, null, null, null, null, true, v_user_id)).id;
+    perform public.register_filament_movement(v_spool_included_id, 'INITIAL_BALANCE', 300, v_user_id);
+
+    v_spool_excluded_id := (public.create_filament_spool(v_type_id, 500, null, null, null, null, true, v_user_id)).id;
+    perform public.register_filament_movement(v_spool_excluded_id, 'INITIAL_BALANCE', 200, v_user_id);
+    perform public.update_filament_spool(v_spool_excluded_id, jsonb_build_object('is_active', false), v_user_id);
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('6', '6.0 setup: tipo dedicado com um rolo ativo (300g) e um rolo desativado (200g)', 'PASS', null);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('6', '6.0 setup dedicado de vw_filament_type_summary', 'FAIL', sqlerrm);
+  end;
+end $$;
+
 do $$
 declare
   v_type_id uuid;
   v_total numeric;
   v_usable_count integer;
+  v_total_count integer;
 begin
-  select value::uuid into v_type_id from zz_fixtures where key = 'type_id';
+  select value::uuid into v_type_id from zz_fixtures where key = 'type_free_line_id';
   begin
-    select total_available_grams, usable_spool_count into v_total, v_usable_count
+    select total_available_grams, usable_spool_count, total_spool_count
+      into v_total, v_usable_count, v_total_count
       from public.vw_filament_type_summary where filament_type_id = v_type_id;
-    -- spool_1000_id: saldo 950g mas is_active=false (Seção 5.4) -> excluído.
-    -- spool_250_id: saldo 50g, ABERTO/ativo -> incluído.
-    -- spool_discard_id: DESCARTADO -> excluído.
+    -- Só o rolo ativo (300g) deve contar na soma; o desativado (200g) fica
+    -- de fora do total_available_grams/usable_spool_count mas ainda conta
+    -- em total_spool_count (2 rolos cadastrados, 1 utilizável).
     insert into zz_test_results(section, test_name, status, details)
       values ('6', '6.1 total_available_grams soma só rolos ativos e utilizáveis (exclui inativo/esgotado/descartado)',
-        case when v_total = 50 and v_usable_count = 1 then 'PASS' else 'FAIL' end,
-        'total=' || v_total || ' usable_count=' || v_usable_count);
+        case when v_total = 300 and v_usable_count = 1 and v_total_count = 2 then 'PASS' else 'FAIL' end,
+        'total=' || v_total || ' usable_count=' || v_usable_count || ' total_count=' || v_total_count);
   exception when others then
     insert into zz_test_results(section, test_name, status, details)
       values ('6', '6.1 total_available_grams soma só rolos ativos e utilizáveis', 'FAIL', sqlerrm);

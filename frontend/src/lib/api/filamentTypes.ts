@@ -2,7 +2,7 @@
 // public.vw_filament_type_summary concedem SELECT a authenticated, com RLS
 // is_active_user()
 // (supabase/migrations/20260827100000_create_filament_types_table.sql,
-// 20260827106000_create_filament_movements_table.sql) — mesmo padrão de
+// 20260827110000_create_filament_movements_table.sql) — mesmo padrão de
 // accessories.ts/packaging.ts. Escrita (criar/editar/ativar-desativar/
 // excluir): Edge Function `filament-types` (ainda NÃO publicada — só roda
 // localmente nesta rodada).

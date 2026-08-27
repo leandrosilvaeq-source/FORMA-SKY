@@ -275,7 +275,7 @@ grant execute on function public.update_filament_type(uuid, jsonb, uuid)
 -- rodada) vinculados. Ambas as tabelas ainda não existem neste ponto da
 -- migration — a checagem correspondente é adicionada em
 -- 20260827103000_create_filament_spools_table.sql e
--- 20260827109000_create_product_filaments_table.sql via CREATE OR REPLACE,
+-- 20260827113000_create_product_filaments_table.sql via CREATE OR REPLACE,
 -- nunca uma segunda function paralela.
 create or replace function public.delete_filament_type(
   p_filament_type_id uuid,

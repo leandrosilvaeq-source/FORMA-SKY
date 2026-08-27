@@ -22,7 +22,7 @@ import { cn } from '@/lib/utils'
 import type { FilamentMovementType } from '@/types/domain'
 
 // Espelha exatamente as regras de register_filament_movement()
-// (supabase/migrations/20260827106000_create_filament_movements_table.sql)
+// (supabase/migrations/20260827110000_create_filament_movements_table.sql)
 // — mesmo idioma de StockMovementForm.tsx, adaptado para gramas
 // (fracionário, nunca inteiro) e para o conjunto de 8 tipos manuais de
 // filamento (WEIGHING_ADJUSTMENT nunca aparece aqui — ver
@@ -64,7 +64,7 @@ const EXIT_ITEMS: MovementTypeItem[] = [
 ]
 
 // Mesma regra de filament_movements_reason_required_by_type (migration
-// 20260827106000) e da Edge Function filament-movements.
+// 20260827110000) e da Edge Function filament-movements.
 const REASON_REQUIRED_TYPES = new Set<ManualFilamentMovementType>([
   'POSITIVE_ADJUSTMENT',
   'NEGATIVE_ADJUSTMENT',

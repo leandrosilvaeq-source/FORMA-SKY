@@ -196,7 +196,7 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
     (message) => new BusinessRuleError(message.replace(/^PACKAGING_HAS_STOCK_HISTORY:\s*/, "")),
   ],
   // Módulo 3, Incremento 4 (filamentos) — migrations 20260827100000/
-  // 103000/106000/109000. Mesmo critério das entradas acima: mensagens de
+  // 103000/110000/113000. Mesmo critério das entradas acima: mensagens de
   // defesa em profundidade (create_filament_type/update_filament_type/
   // create_filament_spool/update_filament_spool/register_filament_movement/
   // register_filament_weighing/set_product_filaments) mapeadas para 400,

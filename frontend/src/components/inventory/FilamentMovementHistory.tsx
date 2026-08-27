@@ -7,7 +7,7 @@ import type { FilamentMovement, FilamentMovementType } from '@/types/domain'
 
 // Rótulos amigáveis para os 9 movement_type de filamento
 // (register_filament_movement/register_filament_weighing, migration
-// 20260827106000). Um tipo futuro desconhecido nunca quebra a tela —
+// 20260827110000). Um tipo futuro desconhecido nunca quebra a tela —
 // movementTypeLabel() cai de volta no valor bruto.
 const MOVEMENT_TYPE_LABELS: Partial<Record<FilamentMovementType, string>> = {
   INITIAL_BALANCE: 'Saldo inicial',

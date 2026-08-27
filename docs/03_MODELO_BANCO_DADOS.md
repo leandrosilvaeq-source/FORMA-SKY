@@ -679,9 +679,14 @@ Cadastro dos motivos de falha.
 
 # 12. Grupo: Filamentos
 
-**Implementado localmente (Módulo 3, Incremento 4, 2026-08-27 — migrations
-`20260827100000`/`103000`/`106000`/`109000`, branch `feature/inventory-operations`).
-Ainda NÃO aplicado ao Supabase remoto nem validado manualmente pelo usuário.** Regras
+**Aplicado ao Supabase remoto `tjhacqreupfqefntjevf` (Módulo 3, Incremento 4, 2026-08-27 —
+migrations `20260827100000`/`103000`/`110000`/`113000`, branch `feature/inventory-operations`;
+`110000`/`113000` renomeadas de `106000`/`109000` antes da aplicação — os identificadores
+originais decodificavam minuto 60/90, inválidos, nunca aplicados com esses nomes). Edge
+Functions `filament-types`/`filament-spools`/`filament-movements` publicadas e ativas. Teste de
+integração SQL executado contra o remoto (51 PASS/0 FAIL/0 SKIP, dentro de
+`BEGIN...ROLLBACK`, zero resíduo). Ainda NÃO validado manualmente pelo usuário pela
+interface.** Regras
 operacionais do MVP — versão inicial para validação, sujeitas a revisão após o teste
 prático (ver `01_ESPECIFICACAO_FUNCIONAL.md` §16/§17/§20). As subseções 12.1-12.4 abaixo
 descrevem o schema **realmente implementado**, que diverge em três pontos deliberados da

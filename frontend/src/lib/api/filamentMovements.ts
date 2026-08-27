@@ -1,6 +1,6 @@
 // Leitura direta via supabase-js: public.filament_movements concede SELECT
 // a authenticated, com RLS is_active_user()
-// (supabase/migrations/20260827106000_create_filament_movements_table.sql).
+// (supabase/migrations/20260827110000_create_filament_movements_table.sql).
 // Escrita: Edge Function `filament-movements` (ainda NÃO publicada — só
 // roda localmente nesta rodada).
 

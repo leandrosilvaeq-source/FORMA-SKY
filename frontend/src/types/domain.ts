@@ -370,7 +370,7 @@ export interface FilamentSpool {
   updated_at: string
 }
 
-// supabase/migrations/20260827106000_create_filament_movements_table.sql —
+// supabase/migrations/20260827110000_create_filament_movements_table.sql —
 // tabela dedicada, independente de stock_movements (grama é fracionário;
 // cada linha referencia tipo E rolo). WEIGHING_ADJUSTMENT só é gravado por
 // register_filament_weighing (rota /filament-movements/weighing), nunca
@@ -423,7 +423,7 @@ export interface FilamentTypeSummary {
   total_spool_count: number
 }
 
-// supabase/migrations/20260827109000_create_product_filaments_table.sql —
+// supabase/migrations/20260827113000_create_product_filaments_table.sql —
 // preparação de composição (requisito 9), nunca consumida automaticamente
 // nesta rodada.
 export interface ProductFilament {

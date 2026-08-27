@@ -412,10 +412,10 @@ Estoque mínimo inicial:
 
 **Regras operacionais do MVP — versão inicial para validação, sujeitas a revisão após o
 teste prático do usuário.** Aprovadas em 2026-08-27. **Atualização (mesmo dia,
-continuação — Incremento 4):** implementação **local** dos tipos/rolos/movimentações de
-filamento concluída (migrations, Edge Functions e interface — ver
-`05_ROADMAP_MODULOS.md` §9b); **ainda não aplicada ao Supabase remoto nem validada
-manualmente pelo usuário**:
+continuação — Incremento 4):** tipos/rolos/movimentações de filamento implementados,
+migrations aplicadas ao Supabase remoto e as 3 Edge Functions publicadas (ver
+`05_ROADMAP_MODULOS.md` §9b); **ainda não validados manualmente pelo usuário pela
+interface**:
 
 - Um **tipo de filamento** é definido pela combinação **material + fabricante + linha +
   cor** — não existe "tipo" sem essas quatro dimensões.
@@ -506,8 +506,9 @@ migrations** — o ledger e o histórico já gravados **nunca são reescritos**.
 continuação)** estende o mesmo princípio a **Filamentos**, com um ledger dedicado
 (`filament_movements`, independente de `stock_movements` — grama é fracionário e cada
 linha referencia tipo E rolo, ver decisão de arquitetura em
-`03_MODELO_BANCO_DADOS.md` §12) — implementado **localmente**, ainda **não aplicado ao
-Supabase remoto nem validado manualmente**. Reserva, consumo automático por pedido,
+`03_MODELO_BANCO_DADOS.md` §12) — implementado, aplicado ao Supabase remoto e testado por
+integração SQL automatizada (51 PASS/0 FAIL/0 SKIP), mas **ainda não validado manualmente
+pelo usuário pela interface**. Reserva, consumo automático por pedido,
 cancelamento e perdas por reimpressão descritos abaixo **ainda não têm nenhuma linha de
 código** — são só a intenção aprovada. Ver `03_MODELO_BANCO_DADOS.md` §12 e
 `05_ROADMAP_MODULOS.md` para o estado técnico atual:

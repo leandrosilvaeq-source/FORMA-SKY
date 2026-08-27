@@ -7,7 +7,7 @@
 //   POST /filament-movements/weighing -> RPC register_filament_weighing ("Registrar pesagem")
 //
 // As duas RPCs são security definer com EXECUTE concedido só a
-// service_role (supabase/migrations/20260827106000_create_filament_movements_table.sql)
+// service_role (supabase/migrations/20260827110000_create_filament_movements_table.sql)
 // — só alcançáveis a partir desta Edge Function, nunca diretamente do
 // frontend. Nenhuma escrita direta em public.filament_movements nem em
 // filament_spools.current_net_weight_grams/status acontece nesta Edge
@@ -52,7 +52,7 @@ const FILAMENT_MOVEMENT_TYPES = [
 ] as const;
 
 // Espelha exatamente filament_movements_reason_required_by_type (migration
-// 20260827106000) — replicado aqui só para dar erro estrutural imediato.
+// 20260827110000) — replicado aqui só para dar erro estrutural imediato.
 const REASON_REQUIRED_MOVEMENT_TYPES = new Set<string>([
   "POSITIVE_ADJUSTMENT",
   "NEGATIVE_ADJUSTMENT",

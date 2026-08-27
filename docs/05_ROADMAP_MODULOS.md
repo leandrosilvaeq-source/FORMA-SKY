@@ -593,7 +593,7 @@ precisa referenciar tanto o **tipo** quanto o **rolo físico**, e `stock_movemen
   original; status `LACRADO`/`ABERTO`/`ESGOTADO`/`DESCARTADO`, 4 valores, sem "em uso"; `is_active`
   como eixo independente de `status`) + `create_filament_spool`/`update_filament_spool`
   (bloqueia sair de `DESCARTADO` e reduzir o nominal abaixo do saldo atual)/`delete_filament_spool`.
-- `20260827106000_create_filament_movements_table.sql` — `public.filament_movements` (9
+- `20260827110000_create_filament_movements_table.sql` — `public.filament_movements` (9
   `movement_type`: `INITIAL_BALANCE`/`PURCHASE`/`RETURN`/`POSITIVE_ADJUSTMENT` entradas;
   `MANUAL_CONSUMPTION`/`LOSS`/`SAMPLE_TEST`/`NEGATIVE_ADJUSTMENT` saídas; `WEIGHING_ADJUSTMENT`
   pesagem, só via `register_filament_weighing`) + `register_filament_movement()` (mesmo padrão de
@@ -604,7 +604,7 @@ precisa referenciar tanto o **tipo** quanto o **rolo físico**, e `stock_movemen
   delta zero não grava nada; motivo sempre obrigatório, nenhuma tolerância percentual inventada) +
   `vw_filament_type_summary` (soma do peso disponível dos rolos ativos e utilizáveis por tipo,
   `security_invoker=true`).
-- `20260827109000_create_product_filaments_table.sql` — `public.product_filaments` (peso teórico
+- `20260827113000_create_product_filaments_table.sql` — `public.product_filaments` (peso teórico
   fracionário por tipo/produto, requisito 9) + `set_product_filaments()` (substitui a composição
   atomicamente, mesmo idioma de `set_product_composition`). **Preparação de modelo apenas**:
   nenhuma automação lê esta tabela, nenhum trigger em `orders`/`order_items` foi criado ou
@@ -702,6 +702,86 @@ interface de Filamentos existem agora **só localmente** (nem deployados, nem va
 manualmente) — dois dos três critérios (backend **e** interface **e** validação manual) ainda
 faltam por completo para esta parte do Módulo 3.
 
+## Incremento 4 — aplicação remota e publicação (2026-08-27, rodada seguinte)
+
+Antes de aplicar qualquer coisa, **auditoria pré-deploy** confirmou um problema técnico real:
+duas das quatro migrations desta rodada (`20260827106000_create_filament_movements_table.sql` e
+`20260827109000_create_product_filaments_table.sql`) tinham identificadores de versão
+`YYYYMMDDHHMMSS` **inválidos** — `106000` decodifica como `10:60:00` (minuto 60, fora do intervalo
+0–59) e `109000` como `10:90:00` (minuto 90) — confirmado tanto por decodificação manual quanto
+pela própria saída de `npx supabase migration list --linked`, que exibia o campo `time` cru
+(`"20260827106000"`) em vez de uma data formatada para essas duas entradas, ao contrário das
+outras 33. **Renomeadas antes de qualquer aplicação** (nunca uma migration já aplicada foi
+editada — nenhuma das quatro tinha sido aplicada ainda neste ponto):
+`20260827106000_create_filament_movements_table.sql` →
+`20260827110000_create_filament_movements_table.sql` (11:00:00, válido) e
+`20260827109000_create_product_filaments_table.sql` →
+`20260827113000_create_product_filaments_table.sql` (11:30:00, válido), preservando a ordem
+cronológica relativa às outras duas (100000/103000). Todas as referências cruzadas às duas
+migrations renomeadas foram atualizadas em 9 arquivos (as próprias migrations
+100000/103000, a Edge Function `filament-movements`, `_shared/errors.ts`,
+`supabase/tests/filament_inventory_test.sql`, e 5 arquivos de frontend — `domain.ts`,
+`FilamentMovementForm.tsx`, `FilamentMovementHistory.tsx`, `FilamentWeighingForm.tsx`,
+`filamentMovements.ts`, `filamentTypes.ts`) — confirmado por busca exaustiva sem nenhuma
+ocorrência residual dos identificadores inválidos em todo o repositório. Resto da auditoria
+(ordem de dependência entre as 4 migrations, RLS, políticas, `SECURITY DEFINER`/`search_path`
+seguro, `EXECUTE` restrito a `service_role`, ausência de permissão para `anon`, geração
+concorrente/única de código de rolo, idempotência, bloqueio de saldo negativo, imutabilidade do
+histórico, vínculo tipo+rolo correto, imutabilidade de `filament_type_id` do rolo, bloqueio de
+exclusão com vínculo, cálculo de pesagem, `vw_filament_type_summary`, `ESGOTADO` automático,
+`DESCARTADO` terminal, `product_filaments` sem consumo automático, ausência de gatilho em
+pedidos/produção) **aprovada sem outra ressalva** — ver detalhamento completo em cada migration.
+
+**Dry run** (`npx supabase db push --linked --dry-run`) apresentou exclusivamente as 4 migrations
+de filamentos (agora com os nomes corrigidos), na ordem correta, nenhuma outra alteração.
+**Aplicação real** (`npx supabase db push --linked`) bem-sucedida — as 4 migrations foram
+aplicadas ao projeto remoto `tjhacqreupfqefntjevf`. `npx supabase migration list --linked`
+confirmou **35/35 migrations sincronizadas local/remoto** (31 anteriores + as 4 novas), zero
+pendências.
+
+**Teste de integração SQL executado contra o remoto** (`supabase/tests/filament_inventory_test.sql`,
+dentro de `BEGIN...ROLLBACK`, sem nenhum registro oficial) — resultado da primeira execução: **50
+PASS, 1 FAIL** (Seção 6.1, `vw_filament_type_summary`). Investigação confirmou que o FAIL era um
+**bug da própria asserção do teste**, não do banco: a Seção 6 original reutilizava
+`spool_250_id`/`spool_1000_id` já mutados pelas Seções 4/5 (um ficou `ESGOTADO` — status que
+nunca reverte automaticamente ao saldo voltar a ficar positivo, comportamento documentado e
+correto de `register_filament_movement` — e o outro foi desativado em 5.4), então o resultado real
+(`total=0`/`usable_count=0`) já estava correto; a asserção esperava `total=50`/`usable_count=1`,
+um valor que nunca poderia ocorrer dado o estado real dos fixtures naquele ponto. Corrigida a
+Seção 6 com um tipo e dois rolos dedicados, nunca mutados por seções anteriores (um ativo com
+saldo, um desativado), testando de forma inequívoca tanto a inclusão quanto a exclusão na mesma
+consulta — **nenhuma migration foi alterada**, só o arquivo de teste. Reexecutado: **51 PASS, 0
+FAIL, 0 SKIP**. Consultas somente leitura pós-teste (após o `ROLLBACK` automático do próprio
+script) confirmaram **zero resíduo**: `filament_types`/`filament_spools`/`filament_movements`/
+`product_filaments`/`filament_spool_number_counters` com 0 linhas cada, nenhum produto
+`TESTE%` persistido.
+
+**Publicação individual das 3 novas Edge Functions** (`npx supabase functions deploy
+<nome>`, uma chamada por função, nenhuma outra tocada) — `filament-types`, `filament-spools` e
+`filament-movements` agora **ACTIVE, versão 1**, no projeto `tjhacqreupfqefntjevf`.
+`npx supabase functions list` confirmou as 3 novas ativas e as 9 já existentes preservadas com o
+mesmo `updated_at` de antes (nenhuma redeployada). Smoke tests HTTP reais: `OPTIONS` nas 3 rotas
+→ **204**, cabeçalhos CORS corretos (`Access-Control-Allow-Origin` ecoando a origem permitida,
+`Access-Control-Allow-Methods`/`Access-Control-Allow-Headers` no padrão do projeto); `POST` sem
+`Authorization` nas 3 rotas → **401** (`Header Authorization ausente.`), rejeitado antes de tocar
+o banco — confirmado por consulta pós-teste (0 linhas em todas as 4 tabelas novas). Teste CRUD
+autenticado **não realizado nesta rodada** (sem sessão de usuário de teste disponível neste
+ambiente de terminal) — fica para a validação manual pela interface.
+
+**Frontend**: nenhuma alteração funcional — só os comentários que citavam os dois nomes de
+migration renomeados. Suíte completa reexecutada por precaução: **1332/1332 passando**, lint 0
+erros (mesmos 6 avisos pré-existentes), `tsc -b` sem erros, `vite build` sem erros, `git diff
+--check` limpo.
+
+**Nenhum push, nenhum deploy de frontend, nenhuma alteração em Petlink ou dado oficial, nenhum
+`migration repair`, nenhum `db reset`, nenhuma migration já aplicada foi editada.** Interface de
+`/estoque/filamentos` continua **aguardando validação manual do usuário** — backend e Edge
+Functions agora deployados e testados automaticamente contra produção, mas isso ainda não
+substitui essa validação. Regras operacionais do MVP continuam **sujeitas a revisão**; consumo
+automático de filamento por pedido continua **pendente** (nenhum código). **Percentual macro não
+alterado** — mesmo critério já aplicado: falta a validação manual para este trecho do Módulo 3
+reunir os três critérios (backend + interface + validação manual) juntos.
+
 ---
 
 # 10. Histórico de atualizações deste roadmap
@@ -730,3 +810,4 @@ faltam por completo para esta parte do Módulo 3.
 | 2026-08-27 | **Incrementos 2/3 do Módulo 3 (interface de saldo/entrada/saída/ajuste + histórico) implementados localmente**: nova Edge Function `stock-movements` (não publicada) chamando exclusivamente `register_stock_movement()`; 8 novos padrões estáveis mapeados em `_shared/errors.ts`; `StockMovementForm.tsx`/`StockMovementHistory.tsx`/`StockMovementPanel.tsx` (ação "Movimentar estoque" por linha na listagem, action buttons com ícones, projeção de saldo, motivo obrigatório por tipo, idempotência via `crypto.randomUUID()` estável entre retries do mesmo payload); coluna "Saldo atual" ordenável e badge de situação (Sem estoque/Estoque baixo/Estoque normal) na listagem. As 22 regras aprovadas permanecem **provisórias do MVP** — esta interface existe para o usuário validar as regras na prática, não para confirmá-las. Decisões de UX sem regra documentada explícita, sinalizadas: Devolução permanece disponível em item inativo (backend não verifica `is_active`); painel fecha automaticamente após sucesso. Suíte completa 1167 → 1261 testes, lint 0 erros, build sem erros, `git diff --check` limpo. Testes Deno (`stock-movements/handler.test.ts`, `_shared/errors.test.ts`) escritos, **não executados** — ambiente sem Deno, mesma limitação já registrada. **Edge Function ainda não publicada, nenhuma validação manual do usuário ainda ocorreu, nenhum dado oficial/Petlink cadastrado ou alterado.** Fase 5/6/7 do Módulo 1 e percentual macro do Módulo 3 **não alterados** por esta entrada — Incrementos 4–9 do plano de estoque continuam pendentes (filamentos, rolos, pesagens, reservas, consumo automático, produção, integração com `change_order_status`). Checkpoint local: commit `feat: add inventory movement interface`, sem push, sem migration criada/aplicada, sem Edge Function publicada, sem deploy. |
 | 2026-08-27 | **Edge Function `stock-movements` publicada e ativa** no projeto Supabase remoto `tjhacqreupfqefntjevf` (versão 1) — revisão estática integral antes da publicação não encontrou inconsistências (payload/RPC/CORS/auth/logs todos conferidos); Deno seguiu indisponível nesta sessão, testes Deno já escritos não executados, cobertura complementar via suíte de frontend/API (1261/1261). Publicação exclusiva de `stock-movements` via `npx supabase functions deploy` — as 8 Edge Functions já existentes permaneceram com a mesma versão/`updated_at`. Verificação HTTP real: `OPTIONS` sem autenticação → 204; `POST` sem autenticação (payload fictício, item não real) → 401 (`Header Authorization ausente.`), rejeitado antes de tocar o banco. Consultas pós-teste confirmaram zero movimentação criada e nenhum `current_stock` alterado. Frontend local confirmado apontando para o projeto correto, `.env.local` continua ignorado, nenhuma URL hardcoded — **nenhum deploy de frontend realizado**. **A interface completa (backend + Edge Function publicada) está tecnicamente pronta, mas nenhuma validação manual do usuário ainda ocorreu** — as 22 regras aprovadas continuam provisórias do MVP; Fase 5/6/7 do Módulo 1 e percentual macro do Módulo 3 **não alterados** por esta entrada. Incrementos 4–9 do plano de estoque continuam pendentes. Nenhum dado oficial/Petlink alterado, nenhuma outra migration/Edge Function tocada. Checkpoint local: commit `docs: record stock movement function deployment`, sem push. |
 | 2026-08-27 | **Validação manual do usuário aprovada** para quantidade disponível, entradas, saídas e histórico de Acessórios e Embalagens — 15/15 passos de um checklist manual aprovados; nenhuma alteração em Petlink/dados oficiais durante a validação. Reconciliação confirmou HEAD `41ab62c`, árvore limpa, 31/31 migrations sincronizadas, 5 commits à frente de `feature/customers-orders`. Em seguida, **Incremento 4 do plano de estoque (filamentos — tipos, rolos, movimentações, pesagem) implementado localmente**, cobrindo os requisitos 1-8 do pedido e parcialmente o 9 (preparação de composição, sem ativar consumo automático) — ver detalhamento técnico completo em §9b. Resumo: 4 migrations novas (`filament_types`/`filament_spools`/`filament_movements`+`vw_filament_type_summary`/`product_filaments`), decisão de arquitetura de **não** reaproveitar `stock_movements` (ledger próprio, `filament_movements`, por unidade de medida fracionária e necessidade de referenciar tipo+rolo); 3 Edge Functions novas (`filament-types`/`filament-spools`/`filament-movements`, nenhuma publicada); ~30 novos padrões de erro estáveis; página `/estoque/filamentos` (terceira aba, listagem de tipos com drill-down para rolos, ações de cadastro/ativação/descarte/exclusão/movimentar/pesar/histórico). Materiais fechados em PLA/PETG/TPU (**ABS explicitamente fora do MVP**); status do rolo `LACRADO`/`ABERTO`/`ESGOTADO`/`DESCARTADO` (4 valores, corrigindo a proposta de 5 valores nunca implementada de `03_MODELO_BANCO_DADOS.md` §12); tara como campo do próprio rolo, não mais um cadastro `spool_tares` separado. Teste de integração SQL (`filament_inventory_test.sql`) e 3 `handler.test.ts` Deno escritos, **não executados** (mesma limitação de ambiente de todas as rodadas anteriores — sem Docker/Postgres local/Deon, migrations não aplicadas ao remoto). Suíte completa do frontend 1261 → **1332 testes, todos passando**; lint 0 erros; `tsc -b`/`vite build` sem erros; `git diff --check` limpo; scan de segredos sem ocorrências reais; `.env.local` confirmado ignorado. **Nada desta entrada foi aplicado ao Supabase remoto, publicado ou validado manualmente pelo usuário** — regras operacionais do MVP, versão inicial para validação, sujeitas a revisão. **Módulo 3 continua NÃO concluído** (falta validação manual de Filamentos e todos os incrementos 5+ — consumo automático, reserva, inventário periódico); **integração Pedidos↔Estoque continua NÃO concluída**. Percentual macro **não alterado**. Checkpoint local: commit `feat: add filament roll inventory`, sem push. |
+| 2026-08-27 | Auditoria pré-deploy do backend de filamentos encontrou um problema técnico real antes de qualquer aplicação: 2 das 4 migrations (`...106000`/`...109000`) tinham identificadores `YYYYMMDDHHMMSS` inválidos (minuto 60 e minuto 90, fora de 0–59) — confirmado por decodificação manual e pela própria saída de `migration list` (campo `time` não formatado para essas duas). Renomeadas para `...110000`/`...113000` (válidas, ordem cronológica preservada) antes de qualquer aplicação remota — nenhuma migration já aplicada foi editada; todas as referências cruzadas atualizadas em 9 arquivos. Resto da auditoria (RLS, políticas, `SECURITY DEFINER`/`search_path`, `EXECUTE` restrito, ausência de permissão a `anon`, idempotência, saldo negativo, imutabilidade, vínculos, `vw_filament_type_summary`, `ESGOTADO`/`DESCARTADO`, `product_filaments` sem consumo automático) aprovada sem ressalva. **As 4 migrations aplicadas ao projeto Supabase remoto `tjhacqreupfqefntjevf`** via `npx supabase db push --linked` (dry run prévio mostrou exclusivamente as 4 migrations) — 35/35 migrations agora sincronizadas local/remoto. Teste de integração SQL executado contra o remoto dentro de `BEGIN...ROLLBACK`: primeira execução **50 PASS/1 FAIL** — o FAIL era um bug da própria asserção do teste (Seção 6.1 reutilizava rolos já mutados por seções anteriores, um `ESGOTADO` que nunca reverte automaticamente ao saldo voltar a ficar positivo, comportamento correto e documentado — não um bug de banco); corrigida a asserção com fixtures dedicados, reexecutado: **51 PASS, 0 FAIL, 0 SKIP**. Consultas pós-teste confirmaram **zero resíduo** (todas as 4 tabelas novas com 0 linhas, nenhum produto `TESTE%`). **As 3 novas Edge Functions publicadas individualmente** (`filament-types`/`filament-spools`/`filament-movements`, todas ACTIVE versão 1) — as 9 já existentes preservaram `updated_at`, nenhuma redeployada. Smoke tests HTTP reais: `OPTIONS` → 204 com CORS correto; `POST` sem autenticação → 401 (`Header Authorization ausente.`) nas 3 rotas, confirmado sem tocar o banco. Teste CRUD autenticado não realizado (sem sessão de teste disponível neste ambiente) — fica para a validação manual pela interface. Frontend: nenhuma alteração funcional (só comentários citando os nomes de migration renomeados); suíte completa reexecutada por precaução, **1332/1332 passando**, lint 0 erros, `tsc -b`/`vite build` sem erros, `git diff --check` limpo. **Nenhum push, nenhum deploy de frontend, nenhuma alteração em Petlink/dado oficial, nenhum `migration repair`, nenhum `db reset`, nenhuma migration já aplicada foi editada.** Interface de Filamentos continua aguardando validação manual do usuário; regras do MVP continuam sujeitas a revisão; consumo automático por pedido continua pendente. Percentual macro **não alterado** — falta a validação manual para reunir os três critérios. Checkpoint local: commit `fix: harden filament inventory operations`, sem push. |
