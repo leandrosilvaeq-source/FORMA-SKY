@@ -410,8 +410,10 @@ Estoque mínimo inicial:
 - Preto e branco: **500 g**;
 - Demais cores: **300 g**.
 
-**Regras aprovadas em 2026-08-27** (contexto para a continuação do Módulo 3 —
-implementação de filamentos ainda **não** iniciada, ver `05_ROADMAP_MODULOS.md`):
+**Regras operacionais do MVP — versão inicial para validação, sujeitas a revisão após o
+teste prático do usuário.** Aprovadas em 2026-08-27, contexto para a continuação do
+Módulo 3 — implementação de filamentos ainda **não** iniciada (nenhum código,
+Incremento 1 cobriu só Acessórios/Embalagens), ver `05_ROADMAP_MODULOS.md` §9b:
 
 - Um **tipo de filamento** é definido pela combinação **material + fabricante + linha +
   cor** — não existe "tipo" sem essas quatro dimensões.
@@ -446,8 +448,11 @@ Controle por unidade, permitindo variantes.
 
 Exemplos: ímã, NFC, chaveiro, cola e LED.
 
-**Unidade de controle (aprovado em 2026-08-27):** acessórios são controlados em
-**unidades inteiras** — nenhuma fração é aceita em nenhuma movimentação de estoque.
+**Unidade de controle (regra operacional do MVP, aprovada em 2026-08-27 — ver
+disclaimer completo em §20):** acessórios são controlados em **unidades inteiras** —
+nenhuma fração é aceita em nenhuma movimentação de estoque. Já implementada no
+Incremento 1 (`register_stock_movement()` rejeita quantidade fracionada) — código
+revisado, ainda não executado contra um banco real (ver `05_ROADMAP_MODULOS.md` §9b).
 
 ---
 
@@ -457,8 +462,9 @@ Exemplos iniciais: plástico PP, plástico M, caixa M, Ziplock PP e sacola Kraft
 
 Permitir item, material, tamanho e variante.
 
-**Unidade de controle (aprovado em 2026-08-27):** mesma regra de Acessórios — controle
-em **unidades inteiras**, sem fração.
+**Unidade de controle (regra operacional do MVP, aprovada em 2026-08-27 — ver
+disclaimer completo em §20):** mesma regra de Acessórios — controle em **unidades
+inteiras**, sem fração.
 
 ---
 
@@ -468,9 +474,22 @@ Preservar histórico de compra, consumo, reserva, perda, ajuste e correção.
 
 Filamento deverá ser reservado quando a produção entrar **Em fila de produção**.
 
-**Regras operacionais aprovadas pelo usuário em 2026-08-27** (Módulo 3, continuação —
-escopo desta rodada de implementação: só Acessórios/Embalagens, ver
-`03_MODELO_BANCO_DADOS.md` §15.1 e `05_ROADMAP_MODULOS.md` para o estado técnico atual):
+**Regras operacionais do MVP — versão inicial para validação, sujeitas a revisão após o
+teste prático do usuário.** Aprovadas em 2026-08-27 (Módulo 3, continuação). Esta
+aprovação **autoriza construir o MVP** com as regras abaixo — **não as torna
+definitivas**: tipos de movimentação, momento de reserva/consumo, cancelamento,
+pesagem, escolha de rolo e tratamento de perdas continuam sujeitos a revisão prática
+depois que o usuário operar o sistema de verdade. **Nenhuma regra desta lista deve ser
+lida como validada** — só como o ponto de partida aprovado para implementação.
+Correções futuras, quando necessárias, serão feitas por **novas movimentações e
+migrations** — o ledger e o histórico já gravados **nunca são reescritos**. O Incremento
+1 (único implementado até agora, ver `05_ROADMAP_MODULOS.md` §9b) cobre **somente o
+núcleo seguro de saldo e movimentações manuais** de Acessórios/Embalagens; reserva,
+consumo, cancelamento, pesagem, escolha de rolo e perdas por reimpressão descritos
+abaixo **ainda não têm nenhuma linha de código** — são só a intenção aprovada. O Módulo
+3 só avança para validação operacional real quando existir **interface utilizável**
+(Incremento 2 em diante) — não antes. Ver `03_MODELO_BANCO_DADOS.md` §15.1 e
+`05_ROADMAP_MODULOS.md` para o estado técnico atual:
 
 - **Estoque inicial**: registrado pela interface como movimentação "Saldo inicial",
   preservando histórico (nunca um `UPDATE` direto de saldo).

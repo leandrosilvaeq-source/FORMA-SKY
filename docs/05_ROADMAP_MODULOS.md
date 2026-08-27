@@ -341,6 +341,19 @@ incrementos, dos quais só o primeiro foi implementado nesta rodada.
 
 ## Regras operacionais aprovadas (22 regras, 2026-08-27)
 
+**Regras operacionais do MVP — versão inicial para validação, sujeitas a revisão após o teste
+prático do usuário.** A aprovação do usuário em 2026-08-27 autoriza **construir o MVP** com estas
+22 regras — **não as torna definitivas**. Tipos de movimentação poderão ser ampliados ou
+revisados; reserva, consumo, cancelamento, pesagem, escolha de rolo e perdas continuam **só
+intenção aprovada**, aguardando validação prática antes de qualquer implementação. O Incremento 1
+(único implementado até agora) cobre **somente o núcleo seguro de saldo e movimentações manuais**
+de Acessórios/Embalagens — nenhuma das regras futuras abaixo tem código ainda, e nenhuma delas
+deve ser lida como validada. O ledger e o histórico de `stock_movements` são imutáveis desde já e
+permanecem imutáveis mesmo quando essas regras forem revisadas: correções futuras acontecem por
+**novas movimentações e novas migrations**, nunca reescrevendo uma linha já gravada. O Módulo 3 só
+avançará para validação operacional real quando existir **interface utilizável** (Incremento 2 em
+diante, ainda não iniciado).
+
 Documentadas com detalhe funcional em `01_ESPECIFICACAO_FUNCIONAL.md` §16/§18/§19/§20 e com
 detalhe de schema em `03_MODELO_BANCO_DADOS.md` §15.1. Resumo: acessórios/embalagens controlados
 em unidades inteiras; estoque inicial registrado como movimentação "Saldo inicial" (nunca

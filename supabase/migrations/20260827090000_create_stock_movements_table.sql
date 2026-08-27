@@ -222,12 +222,21 @@ create policy "Active users can view stock movements"
 -- acima, nunca antes: duas chamadas concorrentes para o MESMO item com a
 -- MESMA chave ficam automaticamente serializadas pelo FOR UPDATE, e a
 -- segunda só enxerga a movimentação já gravada pela primeira depois do
--- commit dela — sem nenhuma janela de corrida. O índice único parcial
--- (ux_stock_movements_idempotency_key) permanece como última linha de
--- defesa contra o caso residual de duas chamadas concorrentes reusando a
--- mesma chave para itens DIFERENTES (uso indevido do chamador, não um
--- cenário legítimo de retry) — nesse caso a segunda simplesmente falha com
--- violação de unicidade (23505), nunca grava um estado inconsistente.
+-- commit dela — sem nenhuma janela de corrida. O caso residual é duas
+-- chamadas concorrentes reusando a mesma chave para itens DIFERENTES —
+-- nesse caso o FOR UPDATE acima trava linhas diferentes e NÃO serializa as
+-- duas chamadas entre si, então ambas podem passar pela checagem de
+-- idempotência (nenhuma vê a outra ainda) e chegar ao INSERT ao mesmo
+-- tempo; o índice único parcial (ux_stock_movements_idempotency_key)
+-- garante que só uma das duas commita, mas SEM tratamento adicional a
+-- outra veria só um unique_violation (23505) cru, sem a mensagem estável
+-- IDEMPOTENCY_KEY_CONFLICT: — por isso o INSERT abaixo está dentro de um
+-- bloco BEGIN/EXCEPTION que captura especificamente essa violação (via
+-- CONSTRAINT_NAME, não só o SQLSTATE, para nunca confundir com uma futura
+-- unique constraint diferente) e refaz a MESMA comparação de payload já
+-- usada acima — devolvendo a movimentação existente se o payload bater, ou
+-- levantando IDEMPOTENCY_KEY_CONFLICT: se não bater. Nenhum caminho desta
+-- function termina só com um unique_violation sem mensagem estável.
 create or replace function public.register_stock_movement(
   p_item_type text,
   p_item_id uuid,
@@ -253,6 +262,8 @@ declare
   v_existing public.stock_movements;
   v_row public.stock_movements;
   v_normalized_reason text;
+  v_normalized_reference_type text;
+  v_conflict_constraint text;
 begin
   perform public.assert_active_user(p_changed_by);
 
@@ -285,6 +296,11 @@ begin
   v_quantity := p_quantity::integer;
 
   v_normalized_reason := nullif(btrim(coalesce(p_reason, '')), '');
+  -- Mesma normalização de reason, aplicada a reference_type por
+  -- consistência: espaço em branco e NULL devem ser tratados como o mesmo
+  -- "sem referência" tanto ao gravar quanto ao comparar payload de
+  -- idempotência (ver checagem abaixo e o bloco de captura do INSERT).
+  v_normalized_reference_type := nullif(btrim(coalesce(p_reference_type, '')), '');
 
   if p_movement_type in ('POSITIVE_ADJUSTMENT', 'NEGATIVE_ADJUSTMENT', 'LOSS', 'SAMPLE_DONATION', 'INTERNAL_USE')
      and v_normalized_reason is null then
@@ -324,7 +340,7 @@ begin
          and v_existing.movement_type = p_movement_type
          and v_existing.quantity_delta = v_quantity_delta
          and coalesce(v_existing.reason, '') = coalesce(v_normalized_reason, '')
-         and coalesce(v_existing.reference_type, '') = coalesce(p_reference_type, '')
+         and coalesce(v_existing.reference_type, '') = coalesce(v_normalized_reference_type, '')
          and v_existing.reference_id is not distinct from p_reference_id
       then
         return v_existing;
@@ -355,15 +371,51 @@ begin
       p_movement_type, p_item_type, p_item_id, v_balance_before, p_quantity;
   end if;
 
-  insert into public.stock_movements (
-    item_type, item_id, movement_type, quantity_delta, balance_before, balance_after,
-    reason, reference_type, reference_id, idempotency_key, occurred_at, created_by
-  ) values (
-    p_item_type, p_item_id, p_movement_type, v_quantity_delta, v_balance_before, v_balance_after,
-    v_normalized_reason, p_reference_type, p_reference_id, p_idempotency_key,
-    coalesce(p_occurred_at, now()), p_changed_by
-  )
-  returning * into v_row;
+  -- Bloco aninhado só em volta do INSERT: captura especificamente
+  -- unique_violation na constraint de idempotency_key (caso residual de
+  -- duas chamadas concorrentes com a MESMA chave para itens DIFERENTES —
+  -- ver nota de concorrência acima). Qualquer outra unique_violation
+  -- (nenhuma esperada aqui, dado que todas as demais colunas já foram
+  -- validadas antes deste ponto) é relançada sem alteração.
+  begin
+    insert into public.stock_movements (
+      item_type, item_id, movement_type, quantity_delta, balance_before, balance_after,
+      reason, reference_type, reference_id, idempotency_key, occurred_at, created_by
+    ) values (
+      p_item_type, p_item_id, p_movement_type, v_quantity_delta, v_balance_before, v_balance_after,
+      v_normalized_reason, v_normalized_reference_type, p_reference_id, p_idempotency_key,
+      coalesce(p_occurred_at, now()), p_changed_by
+    )
+    returning * into v_row;
+  exception when unique_violation then
+    get stacked diagnostics v_conflict_constraint = constraint_name;
+
+    if v_conflict_constraint <> 'ux_stock_movements_idempotency_key' or p_idempotency_key is null then
+      raise;
+    end if;
+
+    select * into v_existing from public.stock_movements where idempotency_key = p_idempotency_key;
+    if not found then
+      -- Não deveria ser possível chegar aqui (o unique_violation só ocorre
+      -- se uma linha com esta chave já existe), mas relançar em vez de
+      -- silenciar é o comportamento seguro caso essa premissa mude no
+      -- futuro.
+      raise;
+    end if;
+
+    if v_existing.item_type = p_item_type
+       and v_existing.item_id = p_item_id
+       and v_existing.movement_type = p_movement_type
+       and v_existing.quantity_delta = v_quantity_delta
+       and coalesce(v_existing.reason, '') = coalesce(v_normalized_reason, '')
+       and coalesce(v_existing.reference_type, '') = coalesce(v_normalized_reference_type, '')
+       and v_existing.reference_id is not distinct from p_reference_id
+    then
+      return v_existing;
+    else
+      raise exception 'IDEMPOTENCY_KEY_CONFLICT: idempotency_key % já foi usada com um payload diferente', p_idempotency_key;
+    end if;
+  end;
 
   if p_item_type = 'ACCESSORY' then
     update public.accessories set current_stock = v_balance_after where id = p_item_id;
@@ -376,7 +428,7 @@ end;
 $$;
 
 comment on function public.register_stock_movement(text, uuid, text, numeric, uuid, text, timestamptz, text, uuid, text) is
-  'Única função que escreve em stock_movements e em accessories.current_stock/packaging.current_stock, na mesma transação (FOR UPDATE no item, calcula balance_before/after, insere a movimentação, atualiza o saldo materializado). p_quantity é sempre positivo — o sinal é resolvido a partir de movement_type. Bloqueia saldo negativo, valida motivo obrigatório por tipo, valida regras de INITIAL_BALANCE (primeira movimentação, saldo zero, não repetível) e é idempotente quando p_idempotency_key é fornecida.';
+  'Única função que escreve em stock_movements e em accessories.current_stock/packaging.current_stock, na mesma transação (FOR UPDATE no item, calcula balance_before/after, insere a movimentação, atualiza o saldo materializado). p_quantity é sempre positivo — o sinal é resolvido a partir de movement_type. Bloqueia saldo negativo, valida motivo obrigatório por tipo, valida regras de INITIAL_BALANCE (primeira movimentação, saldo zero, não repetível) e é idempotente quando p_idempotency_key é fornecida — inclusive sob concorrência real entre chamadas para itens diferentes com a mesma chave (captura unique_violation e nunca deixa escapar um erro sem o marcador estável IDEMPOTENCY_KEY_CONFLICT:).';
 
 revoke execute on function public.register_stock_movement(text, uuid, text, numeric, uuid, text, timestamptz, text, uuid, text)
   from public, anon, authenticated;

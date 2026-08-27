@@ -35,6 +35,25 @@
 -- pgbench) fica registrada como próximo passo recomendado antes/durante a
 -- aplicação remota desta migration.
 --
+-- Mesma limitação se aplica à Seção 5.3 (idempotency_key reusada por dois
+-- itens DIFERENTES): dentro de uma única transação, a checagem ANTECIPADA
+-- de idempotência (antes do INSERT) já enxerga a movimentação da primeira
+-- chamada assim que ela é gravada (mesmo sem commit — leitura própria da
+-- mesma transação), então a Seção 5.3 exercita só esse caminho antecipado.
+-- O bloco BEGIN/EXCEPTION WHEN unique_violation adicionado à RPC
+-- especificamente para a corrida real entre DUAS TRANSAÇÕES concorrentes
+-- (ver comentário da function na migration) só é alcançável com duas
+-- conexões de fato — não é exercitado por nenhum teste deste arquivo.
+--
+-- PRÉ-REQUISITO OBRIGATÓRIO: este script pressupõe que as duas migrations
+-- desta rodada (20260827090000_create_stock_movements_table.sql e
+-- 20260827093000_update_accessory_packaging_delete_guards.sql) JÁ FORAM
+-- APLICADAS ao banco de destino — ele consulta public.stock_movements e
+-- chama public.register_stock_movement() diretamente, e falha com "relation
+-- does not exist"/"function does not exist" se executado antes da aplicação.
+-- Não execute este arquivo contra um banco onde as migrations ainda não
+-- rodaram.
+--
 -- Nenhum destes testes foi executado nesta sessão: o ambiente não tem
 -- Docker/Postgres local nem a migration aplicada no remoto ainda. Este
 -- arquivo foi revisado linha a linha contra a migration, mas sua execução
@@ -775,6 +794,46 @@ begin
   exception when others then
     insert into zz_test_results(section, test_name, status, details)
       values ('5', '5.2 idempotency_key repetida com payload diferente', 'FAIL', 'erro no bloco: ' || sqlerrm);
+  end;
+end $$;
+
+-- 5.3 — mesma idempotency_key de 5.1, agora para um item DIFERENTE
+-- (accessory_id em vez de packaging_id). Dentro desta transação única, isso
+-- exercita a checagem ANTECIPADA de idempotência (antes do INSERT) — ver
+-- LIMITAÇÃO CONHECIDA no cabeçalho do arquivo: o bloco BEGIN/EXCEPTION WHEN
+-- unique_violation da RPC (para a corrida real entre duas conexões) não é
+-- alcançável aqui. Ainda assim, confirma que a comparação de payload trata
+-- item_type/item_id diferentes como "payload diferente", nunca como sucesso
+-- silencioso.
+do $$
+declare
+  v_user_id uuid;
+  v_accessory_id uuid;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_id';
+    if v_user_id is null or v_accessory_id is null then raise exception 'fixture ausente'; end if;
+
+    begin
+      perform public.register_stock_movement(
+        'ACCESSORY', v_accessory_id, 'PURCHASE', 30, v_user_id,
+        'compra de teste 5.3', now(), null, null, 'idem-key-teste-5.1'
+      );
+      insert into zz_test_results(section, test_name, status, details)
+        values ('5', '5.3 [caminho antecipado, não a corrida real — ver limitação no cabeçalho] idempotency_key de 5.1 reusada para item DIFERENTE (accessory em vez de packaging) é rejeitada', 'FAIL', 'nenhuma exceção foi lançada');
+    exception when others then
+      if sqlerrm like 'IDEMPOTENCY_KEY_CONFLICT:%' then
+        insert into zz_test_results(section, test_name, status, details)
+          values ('5', '5.3 [caminho antecipado] idempotency_key reusada para item diferente é rejeitada', 'PASS', sqlerrm);
+      else
+        insert into zz_test_results(section, test_name, status, details)
+          values ('5', '5.3 [caminho antecipado] idempotency_key reusada para item diferente é rejeitada', 'FAIL', 'erro inesperado: ' || sqlerrm);
+      end if;
+    end;
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('5', '5.3 idempotency_key reusada para item diferente', 'FAIL', 'erro no bloco: ' || sqlerrm);
   end;
 end $$;
 

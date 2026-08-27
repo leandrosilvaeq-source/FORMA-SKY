@@ -500,13 +500,20 @@ estoque disponível = estoque físico - estoque reservado
 ```
 
 **Status de implementação (atualizado em 2026-08-27 — ver `05_ROADMAP_MODULOS.md` para
-o estado corrente e `03_MODELO_BANCO_DADOS.md` §15.1 para o schema real):** Incremento 1
+o estado corrente e `03_MODELO_BANCO_DADOS.md` §15.1 para o schema real):** as regras
+operacionais por trás deste módulo são **regras do MVP — versão inicial para
+validação, sujeitas a revisão após o teste prático do usuário** (disclaimer completo em
+`01_ESPECIFICACAO_FUNCIONAL.md` §20) — a implementação abaixo cobre só o núcleo seguro
+aprovado até agora, nada além disso deve ser lido como definitivo. Incremento 1
 (saldo + motor de movimentações para Acessórios/Embalagens) implementado **localmente**
 nesta rodada — `public.stock_movements` (ledger imutável) e
 `public.register_stock_movement()` (única escritora de saldo, com lock/atomicidade,
 bloqueio de saldo negativo e idempotência). Cobre entradas, saídas, ajustes, saldo e
-histórico para acessórios/embalagens; **reservas, estoque mínimo automatizado e
-filamentos continuam não implementados**. A migration **não foi aplicada ao Supabase
+histórico para acessórios/embalagens; **reservas, consumo, cancelamento, pesagem,
+escolha de rolo, perdas por reimpressão, estoque mínimo automatizado e filamentos
+continuam não implementados e aguardam validação prática antes de virarem código** — só
+tipos de movimentação e as regras de saldo estão codificados; nenhum deles é definitivo.
+A migration **não foi aplicada ao Supabase
 remoto** nesta rodada — aplicar exige autorização explícita separada.
 
 ---

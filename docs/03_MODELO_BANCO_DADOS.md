@@ -925,6 +925,17 @@ esta funcionalidade.
 remoto)**: o schema abaixo é o **real** (implementado), e diverge deliberadamente do
 esboço original desta seção (preservado em itálico ao final, para referência histórica).
 
+As regras de negócio que motivam este schema são **regras operacionais do MVP — versão
+inicial para validação, sujeitas a revisão após o teste prático do usuário** (disclaimer
+completo em `01_ESPECIFICACAO_FUNCIONAL.md` §20). O Incremento 1 implementa **somente o
+núcleo seguro de saldo e movimentações manuais** — os 8 `movement_type` abaixo, saldo
+nunca negativo, motivo obrigatório por tipo. Reserva, consumo, cancelamento, pesagem,
+escolha de rolo e perdas por reimpressão **não têm nenhuma linha de código ainda** —
+continuam só a intenção aprovada, aguardando validação prática antes de virarem
+implementação. O ledger definido aqui é imutável desde já e **permanece imutável mesmo
+quando essas regras futuras forem revisadas** — qualquer correção futura acontece via
+novas movimentações e novas migrations, nunca reescrevendo uma linha já gravada.
+
 Registro imutável de movimentações — nunca editado, nunca excluído fisicamente
 (`UPDATE`/`DELETE` não são concedidos a nenhuma role de sessão; a única escrita é via
 `register_stock_movement()`).
