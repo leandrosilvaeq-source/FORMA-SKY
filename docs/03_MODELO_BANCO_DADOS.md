@@ -755,8 +755,22 @@ Representa cada rolo físico.
 
 **Implementado (Bloco 1, Migration 18)**: cadastro mestre completo — todos os campos abaixo
 existem no banco, com `created_at`/`updated_at` adicionais (não listados nas versões anteriores
-deste documento). Controle de estoque real (movimentação/reserva/consumo/baixa,
-`stock_movements`/`inventory_items`) **não** está implementado — ver ressalva em cada tabela.
+deste documento).
+
+**Atualização (2026-08-27) — corrige texto desatualizado das seções abaixo**: a interface completa
+de cadastro mestre (criar/editar/ativar-desativar/excluir com proteção) está **implementada,
+publicada no Supabase remoto e validada manualmente pelo usuário** desde 2026-08-24 (ver
+`05_ROADMAP_MODULOS.md` §9/§10) — as menções abaixo a "implementação ainda não iniciada"
+referem-se ao estado em 2026-08-22 (momento em que o planejamento foi aprovado) e estão
+desatualizadas. Cadastro **oficial** (incluindo a composição da Petlink) continua bloqueado até
+autorização explícita separada — isso não mudou.
+
+**Módulo 3, Incremento 1 (2026-08-27, implementado localmente nesta rodada — ver §15.1)**: o
+motor de saldo/movimentação de estoque (`stock_movements`/`register_stock_movement()`) agora
+existe para estas duas tabelas — `current_stock` deixa de ser uma coluna sem automação e passa a
+ser o saldo materializado, atualizado exclusivamente por essa função. A migration correspondente
+**ainda não foi aplicada ao Supabase remoto** — só `unit_cost`/`minimum_stock`/`material`
+continuam sem nenhuma automação (fora do escopo do Incremento 1).
 
 ## 13.1 `accessories`
 
@@ -769,9 +783,9 @@ deste documento). Controle de estoque real (movimentação/reserva/consumo/baixa
 - `variant`
 - `unit_cost` — opcional
 - `minimum_stock` — opcional
-- `current_stock` — `not null default 0`; sem nenhuma automação (nenhuma function/trigger
-  incrementa/decrementa); `UPDATE` direto desta coluna não é concedido a `authenticated` — fica
-  reservada para a função controlada que o Módulo 3 criará
+- `current_stock` — `not null default 0`; saldo materializado, atualizado exclusivamente por
+  `register_stock_movement()` desde o Módulo 3 Incremento 1 (2026-08-27, implementado localmente
+  — ver §15.1); `UPDATE` direto desta coluna não é concedido a `authenticated`
 - `is_active`
 - `created_at`
 - `updated_at`
@@ -786,10 +800,9 @@ Exemplos:
 - LED;
 - cola.
 
-Referenciado pela composição padrão de produtos (§9.3). Cadastro/edição pela interface fica para
-uma subetapa futura — nesta etapa a leitura via frontend é só listagem (para montar a
-composição); fixtures de teste são criadas via SQL controlado. **Planejamento da interface de
-cadastro mestre aprovado em 2026-08-22, implementação ainda não iniciada — ver §13.3.**
+Referenciado pela composição padrão de produtos (§9.3). Interface de cadastro mestre completa
+(criar/editar/ativar-desativar/excluir com proteção) **implementada, publicada e validada** desde
+2026-08-24 — ver §13.3.
 
 ---
 
@@ -817,17 +830,19 @@ Exemplos:
 - Ziplock PP;
 - sacola Kraft.
 
-Mesma ressalva de §13.1: planejamento da interface de cadastro mestre aprovado em 2026-08-22,
-implementação ainda não iniciada — ver §13.3.
+Mesma atualização de §13.1: interface de cadastro mestre completa **implementada, publicada e
+validada** desde 2026-08-24 — ver §13.3.
 
 ---
 
 ## 13.3 Interface de cadastro mestre — decisões aprovadas (planejamento, 2026-08-22)
 
 Decisão de escopo do Módulo 3 (Estoque e Inventário) para a interface de cadastro mestre de
-`accessories`/`packaging`, aprovada em 2026-08-22. **Ainda não implementada** — plano dividido em
-8 incrementos (Incremento 1 = esta documentação; ver `05_ROADMAP_MODULOS.md` §9). Nenhum código,
-migration ou Edge Function foi criado por esta entrada.
+`accessories`/`packaging`, aprovada em 2026-08-22. **Implementada, publicada no Supabase remoto e
+validada manualmente pelo usuário desde 2026-08-24** (plano de 8 incrementos concluído — ver
+`05_ROADMAP_MODULOS.md` §9/§10). As decisões abaixo permanecem vigentes; onde o texto original
+dizia "ainda não implementada" isso se referia ao momento do planejamento (2026-08-22), corrigido
+nesta entrada.
 
 ### Campos expostos na interface
 
@@ -869,17 +884,20 @@ inventada nesta etapa**.
 
 ### Exclusão
 
-A interface terá um botão "Excluir" com confirmação explícita. Exclusão física só é permitida
-para um item nunca utilizado; um item vinculado a `product_accessories`/`product_packaging` (§9.3)
-não pode ser excluído, nem um item com movimentação/histórico de estoque (quando
-`stock_movements`/`stock_reservations`, §15, existirem). Um item bloqueado deve ser desativado
-(`is_active = false`) em vez de excluído. Nenhuma exclusão em cascata é permitida. A exclusão só
-pode ser executada por um contrato protegido no backend (function `security definer` + Edge
-Function, mesmo padrão de `set_product_composition`, §9.3) — o frontend nunca recebe `GRANT
-DELETE` direto sobre `accessories`/`packaging` (confirmado por leitura: nenhuma tabela do projeto
-concede DELETE a `authenticated` hoje). **Esta exclusão protegida exigirá uma migration específica
-(nova function), ainda não criada nesta etapa.** Dados oficiais (incluindo a Petlink) nunca são
-usados como massa de teste para esta funcionalidade.
+A interface tem um botão "Excluir" com confirmação explícita. Exclusão física só é permitida para
+um item nunca utilizado — implementada e publicada desde 2026-08-24 via `delete_accessory()`/
+`delete_packaging()` (`security definer`, Edge Functions `accessories`/`packaging`, mesmo padrão de
+`set_product_composition`, §9.3): um item vinculado a `product_accessories`/`product_packaging`
+(§9.3) não pode ser excluído (bloqueio `ACCESSORY_IN_USE:`/`PACKAGING_IN_USE:`). **Atualização
+(2026-08-27, Módulo 3 Incremento 1, implementada localmente — ver §15.1)**: as duas funções agora
+também bloqueiam a exclusão quando o item tem qualquer movimentação em `stock_movements`
+(`ACCESSORY_HAS_STOCK_HISTORY:`/`PACKAGING_HAS_STOCK_HISTORY:`) — cumprindo o que esta seção já
+prometia desde a versão anterior deste documento. Um item bloqueado por qualquer um dos dois
+motivos deve ser desativado (`is_active = false`) em vez de excluído. Nenhuma exclusão em cascata
+é permitida em nenhum dos dois casos. O frontend nunca recebe `GRANT DELETE` direto sobre
+`accessories`/`packaging` (confirmado por leitura: nenhuma tabela do projeto concede DELETE a
+`authenticated`). Dados oficiais (incluindo a Petlink) nunca são usados como massa de teste para
+esta funcionalidade.
 
 ---
 
@@ -902,37 +920,87 @@ usados como massa de teste para esta funcionalidade.
 
 ## 15.1 `stock_movements`
 
-Registro imutável de movimentações.
+**Implementado localmente em 2026-08-27 (Módulo 3, Incremento 1 — ver
+`05_ROADMAP_MODULOS.md` para o estado corrente; migration ainda NÃO aplicada ao Supabase
+remoto)**: o schema abaixo é o **real** (implementado), e diverge deliberadamente do
+esboço original desta seção (preservado em itálico ao final, para referência histórica).
 
-### Campos
+Registro imutável de movimentações — nunca editado, nunca excluído fisicamente
+(`UPDATE`/`DELETE` não são concedidos a nenhuma role de sessão; a única escrita é via
+`register_stock_movement()`).
+
+### Campos (reais, implementados)
 
 - `id`
-- `inventory_type`
-- `filament_spool_id` opcional
-- `accessory_id` opcional
-- `packaging_id` opcional
-- `movement_type`
-- `quantity`
-- `unit`
-- `reference_type`
-- `reference_id`
-- `notes`
+- `item_type` — `ACCESSORY` ou `PACKAGING` nesta etapa; extensível a `FILAMENT_SPOOL`
+  no futuro (Incremento 5) só ampliando o `CHECK`, nunca remodelagem completa
+- `item_id` — **sem foreign key** (campo polimórfico: aponta para `accessories.id` ou
+  `packaging.id` conforme `item_type`, uma FK condicional não é representável);
+  `register_stock_movement()` valida a existência real do item antes de gravar, via
+  `SELECT ... FOR UPDATE`
+- `movement_type` — ver "Tipos" abaixo
+- `quantity_delta` — inteiro, nunca zero; sinal já resolvido (entradas positivas, saídas
+  negativas) — o chamador informa sempre uma quantidade positiva, o `movement_type`
+  decide a direção
+- `balance_before` / `balance_after` — saldo materializado antes/depois desta
+  movimentação, nunca negativo
+- `reason` — obrigatório para `POSITIVE_ADJUSTMENT`/`NEGATIVE_ADJUSTMENT`/`LOSS`/
+  `SAMPLE_DONATION`/`INTERNAL_USE`; opcional para `PURCHASE`/`RETURN`/`INITIAL_BALANCE`
+- `reference_type` / `reference_id` — vínculo polimórfico futuro (pedido, inventário,
+  compra, produção); sempre `NULL` nesta etapa (só movimentações manuais existem)
+- `idempotency_key` — opcional; quando fornecida, é única e protege contra dupla
+  gravação (reuso com o mesmo payload é idempotente; reuso com payload diferente é
+  rejeitado)
+- `occurred_at` — data/hora de negócio do evento (pode ser retroativa)
+- `created_by` — referência a `users`, `ON DELETE RESTRICT`
 - `created_at`
-- `created_by`
 
-### Tipos
+Nota de divergência do esboço original: em vez de três colunas de FK opcionais
+(`filament_spool_id`/`accessory_id`/`packaging_id`, uma preenchida por vez) e uma coluna
+`unit` separada, a implementação real usa um único par polimórfico `item_type`/`item_id`
+(validado pela RPC, não por FK) — decisão tomada para que adicionar `FILAMENT_SPOOL`
+no futuro exija só ampliar um `CHECK`, nunca uma migração destrutiva de coluna. `unit`
+não existe ainda porque `ACCESSORY`/`PACKAGING` são sempre unidades inteiras nesta
+etapa — quando `FILAMENT_SPOOL` (gramas, fracionável) for adicionado, esta decisão
+precisará ser revisitada (ou uma coluna `unit`, ou `quantity_delta` como `numeric` só
+para esse `item_type`) — registrado aqui como ponto de atenção para o Incremento 5, não
+resolvido agora. `notes` foi renomeado para `reason` (mais preciso: nem toda
+movimentação tem uma "nota" livre, mas as que exigem justificativa exigem um "motivo").
 
-- entrada;
-- consumo;
-- reserva;
-- liberação de reserva;
-- perda;
-- ajuste;
-- correção.
+### Tipos implementados nesta etapa (`movement_type`)
+
+Entradas: `INITIAL_BALANCE`, `PURCHASE`, `RETURN`, `POSITIVE_ADJUSTMENT`.
+Saídas: `LOSS`, `SAMPLE_DONATION`, `INTERNAL_USE`, `NEGATIVE_ADJUSTMENT`.
+
+`RESERVATION`/`RELEASE`/`CONSUMPTION` (reserva/liberação/consumo automático pelo
+pedido) e `WEIGHING` (pesagem) **não são aceitos ainda** por `register_stock_movement()`
+— ficam para os Incrementos 5/7/8, quando o `CHECK` de `movement_type` for ampliado.
+
+### Função `register_stock_movement()`
+
+Única função que escreve em `stock_movements` e em
+`accessories.current_stock`/`packaging.current_stock`, na mesma transação: trava a linha
+do item (`FOR UPDATE`), calcula `balance_before`, valida a movimentação (tipo de item,
+tipo de movimentação, quantidade inteira positiva, motivo obrigatório por tipo, regras
+de `INITIAL_BALANCE`, saldo nunca negativo, idempotência), insere a movimentação e
+atualiza o saldo materializado. `accessories.current_stock`/`packaging.current_stock`
+são o saldo físico **materializado** (leitura rápida); `stock_movements` é o ledger de
+auditoria/reconciliação — o saldo nunca é calculado por `sum(stock_movements)` em tempo
+real.
+
+### Esboço original desta seção (histórico, substituído pelo schema acima)
+
+*Campos: `id`, `inventory_type`, `filament_spool_id` opcional, `accessory_id` opcional,
+`packaging_id` opcional, `movement_type`, `quantity`, `unit`, `reference_type`,
+`reference_id`, `notes`, `created_at`, `created_by`. Tipos: entrada; consumo; reserva;
+liberação de reserva; perda; ajuste; correção.*
 
 ---
 
 ## 15.2 `stock_reservations`
+
+**Não implementada** — continua só especificada. Fica para o Incremento 7 (reserva e
+consumo automático pelo pedido), fora do escopo do Incremento 1 (2026-08-27).
 
 ### Campos
 

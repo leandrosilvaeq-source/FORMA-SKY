@@ -499,6 +499,16 @@ O saldo disponível deverá considerar:
 estoque disponível = estoque físico - estoque reservado
 ```
 
+**Status de implementação (atualizado em 2026-08-27 — ver `05_ROADMAP_MODULOS.md` para
+o estado corrente e `03_MODELO_BANCO_DADOS.md` §15.1 para o schema real):** Incremento 1
+(saldo + motor de movimentações para Acessórios/Embalagens) implementado **localmente**
+nesta rodada — `public.stock_movements` (ledger imutável) e
+`public.register_stock_movement()` (única escritora de saldo, com lock/atomicidade,
+bloqueio de saldo negativo e idempotência). Cobre entradas, saídas, ajustes, saldo e
+histórico para acessórios/embalagens; **reservas, estoque mínimo automatizado e
+filamentos continuam não implementados**. A migration **não foi aplicada ao Supabase
+remoto** nesta rodada — aplicar exige autorização explícita separada.
+
 ---
 
 ## 6.10 Módulo de filamentos

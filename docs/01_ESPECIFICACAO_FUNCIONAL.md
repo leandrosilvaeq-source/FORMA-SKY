@@ -410,6 +410,21 @@ Estoque mínimo inicial:
 - Preto e branco: **500 g**;
 - Demais cores: **300 g**.
 
+**Regras aprovadas em 2026-08-27** (contexto para a continuação do Módulo 3 —
+implementação de filamentos ainda **não** iniciada, ver `05_ROADMAP_MODULOS.md`):
+
+- Um **tipo de filamento** é definido pela combinação **material + fabricante + linha +
+  cor** — não existe "tipo" sem essas quatro dimensões.
+- Podem existir **vários rolos físicos do mesmo tipo** (mesmo material/fabricante/
+  linha/cor), controlados individualmente.
+- **Peso nominal do rolo é livre** (não há um valor fixo obrigatório) — 1.000 g pode ser
+  sugerido como valor inicial pela interface, mas o operador pode informar qualquer
+  outro peso. Corrige uma suposição anterior desta rodada de que "rolos normalmente com
+  1 kg" seria uma regra fixa de schema — não é; é só uma sugestão de preenchimento.
+- A ficha do produto deverá **futuramente** aceitar **múltiplos filamentos/cores**, cada
+  um com seu próprio peso — não um único peso agregado por produto (ver
+  `03_MODELO_BANCO_DADOS.md` §9.1, nota sobre `default_weight_grams`).
+
 ---
 
 # 17. Tara de carretéis
@@ -431,6 +446,9 @@ Controle por unidade, permitindo variantes.
 
 Exemplos: ímã, NFC, chaveiro, cola e LED.
 
+**Unidade de controle (aprovado em 2026-08-27):** acessórios são controlados em
+**unidades inteiras** — nenhuma fração é aceita em nenhuma movimentação de estoque.
+
 ---
 
 # 19. Embalagens
@@ -439,6 +457,9 @@ Exemplos iniciais: plástico PP, plástico M, caixa M, Ziplock PP e sacola Kraft
 
 Permitir item, material, tamanho e variante.
 
+**Unidade de controle (aprovado em 2026-08-27):** mesma regra de Acessórios — controle
+em **unidades inteiras**, sem fração.
+
 ---
 
 # 20. Movimentações
@@ -446,6 +467,39 @@ Permitir item, material, tamanho e variante.
 Preservar histórico de compra, consumo, reserva, perda, ajuste e correção.
 
 Filamento deverá ser reservado quando a produção entrar **Em fila de produção**.
+
+**Regras operacionais aprovadas pelo usuário em 2026-08-27** (Módulo 3, continuação —
+escopo desta rodada de implementação: só Acessórios/Embalagens, ver
+`03_MODELO_BANCO_DADOS.md` §15.1 e `05_ROADMAP_MODULOS.md` para o estado técnico atual):
+
+- **Estoque inicial**: registrado pela interface como movimentação "Saldo inicial",
+  preservando histórico (nunca um `UPDATE` direto de saldo).
+- **Entradas permitidas**: Saldo inicial, Compra, Devolução, Ajuste positivo.
+- **Saídas manuais permitidas**: Perda/Avaria, Amostra/Doação, Uso interno, Ajuste
+  negativo.
+- **Saldo negativo é proibido** — toda saída que excederia o saldo físico disponível é
+  bloqueada.
+- **Reserva**: ocorrerá quando o pedido entrar na **Fila de produção** (ainda não
+  implementado — ver gatilho pendente em `05_ROADMAP_MODULOS.md` §6).
+- **Consumo de acessórios**: ao **iniciar a produção** (ainda não implementado).
+- **Consumo de filamento**: pelo **peso teórico**, ao **iniciar a produção** (ainda não
+  implementado — depende do cadastro de filamentos, fora do escopo desta rodada).
+- **Consumo de embalagens**: quando o pedido passar para **Aguardando entrega** (ainda
+  não implementado).
+- **Cancelamento antes do consumo**: libera a reserva automaticamente (ainda não
+  implementado).
+- **Cancelamento depois do consumo**: **não** devolve estoque automaticamente — eventual
+  devolução é sempre manual (decisão deliberada, evita estorno automático incorreto).
+- **Falha/reimpressão**: perda e consumo adicional são lançados **manualmente** até
+  existir o Módulo de Produção — nenhuma automação é assumida antes disso.
+- **Escolha de rolo de filamento** (quando implementado): primeiro o rolo já aberto;
+  depois o mais antigo. O consumo pode ser dividido entre vários rolos do mesmo tipo.
+- **Pesagem** (quando implementada): registra o peso físico e gera um ajuste pela
+  diferença — nunca substitui o saldo silenciosamente.
+- **Perdas exigem motivo** em todos os casos, sem exceção.
+- **Movimentações automáticas** (reserva/consumo, ainda não implementadas) terão
+  proteção contra duplicidade por pedido, item e evento — nenhuma pode ser registrada
+  duas vezes para o mesmo evento.
 
 ---
 
