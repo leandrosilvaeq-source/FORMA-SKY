@@ -326,6 +326,114 @@ export interface StockMovement {
   created_at: string
 }
 
+// Módulo 3, Incremento 4 (filamentos) — MVP local, regras sujeitas a
+// revisão após uso real (docs/05_ROADMAP_MODULOS.md §9b).
+// supabase/migrations/20260827100000_create_filament_types_table.sql —
+// ABS explicitamente fora do MVP aprovado.
+export type FilamentMaterial = 'PLA' | 'PETG' | 'TPU'
+
+export interface FilamentType {
+  id: string
+  material: FilamentMaterial
+  manufacturer: string
+  // Texto livre — nunca um enum travado (as 5 linhas sugeridas na interface
+  // são só sugestão, ver FILAMENT_LINE_SUGGESTIONS em FilamentTypeForm.tsx).
+  line: string
+  commercial_color: string
+  color_code: string | null
+  minimum_stock_grams: number | null
+  is_active: boolean
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+// supabase/migrations/20260827103000_create_filament_spools_table.sql —
+// LACRADO/ABERTO/ESGOTADO/DESCARTADO (4 valores, sem "em uso" — divergência
+// deliberada frente à especificação antiga do doc 03 §12.3, ver comentário
+// da migration). DESCARTADO é terminal.
+export type FilamentSpoolStatus = 'LACRADO' | 'ABERTO' | 'ESGOTADO' | 'DESCARTADO'
+
+export interface FilamentSpool {
+  id: string
+  code: string
+  filament_type_id: string
+  nominal_weight_grams: number
+  current_net_weight_grams: number
+  empty_spool_weight_grams: number | null
+  received_at: string | null
+  opened_at: string | null
+  status: FilamentSpoolStatus
+  notes: string | null
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+// supabase/migrations/20260827106000_create_filament_movements_table.sql —
+// tabela dedicada, independente de stock_movements (grama é fracionário;
+// cada linha referencia tipo E rolo). WEIGHING_ADJUSTMENT só é gravado por
+// register_filament_weighing (rota /filament-movements/weighing), nunca
+// pela rota de movimentação manual.
+export type FilamentMovementType =
+  | 'INITIAL_BALANCE'
+  | 'PURCHASE'
+  | 'RETURN'
+  | 'POSITIVE_ADJUSTMENT'
+  | 'MANUAL_CONSUMPTION'
+  | 'LOSS'
+  | 'SAMPLE_TEST'
+  | 'NEGATIVE_ADJUSTMENT'
+  | 'WEIGHING_ADJUSTMENT'
+
+// Ledger imutável — nunca editado nem excluído pelo frontend.
+export interface FilamentMovement {
+  id: string
+  filament_type_id: string
+  spool_id: string
+  movement_type: FilamentMovementType
+  quantity_delta: number
+  balance_before: number
+  balance_after: number
+  reason: string | null
+  reference_type: string | null
+  reference_id: string | null
+  idempotency_key: string | null
+  occurred_at: string
+  created_by: string
+  created_at: string
+}
+
+// public.vw_filament_type_summary (mesma migration de filament_movements) —
+// total_available_grams = soma do peso disponível dos rolos ativos e
+// utilizáveis (is_active=true, status not in ESGOTADO/DESCARTADO). O nível
+// de estoque (normal/baixo/sem estoque) é derivado no frontend com a mesma
+// getStockLevel já usada por Acessórios/Embalagens — não vem pronto da view.
+export interface FilamentTypeSummary {
+  filament_type_id: string
+  material: FilamentMaterial
+  manufacturer: string
+  line: string
+  commercial_color: string
+  color_code: string | null
+  minimum_stock_grams: number | null
+  is_active: boolean
+  total_available_grams: number
+  usable_spool_count: number
+  total_spool_count: number
+}
+
+// supabase/migrations/20260827109000_create_product_filaments_table.sql —
+// preparação de composição (requisito 9), nunca consumida automaticamente
+// nesta rodada.
+export interface ProductFilament {
+  id: string
+  product_id: string
+  filament_type_id: string
+  theoretical_weight_grams: number
+  created_at: string
+}
+
 export interface ProductAccessory {
   id: string
   product_id: string

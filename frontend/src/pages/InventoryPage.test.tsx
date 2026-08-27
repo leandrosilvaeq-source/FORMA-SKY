@@ -163,7 +163,7 @@ describe('InventoryPage', () => {
     renderPage('acessorios')
 
     expect(screen.getByRole('heading', { name: 'Estoque' })).toBeInTheDocument()
-    expect(screen.getByText(/cadastros mestre de acessórios e embalagens/i)).toBeInTheDocument()
+    expect(screen.getByText(/cadastros mestre de acessórios, embalagens e filamentos/i)).toBeInTheDocument()
   })
 
   it('navegação interna marca "Acessórios" como área ativa em area="acessorios"', () => {

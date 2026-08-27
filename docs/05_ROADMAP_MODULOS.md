@@ -547,6 +547,161 @@ existem juntos. A fórmula oficial (`# 1`) só concede peso de fase quando há a
 *deployado e validado*, não só deployado — recalcular o percentual fica para quando a validação
 manual do usuário ocorrer.
 
+**Validação manual do usuário em 2026-08-27 (mesmo dia, rodada seguinte)**: quantidade
+disponível, entradas, saídas e histórico de Acessórios e Embalagens foram **validados
+manualmente pelo usuário** — todos os 15 passos de um checklist manual foram aprovados. Nenhuma
+alteração em Petlink ou dados oficiais durante a validação. Esta é a primeira parte do Módulo 3
+(Incrementos 1-3, Acessórios/Embalagens) a reunir backend deployado **e** interface **e**
+validação manual do usuário ao mesmo tempo — os três juntos, critério já estabelecido acima.
+**Módulo 3 como um todo continua NÃO concluído**: falta a validação manual de Filamentos
+(Incremento 4 abaixo, implementado só localmente) e todos os incrementos futuros (5 em diante —
+consumo automático por pedido, reserva, inventário periódico). Percentual macro **ainda não
+recalculado** — fica para quando o Módulo 3 estiver concluído por inteiro ou quando houver
+critério explícito de recálculo parcial por incremento (não decidido nesta rodada).
+
+## Incremento 4 — filamentos (tipos, rolos, movimentações, pesagem) — MVP IMPLEMENTADO LOCALMENTE
+
+Implementado em 2026-08-27, na branch `feature/inventory-operations` (partindo de `41ab62c`,
+depois da validação manual de Acessórios/Embalagens acima). Cobre os requisitos 1-8 do pedido
+desta rodada (tipo de filamento, rolo físico, movimentações, pesagem, interface, histórico) e
+parcialmente o requisito 9 (preparação de composição de produto, sem ativar consumo automático).
+**Regras operacionais do MVP — versão inicial para validação, sujeitas a revisão após o teste
+prático do usuário** (mesmo disclaimer das 22 regras de Acessórios/Embalagens — ver
+`01_ESPECIFICACAO_FUNCIONAL.md` §16/§17/§20). **Nada desta seção foi aplicado ao Supabase remoto
+nem publicado nem validado manualmente pelo usuário** — só criado e testado localmente.
+
+**Decisão de arquitetura (diagnóstico técnico pedido explicitamente pelo requisito 5)**:
+filamentos **não** reaproveitam `public.stock_movements` — ganharam um ledger dedicado,
+`public.filament_movements`. Dois motivos concretos: (1) unidade de medida — peso de filamento é
+fracionário (gramas), enquanto `stock_movements.quantity_delta` é `integer` (adequado só para
+unidades discretas de acessórios/embalagens, uma tabela já em produção e validada manualmente,
+que esta rodada não altera); (2) rastreabilidade por rolo — cada movimentação de filamento
+precisa referenciar tanto o **tipo** quanto o **rolo físico**, e `stock_movements` só tem um
+único item polimórfico. Detalhe completo em `03_MODELO_BANCO_DADOS.md` §12.3.
+
+**Backend (4 migrations novas, nenhuma aplicada ao remoto)**:
+
+- `20260827100000_create_filament_types_table.sql` — `public.filament_types` (material fechado
+  `PLA`/`PETG`/`TPU`, **ABS explicitamente fora do MVP**; `line` livre, sem enum de banco;
+  `color_code`/`notes` acrescentados frente à especificação original) +
+  `create_filament_type`/`update_filament_type`/`delete_filament_type` (`security definer`,
+  `service_role`, mesmo padrão de `accessories`/`packaging`).
+- `20260827103000_create_filament_spools_table.sql` — `filament_spool_number_counters` +
+  `next_filament_spool_code()` (gera `RL-XX-YYY`, mesmo padrão de `next_order_number()`) +
+  `public.filament_spools` (peso nominal livre, sem valor fixo obrigatório; tara como campo do
+  próprio rolo — `empty_spool_weight_grams` — em vez da tabela `spool_tares` da especificação
+  original; status `LACRADO`/`ABERTO`/`ESGOTADO`/`DESCARTADO`, 4 valores, sem "em uso"; `is_active`
+  como eixo independente de `status`) + `create_filament_spool`/`update_filament_spool`
+  (bloqueia sair de `DESCARTADO` e reduzir o nominal abaixo do saldo atual)/`delete_filament_spool`.
+- `20260827106000_create_filament_movements_table.sql` — `public.filament_movements` (9
+  `movement_type`: `INITIAL_BALANCE`/`PURCHASE`/`RETURN`/`POSITIVE_ADJUSTMENT` entradas;
+  `MANUAL_CONSUMPTION`/`LOSS`/`SAMPLE_TEST`/`NEGATIVE_ADJUSTMENT` saídas; `WEIGHING_ADJUSTMENT`
+  pesagem, só via `register_filament_weighing`) + `register_filament_movement()` (mesmo padrão de
+  lock/idempotência/concorrência de `register_stock_movement`; teto do peso nominal só para
+  entradas de rotina, isento para a família de ajuste; bloqueia rolo `DESCARTADO`; aplica
+  `ESGOTADO` automaticamente ao saldo chegar a zero) + `register_filament_weighing()` (peso
+  disponível = peso bruto medido − tara quando conhecida, ou peso líquido direto quando não é;
+  delta zero não grava nada; motivo sempre obrigatório, nenhuma tolerância percentual inventada) +
+  `vw_filament_type_summary` (soma do peso disponível dos rolos ativos e utilizáveis por tipo,
+  `security_invoker=true`).
+- `20260827109000_create_product_filaments_table.sql` — `public.product_filaments` (peso teórico
+  fracionário por tipo/produto, requisito 9) + `set_product_filaments()` (substitui a composição
+  atomicamente, mesmo idioma de `set_product_composition`). **Preparação de modelo apenas**:
+  nenhuma automação lê esta tabela, nenhum trigger em `orders`/`order_items` foi criado ou
+  alterado, sem interface de edição nesta rodada (fora do escopo pedido — "prepare o modelo",
+  não "ative o consumo").
+- `supabase/functions/filament-types/`, `filament-spools/`, `filament-movements/` — 3 novas Edge
+  Functions (`index.ts`/`handler.ts`/`handler.test.ts` cada), mesmo padrão de
+  `accessories`/`stock-movements`: validação estrutural na função, regras dependentes do banco
+  exclusivas das RPCs. `filament-movements` tem uma segunda rota, `POST
+  /filament-movements/weighing`, para a pesagem. **Nenhuma das 3 foi publicada.**
+- `supabase/functions/_shared/errors.ts` — ~30 novos padrões estáveis mapeados (validação
+  estrutural das 6 novas RPCs + marcadores de regra de negócio:
+  `FILAMENT_TYPE_HAS_SPOOLS:`/`FILAMENT_TYPE_HAS_COMPOSITION:`/`FILAMENT_SPOOL_HAS_MOVEMENTS:`/
+  `FILAMENT_SPOOL_DISCARD_IS_FINAL:`/`FILAMENT_SPOOL_NOMINAL_BELOW_BALANCE:`/
+  `FILAMENT_SPOOL_DISCARDED:`/`FILAMENT_INSUFFICIENT_BALANCE:`/`FILAMENT_EXCEEDS_NOMINAL:`/
+  `FILAMENT_TARE_UNKNOWN:`).
+- `supabase/config.toml` — `[functions.filament-types/filament-spools/filament-movements]`
+  registradas (`verify_jwt = false`, mesmo padrão das demais).
+- `supabase/tests/filament_inventory_test.sql` — teste de integração SQL (mesmo padrão de
+  `inventory_movements_test.sql`), cobrindo: criação de tipo (aceita, rejeita ABS, rejeita
+  duplicata, aceita linha livre não sugerida); múltiplos rolos com pesos nominais diferentes,
+  saldo independente começando em zero; saldo inicial (único, exige zero), compra bloqueada acima
+  do nominal, ajuste positivo isento do teto, consumo manual exige motivo, saldo negativo
+  bloqueado, idempotência (mesmo payload e payload diferente), rejeição de `WEIGHING_ADJUSTMENT`
+  pela rota errada; `ESGOTADO` automático ao zerar (e continua aceitando movimentação depois);
+  descarte e sua natureza terminal (bloqueia movimentação e bloqueia reverter status); exclusão
+  física bloqueada por histórico (rolo) e por rolo vinculado (tipo), permitida sem vínculo;
+  desativação seguindo eixo independente de status; `vw_filament_type_summary` somando só rolos
+  ativos e utilizáveis; pesagem com tara conhecida, sem tara conhecida, peso bruto abaixo da tara
+  rejeitado, peso líquido negativo rejeitado, os dois pesos informados rejeitado, diferença zero
+  não grava, motivo sempre obrigatório; `product_filaments`/`set_product_filaments` (grava,
+  substitui atomicamente, rejeita tipo inexistente/inativo, rejeita peso não positivo, bloqueia
+  exclusão do tipo por composição vinculada); privilégios (SELECT sim, INSERT/UPDATE/DELETE não,
+  para `authenticated`; nada para `anon`).
+
+**Frontend**:
+
+- Tipos novos em `types/domain.ts`: `FilamentMaterial`, `FilamentType`, `FilamentSpoolStatus`,
+  `FilamentSpool`, `FilamentMovementType`, `FilamentMovement`, `FilamentTypeSummary`,
+  `ProductFilament`.
+- `lib/api/filamentTypes.ts`/`filamentSpools.ts`/`filamentMovements.ts` — leitura direta via
+  supabase-js (RLS já aplicada), escrita via as 3 Edge Functions. Listagem principal de tipos usa
+  `vw_filament_type_summary` (já traz os totais agregados, sem exigir um segundo fetch/merge).
+- `hooks/useFilamentTypes.ts`/`useFilamentSpools.ts`/`useFilamentMovements.ts` — mesmo idioma de
+  `useAccessories`/`useStockMovements` (CRUD local sem refetch, `setLocalSpoolState` depois de uma
+  movimentação/pesagem bem-sucedida, `register`/`weigh` separados — `weigh` pode devolver `null`
+  quando a diferença calculada é zero).
+- `components/inventory/FilamentTypeForm.tsx`/`FilamentSpoolForm.tsx` — cadastro/edição, mesmo
+  padrão visual de `InventoryItemForm.tsx`; linha com 5 sugestões clicáveis (texto livre, nunca
+  travado); peso nominal com 4 sugestões (250/500/750/1000 g, texto livre).
+- `components/inventory/FilamentMovementForm.tsx` — adaptado de `StockMovementForm.tsx` para
+  gramas fracionárias e os 8 tipos manuais de filamento (nomes próprios: Consumo manual,
+  Amostra/Teste); bloqueia no cliente saída acima do saldo e entrada de rotina acima do nominal
+  (backend permanece a proteção definitiva).
+- `components/inventory/FilamentWeighingForm.tsx` — novo: alterna entre peso bruto medido (exige
+  tara conhecida) e peso líquido direto (quando não é); mostra o peso líquido calculado e a
+  diferença em relação ao saldo atual antes de enviar; motivo sempre obrigatório.
+- `components/inventory/FilamentMovementHistory.tsx` — adaptado de `StockMovementHistory.tsx`
+  para os 9 tipos e gramas.
+- `components/inventory/FilamentSpoolPanel.tsx` — painel único por rolo (resumo + alternância
+  Movimentar/Registrar pesagem + histórico); ao contrário de `StockMovementPanel`, **não fecha
+  sozinho** após uma ação bem-sucedida (o usuário pode encadear mais de uma ação antes de fechar).
+- `components/inventory/FilamentTypeDrawer.tsx` — drill-down de um tipo: lista de rolos com
+  identificador/pesos/% restante/status/abertura/ações (Editar, Movimentar/Pesar, Ativar-desativar,
+  Descartar, Excluir, Novo rolo).
+- `components/inventory/InventoryPageShell.tsx` — extraído de `InventoryPage.tsx` (shell + nav de
+  3 abas) para permitir a terceira área (Filamentos) sem import circular entre
+  `InventoryPage.tsx` e `FilamentsInventoryPage.tsx`.
+- `pages/FilamentsInventoryPage.tsx` — nova página (listagem de tipos via `vw_filament_type_summary`
+  + badge de situação de estoque reaproveitando `getStockLevel`/`StockLevelBadge` + drill-down para
+  rolos), roteada em `/estoque/filamentos` (`App.tsx`), terceira aba ao lado de Acessórios/
+  Embalagens.
+
+**Testes**: Deno (3 `handler.test.ts` novos) escritos mas **não executados nesta sessão** —
+ambiente sem Deno, mesma limitação de todas as rodadas anteriores; revisados por leitura, seguindo
+a mesma disciplina de `accessories`/`stock-movements`. SQL (`filament_inventory_test.sql`) escrito
+mas **não executado** — ambiente sem Docker/Postgres local nem migrations aplicadas no remoto;
+revisado linha a linha contra as 4 migrations. Frontend: suíte completa 1261 → **1332 testes,
+todos passando** (71 novos: API layer, hooks, `FilamentMovementForm`, `FilamentWeighingForm`,
+`FilamentsInventoryPage`; mais 1 asserção existente de `InventoryPage.test.tsx` ajustada ao novo
+texto "acessórios, embalagens e filamentos"); lint 0 erros (mesmos 6 avisos pré-existentes, nenhum
+novo); `tsc -b` sem erros; `vite build` sem erros; `git diff --check` limpo (só avisos de
+LF→CRLF do Git no Windows); scan de segredos sem ocorrências reais (só o texto literal
+`service_role`, nome de role do Postgres, em comentários/`GRANT`); `.env.local` confirmado
+ignorado pelo git.
+
+**Fora de escopo desta rodada** (incrementos futuros, nenhum com código): consumo automático de
+filamento por pedido/produção, reserva, inventário periódico (pesagem em lote), tolerância
+percentual de pesagem (nenhuma foi definida nem inventada), interface de edição de composição de
+filamento por produto, publicação das 3 novas Edge Functions, aplicação das 4 migrations ao
+Supabase remoto, qualquer validação manual do usuário sobre filamentos.
+
+**Percentual macro**: **não alterado por esta entrada** — mesmo critério já aplicado. Backend e
+interface de Filamentos existem agora **só localmente** (nem deployados, nem validados
+manualmente) — dois dos três critérios (backend **e** interface **e** validação manual) ainda
+faltam por completo para esta parte do Módulo 3.
+
 ---
 
 # 10. Histórico de atualizações deste roadmap
@@ -574,3 +729,4 @@ manual do usuário ocorrer.
 | 2026-08-27 | **Migrations `20260827090000_create_stock_movements_table.sql` e `20260827093000_update_accessory_packaging_delete_guards.sql` aplicadas ao projeto Supabase remoto `tjhacqreupfqefntjevf`** via `npx supabase db push --linked` — 31/31 migrations agora sincronizadas local/remoto (antes 29/31), sem seed, sem alteração de role. Verificação somente leitura confirmou que tabela `stock_movements` (colunas/constraints/índices, incl. índice único parcial de `idempotency_key`), RLS/policies/grants e as três funções (`register_stock_movement`, `delete_accessory`, `delete_packaging`, cada uma com assinatura única) correspondem exatamente aos arquivos locais — nenhuma sobrecarga duplicada. Teste de integração SQL (`inventory_movements_test.sql`) executado contra o remoto dentro de `BEGIN...ROLLBACK` — **40 PASS, 1 SKIP, 0 FAIL**; consultas pós-teste confirmaram **zero resíduo** (nenhum dado de teste persistido, `stock_movements` com 0 linhas, nenhum `current_stock` oficial alterado, nenhum usuário oficial alterado). Smoke test do CRUD existente: `InventoryPage`/`InventoryItemForm` (108/108, sem regressão); testes Deno de `accessories`/`packaging` não executados (ambiente sem Deno). **Backend do Incremento 1 (Módulo 3) está agora aplicado e validado por teste automatizado real contra produção** — regras operacionais continuam provisórias do MVP (ver entrada anterior); interface (Incremento 2) e validação manual do usuário continuam pendentes; Incrementos 2–9 continuam pendentes. Módulo 1 continua aguardando a conclusão da integração de Estoque antes das Fases 6/7 (decisão registrada em 2026-08-27, entrada anterior). Percentual macro do Módulo 3 **não alterado** — critério já estabelecido exige backend + interface + validação manual juntos, não só backend. Nenhuma Edge Function publicada, nenhum deploy de frontend, nenhum dado oficial/Petlink alterado, nenhum push Git. Checkpoint local: commit `docs: record inventory ledger deployment`, sem push. |
 | 2026-08-27 | **Incrementos 2/3 do Módulo 3 (interface de saldo/entrada/saída/ajuste + histórico) implementados localmente**: nova Edge Function `stock-movements` (não publicada) chamando exclusivamente `register_stock_movement()`; 8 novos padrões estáveis mapeados em `_shared/errors.ts`; `StockMovementForm.tsx`/`StockMovementHistory.tsx`/`StockMovementPanel.tsx` (ação "Movimentar estoque" por linha na listagem, action buttons com ícones, projeção de saldo, motivo obrigatório por tipo, idempotência via `crypto.randomUUID()` estável entre retries do mesmo payload); coluna "Saldo atual" ordenável e badge de situação (Sem estoque/Estoque baixo/Estoque normal) na listagem. As 22 regras aprovadas permanecem **provisórias do MVP** — esta interface existe para o usuário validar as regras na prática, não para confirmá-las. Decisões de UX sem regra documentada explícita, sinalizadas: Devolução permanece disponível em item inativo (backend não verifica `is_active`); painel fecha automaticamente após sucesso. Suíte completa 1167 → 1261 testes, lint 0 erros, build sem erros, `git diff --check` limpo. Testes Deno (`stock-movements/handler.test.ts`, `_shared/errors.test.ts`) escritos, **não executados** — ambiente sem Deno, mesma limitação já registrada. **Edge Function ainda não publicada, nenhuma validação manual do usuário ainda ocorreu, nenhum dado oficial/Petlink cadastrado ou alterado.** Fase 5/6/7 do Módulo 1 e percentual macro do Módulo 3 **não alterados** por esta entrada — Incrementos 4–9 do plano de estoque continuam pendentes (filamentos, rolos, pesagens, reservas, consumo automático, produção, integração com `change_order_status`). Checkpoint local: commit `feat: add inventory movement interface`, sem push, sem migration criada/aplicada, sem Edge Function publicada, sem deploy. |
 | 2026-08-27 | **Edge Function `stock-movements` publicada e ativa** no projeto Supabase remoto `tjhacqreupfqefntjevf` (versão 1) — revisão estática integral antes da publicação não encontrou inconsistências (payload/RPC/CORS/auth/logs todos conferidos); Deno seguiu indisponível nesta sessão, testes Deno já escritos não executados, cobertura complementar via suíte de frontend/API (1261/1261). Publicação exclusiva de `stock-movements` via `npx supabase functions deploy` — as 8 Edge Functions já existentes permaneceram com a mesma versão/`updated_at`. Verificação HTTP real: `OPTIONS` sem autenticação → 204; `POST` sem autenticação (payload fictício, item não real) → 401 (`Header Authorization ausente.`), rejeitado antes de tocar o banco. Consultas pós-teste confirmaram zero movimentação criada e nenhum `current_stock` alterado. Frontend local confirmado apontando para o projeto correto, `.env.local` continua ignorado, nenhuma URL hardcoded — **nenhum deploy de frontend realizado**. **A interface completa (backend + Edge Function publicada) está tecnicamente pronta, mas nenhuma validação manual do usuário ainda ocorreu** — as 22 regras aprovadas continuam provisórias do MVP; Fase 5/6/7 do Módulo 1 e percentual macro do Módulo 3 **não alterados** por esta entrada. Incrementos 4–9 do plano de estoque continuam pendentes. Nenhum dado oficial/Petlink alterado, nenhuma outra migration/Edge Function tocada. Checkpoint local: commit `docs: record stock movement function deployment`, sem push. |
+| 2026-08-27 | **Validação manual do usuário aprovada** para quantidade disponível, entradas, saídas e histórico de Acessórios e Embalagens — 15/15 passos de um checklist manual aprovados; nenhuma alteração em Petlink/dados oficiais durante a validação. Reconciliação confirmou HEAD `41ab62c`, árvore limpa, 31/31 migrations sincronizadas, 5 commits à frente de `feature/customers-orders`. Em seguida, **Incremento 4 do plano de estoque (filamentos — tipos, rolos, movimentações, pesagem) implementado localmente**, cobrindo os requisitos 1-8 do pedido e parcialmente o 9 (preparação de composição, sem ativar consumo automático) — ver detalhamento técnico completo em §9b. Resumo: 4 migrations novas (`filament_types`/`filament_spools`/`filament_movements`+`vw_filament_type_summary`/`product_filaments`), decisão de arquitetura de **não** reaproveitar `stock_movements` (ledger próprio, `filament_movements`, por unidade de medida fracionária e necessidade de referenciar tipo+rolo); 3 Edge Functions novas (`filament-types`/`filament-spools`/`filament-movements`, nenhuma publicada); ~30 novos padrões de erro estáveis; página `/estoque/filamentos` (terceira aba, listagem de tipos com drill-down para rolos, ações de cadastro/ativação/descarte/exclusão/movimentar/pesar/histórico). Materiais fechados em PLA/PETG/TPU (**ABS explicitamente fora do MVP**); status do rolo `LACRADO`/`ABERTO`/`ESGOTADO`/`DESCARTADO` (4 valores, corrigindo a proposta de 5 valores nunca implementada de `03_MODELO_BANCO_DADOS.md` §12); tara como campo do próprio rolo, não mais um cadastro `spool_tares` separado. Teste de integração SQL (`filament_inventory_test.sql`) e 3 `handler.test.ts` Deno escritos, **não executados** (mesma limitação de ambiente de todas as rodadas anteriores — sem Docker/Postgres local/Deon, migrations não aplicadas ao remoto). Suíte completa do frontend 1261 → **1332 testes, todos passando**; lint 0 erros; `tsc -b`/`vite build` sem erros; `git diff --check` limpo; scan de segredos sem ocorrências reais; `.env.local` confirmado ignorado. **Nada desta entrada foi aplicado ao Supabase remoto, publicado ou validado manualmente pelo usuário** — regras operacionais do MVP, versão inicial para validação, sujeitas a revisão. **Módulo 3 continua NÃO concluído** (falta validação manual de Filamentos e todos os incrementos 5+ — consumo automático, reserva, inventário periódico); **integração Pedidos↔Estoque continua NÃO concluída**. Percentual macro **não alterado**. Checkpoint local: commit `feat: add filament roll inventory`, sem push. |

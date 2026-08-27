@@ -679,75 +679,207 @@ Cadastro dos motivos de falha.
 
 # 12. Grupo: Filamentos
 
+**Implementado localmente (Módulo 3, Incremento 4, 2026-08-27 — migrations
+`20260827100000`/`103000`/`106000`/`109000`, branch `feature/inventory-operations`).
+Ainda NÃO aplicado ao Supabase remoto nem validado manualmente pelo usuário.** Regras
+operacionais do MVP — versão inicial para validação, sujeitas a revisão após o teste
+prático (ver `01_ESPECIFICACAO_FUNCIONAL.md` §16/§17/§20). As subseções 12.1-12.4 abaixo
+descrevem o schema **realmente implementado**, que diverge em três pontos deliberados da
+especificação original desta seção (histórico preservado ao final, §12.5):
+não há tabela `spool_tares` (tara virou campo do próprio rolo); `filament_types` ganhou
+`color_code`/`notes`; os status do rolo mudaram de 5 valores minúsculos para 4 valores
+maiúsculos, sem "em uso".
+
 ## 12.1 `filament_types`
 
-Representa a combinação comercial do filamento.
+Representa a combinação comercial do filamento — material + fabricante + linha + cor.
+Nunca controla saldo diretamente: a quantidade disponível de um tipo é a soma do peso
+disponível dos seus rolos ativos e utilizáveis (ver `vw_filament_type_summary`, §12.3).
 
 ### Campos
 
 - `id`
+- `material` — fechado, `check` no banco: `PLA` | `PETG` | `TPU` (**ABS explicitamente
+  fora do MVP aprovado**, nunca um valor aceito)
 - `manufacturer`
-- `material`
-- `line`
+- `line` — texto **livre**, sem `check`/enum no banco (decisão deliberada: nunca travar
+  o cadastro de uma linha nova ainda não prevista); as 5 linhas abaixo são só sugestão de
+  interface
 - `commercial_color`
-- `minimum_stock_grams`
+- `color_code` — opcional (código/identificação da cor do fabricante); **não existia na
+  especificação original desta seção**, acrescentado por exigência explícita do pedido
+  desta rodada
+- `minimum_stock_grams` — opcional, `numeric(10,2)` (fracionável, ao contrário de
+  `accessories.minimum_stock`/`packaging.minimum_stock`, que são `integer`)
 - `is_active`
+- `notes` — opcional; **não existia na especificação original**, mesmo motivo de
+  `color_code`
+- `created_at`, `updated_at`
 
-### Materiais
+`unique (material, manufacturer, line, commercial_color)` — a mesma combinação não pode
+ser cadastrada duas vezes (`color_code` fica fora da chave).
 
-- PLA
-- PETG
-- TPU
+### Linhas sugeridas (interface, nunca um enum de banco)
 
-### Linhas
-
-- Cor sólida
+- Cor sólida (rotulada "Sólida" na interface)
 - Silk
 - Velvet
 - Translúcido
 - DuoColor
 
+### Escrita
+
+`create_filament_type`/`update_filament_type`/`delete_filament_type` (`security
+definer`, `EXECUTE` só para `service_role`) — mesmo padrão de
+`create_accessory`/`update_accessory`/`delete_accessory` (§13). `delete_filament_type`
+bloqueia exclusão física quando há rolo (`FILAMENT_TYPE_HAS_SPOOLS:`) ou composição de
+produto vinculados (`FILAMENT_TYPE_HAS_COMPOSITION:`, ver §12.4) — nunca cascateia.
+
 ---
 
-## 12.2 `spool_tares`
+## 12.2 `filament_spools`
 
-Cadastro da tara do carretel por fabricante.
+Representa cada rolo físico, sempre vinculado a um `filament_types`. Cada rolo tem saldo
+independente — o peso nunca é controlado só no nível do tipo.
 
 ### Campos
 
 - `id`
-- `manufacturer`
-- `empty_spool_weight_grams`
-- `created_at`
-- `updated_at`
-
----
-
-## 12.3 `filament_spools`
-
-Representa cada rolo físico.
-
-### Campos
-
-- `id`
+- `code` — identificador interno único e legível, gerado automaticamente no formato
+  `RL-XX-YYY` (ano com 2 dígitos + sequência anual, mesmo padrão de
+  `orders.order_number`/`next_order_number()`) — imutável após a criação
 - `filament_type_id`
-- `spool_tare_id`
-- `nominal_weight_grams`
-- `current_net_weight_grams`
-- `purchase_price`
-- `supplier_id` opcional
-- `purchase_date`
-- `status`
+- `nominal_weight_grams` — **livre, sem valor fixo obrigatório** (1.000 g é só sugestão
+  de interface, junto de 250/500/750 g)
+- `current_net_weight_grams` — saldo materializado, sempre `>= 0`; começa em `0` na
+  criação, o peso inicial real é estabelecido pela primeira movimentação (`INITIAL_BALANCE`)
+- `empty_spool_weight_grams` — opcional; peso do carretel vazio, quando conhecido (ver
+  nota de divergência no §12.5: substitui a tabela `spool_tares` da especificação
+  original)
+- `received_at` — data (não timestamp), opcional
+- `opened_at` — timestamp, opcional; marcado automaticamente na primeira transição para
+  `ABERTO`, nunca sobrescrito depois
+- `status` — `LACRADO` | `ABERTO` | `ESGOTADO` | `DESCARTADO` (ver §12.5 para a
+  divergência frente à especificação original)
+- `notes` — opcional
+- `is_active` — eixo **independente** de `status`: desativação (visibilidade/soft-hide)
+  nunca é o mesmo que descarte (estado físico terminal)
+- `created_at`, `updated_at`
+
+### Status
+
+- **LACRADO** — nunca aberto.
+- **ABERTO** — em uso.
+- **ESGOTADO** — aplicado automaticamente por `register_filament_movement`/
+  `register_filament_weighing` sempre que uma movimentação leva o saldo a zero (nunca
+  revertido automaticamente se o saldo voltar a ficar positivo).
+- **DESCARTADO** — estado terminal: nenhuma function deste projeto reverte
+  automaticamente um rolo descartado, e nenhuma movimentação nova é aceita contra ele.
+
+"Rolo ativo e utilizável" (para a soma que compõe a quantidade disponível do tipo) exige
+`is_active = true` **e** `status not in ('ESGOTADO', 'DESCARTADO')` — ver
+`vw_filament_type_summary`.
+
+### Escrita
+
+`create_filament_spool`/`update_filament_spool`/`delete_filament_spool` — mesmo padrão
+de segurança de `filament_types`. `update_filament_spool` bloqueia qualquer tentativa de
+sair de `DESCARTADO` (`FILAMENT_SPOOL_DISCARD_IS_FINAL:`) e de reduzir
+`nominal_weight_grams` abaixo do saldo atual (`FILAMENT_SPOOL_NOMINAL_BELOW_BALANCE:`).
+`delete_filament_spool` bloqueia exclusão física quando há movimentação vinculada
+(`FILAMENT_SPOOL_HAS_MOVEMENTS:`).
+
+`vw_filament_type_summary` (view, `security_invoker=true`) — uma linha por tipo, com
+`total_available_grams` (soma do peso disponível dos rolos ativos e utilizáveis),
+`usable_spool_count` e `total_spool_count`.
+
+---
+
+## 12.3 `filament_movements`
+
+Ledger imutável de movimentações de filamento — **tabela dedicada, independente de
+`stock_movements`** (§15.1). Decisão de arquitetura desta rodada: grama é uma grandeza
+fracionária (`stock_movements.quantity_delta` é `integer`, desenhado para unidades
+discretas de acessórios/embalagens) e cada movimentação de filamento precisa referenciar
+tanto o **tipo** quanto o **rolo** (`stock_movements` só tem um item polimórfico único) —
+forçar filamento nessa tabela exigiria alterar o tipo de colunas já em produção e
+validadas manualmente, sem necessidade real.
+
+### Campos
+
+- `id`
+- `filament_type_id` — denormalizado a partir de `spool_id` (sempre lido da linha
+  travada do rolo, nunca aceito como parâmetro do chamador) — permite histórico
+  consolidado por tipo sem `join`
+- `spool_id`
+- `movement_type` — 9 valores: `INITIAL_BALANCE`, `PURCHASE`, `RETURN`,
+  `POSITIVE_ADJUSTMENT` (entradas); `MANUAL_CONSUMPTION`, `LOSS`, `SAMPLE_TEST`,
+  `NEGATIVE_ADJUSTMENT` (saídas); `WEIGHING_ADJUSTMENT` (pesagem — só gravado por
+  `register_filament_weighing`, nunca pela rota manual)
+- `quantity_delta` — `numeric(10,2)`, fracionário, sinal já resolvido
+- `balance_before`, `balance_after` — `numeric(10,2)`, nunca negativos
+- `reason` — obrigatório para tudo exceto `INITIAL_BALANCE`/`PURCHASE`/`RETURN`
+- `reference_type`, `reference_id` — reservados para vínculo futuro com pedido/produção;
+  nenhuma function desta rodada os popula
+- `idempotency_key` — opcional, único quando fornecida
+- `occurred_at`, `created_by`, `created_at`
+
+### Regras de escrita
+
+- `register_filament_movement` (8 tipos manuais) — mesmo padrão de lock/idempotência de
+  `register_stock_movement` (§15.1): `select ... for update` no rolo, checagem de
+  idempotência pós-lock, bloco `BEGIN/EXCEPTION` para concorrência real na chave.
+  Teto do peso nominal aplicado só às entradas de rotina (`INITIAL_BALANCE`/`PURCHASE`/
+  `RETURN`) — a família de ajuste é isenta. Bloqueia movimentação contra rolo
+  `DESCARTADO`.
+- `register_filament_weighing` — calcula `peso disponível = peso bruto medido − tara`
+  quando `empty_spool_weight_grams` é conhecido, ou aceita o peso líquido informado
+  diretamente quando não é. Delta zero não grava nada (devolve `null`). Motivo sempre
+  obrigatório — nenhuma tolerância percentual foi definida ou inventada.
+
+---
+
+## 12.4 `product_filaments`
+
+**Preparação do modelo de composição de produto por filamento** (não um ledger de
+estoque) — "quais tipos de filamento e quanto peso teórico por unidade produzida" um
+produto usa. Paralelo a `product_accessories`/`product_packaging` (§13), mas com
+`theoretical_weight_grams numeric` (fracionário) em vez de `quantity integer`.
+
+### Campos
+
+- `id`
+- `product_id`
+- `filament_type_id`
+- `theoretical_weight_grams` — `numeric(10,2)`, sempre `> 0`
 - `created_at`
-- `updated_at`
 
-### Status sugeridos
+`unique (product_id, filament_type_id)`. Escrita via `set_product_filaments` (substitui
+o conjunto inteiro atomicamente, mesmo idioma de `set_product_composition`). **Nenhuma
+automação lê esta tabela nesta rodada** — consumo automático por pedido é incremento
+futuro, ainda não implementado. Sem interface de edição nesta rodada (preparação de
+modelo, backend apenas).
 
-- fechado;
-- aberto;
-- em uso;
-- vazio;
-- descartado.
+---
+
+## 12.5 Divergências frente à especificação original (histórico)
+
+A especificação original desta seção (nunca implementada antes do Incremento 4) previa:
+
+- uma tabela `spool_tares` (tara do carretel por **fabricante**, cadastro à parte) — a
+  implementação real usa `empty_spool_weight_grams` como **campo direto do rolo**: o
+  pedido desta rodada descreveu a tara como atributo do próprio rolo, e uma tabela de
+  lookup por fabricante adicionaria complexidade não solicitada; pode ser revisitada como
+  conveniência futura sem exigir remodelagem;
+- 5 status de rolo em português minúsculo (`fechado`/`aberto`/`em uso`/`vazio`/
+  `descartado`) — a implementação real usa 4 valores maiúsculos
+  (`LACRADO`/`ABERTO`/`ESGOTADO`/`DESCARTADO`, sem "em uso"), seguindo literalmente o
+  pedido mais recente e mais explícito desta rodada;
+- `filament_types` sem `color_code`/`notes` e `filament_spools` com `purchase_price`/
+  `supplier_id`/`purchase_date` — a implementação real acrescenta os dois primeiros
+  (exigidos pelo pedido) e **não** inclui os três últimos (fora do escopo pedido nesta
+  rodada, mesmo espírito de "sem custo/fornecedor ainda" já aplicado a
+  Acessórios/Embalagens no Bloco 1).
 
 ---
 
@@ -943,8 +1075,9 @@ Registro imutável de movimentações — nunca editado, nunca excluído fisicam
 ### Campos (reais, implementados)
 
 - `id`
-- `item_type` — `ACCESSORY` ou `PACKAGING` nesta etapa; extensível a `FILAMENT_SPOOL`
-  no futuro (Incremento 5) só ampliando o `CHECK`, nunca remodelagem completa
+- `item_type` — `ACCESSORY` ou `PACKAGING`; **não** será estendido a `FILAMENT_SPOOL` —
+  decisão revisitada no Incremento 4, ver nota abaixo (filamentos têm ledger próprio,
+  `filament_movements`, §12.3)
 - `item_id` — **sem foreign key** (campo polimórfico: aponta para `accessories.id` ou
   `packaging.id` conforme `item_type`, uma FK condicional não é representável);
   `register_stock_movement()` valida a existência real do item antes de gravar, via
@@ -969,14 +1102,19 @@ Registro imutável de movimentações — nunca editado, nunca excluído fisicam
 Nota de divergência do esboço original: em vez de três colunas de FK opcionais
 (`filament_spool_id`/`accessory_id`/`packaging_id`, uma preenchida por vez) e uma coluna
 `unit` separada, a implementação real usa um único par polimórfico `item_type`/`item_id`
-(validado pela RPC, não por FK) — decisão tomada para que adicionar `FILAMENT_SPOOL`
-no futuro exija só ampliar um `CHECK`, nunca uma migração destrutiva de coluna. `unit`
-não existe ainda porque `ACCESSORY`/`PACKAGING` são sempre unidades inteiras nesta
-etapa — quando `FILAMENT_SPOOL` (gramas, fracionável) for adicionado, esta decisão
-precisará ser revisitada (ou uma coluna `unit`, ou `quantity_delta` como `numeric` só
-para esse `item_type`) — registrado aqui como ponto de atenção para o Incremento 5, não
-resolvido agora. `notes` foi renomeado para `reason` (mais preciso: nem toda
-movimentação tem uma "nota" livre, mas as que exigem justificativa exigem um "motivo").
+(validado pela RPC, não por FK). `notes` foi renomeado para `reason` (mais preciso: nem
+toda movimentação tem uma "nota" livre, mas as que exigem justificativa exigem um
+"motivo").
+
+**Decisão revisitada no Incremento 4 (2026-08-27, filamentos):** a ideia original de
+"`FILAMENT_SPOOL` no futuro só amplia o `CHECK`" (registrada nas primeiras versões deste
+comentário) **não foi seguida** — o diagnóstico técnico do Incremento 4 concluiu que
+`quantity_delta`/`balance_before`/`balance_after` sendo `integer` (adequado só para
+unidades discretas) e `item_id` sendo um único FK polimórfico (sem espaço para tipo E
+rolo ao mesmo tempo) tornariam essa extensão arriscada sobre uma tabela já em produção e
+validada manualmente. Filamentos passaram a ter um ledger **próprio**
+(`filament_movements`, §12.3) — `stock_movements` permanece intocada, só para
+`ACCESSORY`/`PACKAGING`.
 
 ### Tipos implementados nesta etapa (`movement_type`)
 
@@ -984,8 +1122,11 @@ Entradas: `INITIAL_BALANCE`, `PURCHASE`, `RETURN`, `POSITIVE_ADJUSTMENT`.
 Saídas: `LOSS`, `SAMPLE_DONATION`, `INTERNAL_USE`, `NEGATIVE_ADJUSTMENT`.
 
 `RESERVATION`/`RELEASE`/`CONSUMPTION` (reserva/liberação/consumo automático pelo
-pedido) e `WEIGHING` (pesagem) **não são aceitos ainda** por `register_stock_movement()`
-— ficam para os Incrementos 5/7/8, quando o `CHECK` de `movement_type` for ampliado.
+pedido) **não são aceitos ainda** por `register_stock_movement()` — ficam para um
+incremento futuro, quando o `CHECK` de `movement_type` for ampliado. `WEIGHING`
+(pesagem) não se aplica a esta tabela — filamentos têm sua própria pesagem
+(`register_filament_weighing`, §12.3), Acessórios/Embalagens não têm pesagem física
+prevista.
 
 ### Função `register_stock_movement()`
 

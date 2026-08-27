@@ -1,11 +1,10 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
-import { AppLayout } from '@/components/layout/AppLayout'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { InventoryItemForm, type InventoryItemFormValues } from '@/components/inventory/InventoryItemForm'
+import { InventoryPageShell, type InventoryArea } from '@/components/inventory/InventoryPageShell'
 import { StockMovementPanel, StockLevelBadge, getStockLevel } from '@/components/inventory/StockMovementPanel'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -484,55 +483,7 @@ function InventoryAreaPanel({
   )
 }
 
-export type InventoryArea = 'acessorios' | 'embalagens'
-
-const INVENTORY_AREA_ITEMS: Array<{ key: InventoryArea; to: string; label: string }> = [
-  { key: 'acessorios', to: '/estoque/acessorios', label: 'Acessórios' },
-  { key: 'embalagens', to: '/estoque/embalagens', label: 'Embalagens' },
-]
-
-// Navegação interna entre as duas áreas — mesmo idioma visual/semântico já
-// usado pela navegação principal (AppLayout): Link + aria-current="page" +
-// cor/peso tipográfico somados (nunca só cor), nunca uma experiência nova.
-function InventoryAreaNav({ area }: { area: InventoryArea }) {
-  return (
-    <nav aria-label="Áreas do Estoque" className="border-border mt-4 flex items-center gap-1 border-b">
-      {INVENTORY_AREA_ITEMS.map((item) => {
-        const isActive = item.key === area
-        return (
-          <Link
-            key={item.key}
-            to={item.to}
-            aria-current={isActive ? 'page' : undefined}
-            className={cn(
-              'focus-visible:ring-brand-accent -mb-px rounded-t-md border-b-2 px-3 py-2 text-sm transition-colors outline-none focus-visible:ring-2',
-              isActive
-                ? 'border-brand-primary text-brand-primary-dark font-medium'
-                : 'border-transparent text-muted-foreground hover:text-foreground font-normal',
-            )}
-          >
-            {item.label}
-          </Link>
-        )
-      })}
-    </nav>
-  )
-}
-
-function InventoryPageShell({ area, children }: { area: InventoryArea; children: React.ReactNode }) {
-  return (
-    <AppLayout>
-      <div className="flex items-center justify-between">
-        <h1 className="font-heading text-2xl font-medium">Estoque</h1>
-      </div>
-      <p className="text-muted-foreground mt-1 text-sm">
-        Consulte os cadastros mestre de acessórios e embalagens usados na composição de produtos.
-      </p>
-      <InventoryAreaNav area={area} />
-      {children}
-    </AppLayout>
-  )
-}
+export type { InventoryArea }
 
 // Um hook por sub-componente (nunca os dois hooks no mesmo componente) —
 // evita disparar useAccessories/usePackaging ao mesmo tempo quando só uma
@@ -1184,6 +1135,10 @@ function PackagingInventoryPage() {
   )
 }
 
-export function InventoryPage({ area }: { area: InventoryArea }) {
+// area="filamentos" nunca chega aqui — App.tsx roteia /estoque/filamentos
+// diretamente para FilamentsInventoryPage (Módulo 3, Incremento 4), que tem
+// forma de dado fundamentalmente diferente (tipo com drill-down de rolos,
+// não uma lista plana) e por isso não reaproveita InventoryAreaPanel.
+export function InventoryPage({ area }: { area: 'acessorios' | 'embalagens' }) {
   return area === 'acessorios' ? <AccessoriesInventoryPage /> : <PackagingInventoryPage />
 }

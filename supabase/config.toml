@@ -421,6 +421,15 @@ verify_jwt = false
 [functions.stock-movements]
 verify_jwt = false
 
+[functions.filament-types]
+verify_jwt = false
+
+[functions.filament-spools]
+verify_jwt = false
+
+[functions.filament-movements]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

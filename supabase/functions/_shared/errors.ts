@@ -195,6 +195,70 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
     "PACKAGING_HAS_STOCK_HISTORY:",
     (message) => new BusinessRuleError(message.replace(/^PACKAGING_HAS_STOCK_HISTORY:\s*/, "")),
   ],
+  // Módulo 3, Incremento 4 (filamentos) — migrations 20260827100000/
+  // 103000/106000/109000. Mesmo critério das entradas acima: mensagens de
+  // defesa em profundidade (create_filament_type/update_filament_type/
+  // create_filament_spool/update_filament_spool/register_filament_movement/
+  // register_filament_weighing/set_product_filaments) mapeadas para 400,
+  // marcadores estáveis de regra de negócio mapeados para 409 com o prefixo
+  // removido da mensagem exibida.
+  ["filament_types.material inválido", (message) => new ValidationError(message)],
+  ["filament_types.manufacturer não pode ser vazio", (message) => new ValidationError(message)],
+  ["filament_types.line não pode ser vazio", (message) => new ValidationError(message)],
+  ["filament_types.commercial_color não pode ser vazio", (message) => new ValidationError(message)],
+  ["update_filament_type: chave(s) não suportada(s)", (message) => new ValidationError(message)],
+  ["update_filament_type: p_patch vazio", (message) => new ValidationError(message)],
+  ["filament_spools.nominal_weight_grams deve ser", (message) => new ValidationError(message)],
+  ["filament_spools.empty_spool_weight_grams não pode ser negativo", (message) => new ValidationError(message)],
+  ["filament_spools.status inválido", (message) => new ValidationError(message)],
+  ["update_filament_spool: chave(s) não suportada(s)", (message) => new ValidationError(message)],
+  ["update_filament_spool: p_patch vazio", (message) => new ValidationError(message)],
+  ["register_filament_movement: movement_type WEIGHING_ADJUSTMENT", (message) => new ValidationError(message)],
+  ["filament_movements.movement_type inválido", (message) => new ValidationError(message)],
+  ["register_filament_movement: p_quantity deve ser", (message) => new ValidationError(message)],
+  ["register_filament_movement: motivo obrigatório", (message) => new ValidationError(message)],
+  ["register_filament_weighing: informe exatamente um dos dois pesos", (message) => new ValidationError(message)],
+  ["register_filament_weighing: motivo obrigatório", (message) => new ValidationError(message)],
+  ["register_filament_weighing: peso bruto medido", (message) => new ValidationError(message)],
+  ["register_filament_weighing: peso líquido resultante", (message) => new ValidationError(message)],
+  ["set_product_filaments: p_filaments deve ser um array", (message) => new ValidationError(message)],
+  ["set_product_filaments: theoretical_weight_grams deve ser", (message) => new ValidationError(message)],
+  [
+    "FILAMENT_TYPE_HAS_SPOOLS:",
+    (message) => new BusinessRuleError(message.replace(/^FILAMENT_TYPE_HAS_SPOOLS:\s*/, "")),
+  ],
+  [
+    "FILAMENT_TYPE_HAS_COMPOSITION:",
+    (message) => new BusinessRuleError(message.replace(/^FILAMENT_TYPE_HAS_COMPOSITION:\s*/, "")),
+  ],
+  [
+    "FILAMENT_SPOOL_HAS_MOVEMENTS:",
+    (message) => new BusinessRuleError(message.replace(/^FILAMENT_SPOOL_HAS_MOVEMENTS:\s*/, "")),
+  ],
+  [
+    "FILAMENT_SPOOL_DISCARD_IS_FINAL:",
+    (message) => new BusinessRuleError(message.replace(/^FILAMENT_SPOOL_DISCARD_IS_FINAL:\s*/, "")),
+  ],
+  [
+    "FILAMENT_SPOOL_NOMINAL_BELOW_BALANCE:",
+    (message) => new BusinessRuleError(message.replace(/^FILAMENT_SPOOL_NOMINAL_BELOW_BALANCE:\s*/, "")),
+  ],
+  [
+    "FILAMENT_SPOOL_DISCARDED:",
+    (message) => new BusinessRuleError(message.replace(/^FILAMENT_SPOOL_DISCARDED:\s*/, "")),
+  ],
+  [
+    "FILAMENT_INSUFFICIENT_BALANCE:",
+    (message) => new BusinessRuleError(message.replace(/^FILAMENT_INSUFFICIENT_BALANCE:\s*/, "")),
+  ],
+  [
+    "FILAMENT_EXCEEDS_NOMINAL:",
+    (message) => new BusinessRuleError(message.replace(/^FILAMENT_EXCEEDS_NOMINAL:\s*/, "")),
+  ],
+  [
+    "FILAMENT_TARE_UNKNOWN:",
+    (message) => new BusinessRuleError(message.replace(/^FILAMENT_TARE_UNKNOWN:\s*/, "")),
+  ],
 ];
 
 export function mapPgError(err: PgErrorLike): AppError {

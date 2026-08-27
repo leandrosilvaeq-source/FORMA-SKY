@@ -10,6 +10,7 @@ import { ProductDetailPage } from '@/pages/products/ProductDetailPage'
 import { CompaniesPage } from '@/pages/companies/CompaniesPage'
 import { OrdersPage } from '@/pages/orders/OrdersPage'
 import { InventoryPage } from '@/pages/InventoryPage'
+import { FilamentsInventoryPage } from '@/pages/FilamentsInventoryPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
 
 function App() {
@@ -93,6 +94,18 @@ function App() {
           element={
             <ProtectedRoute>
               <InventoryPage area="embalagens" />
+            </ProtectedRoute>
+          }
+        />
+        {/* Módulo 3, Incremento 4 — MVP local de filamentos (ainda não
+            publicado/validado; regras sujeitas a revisão). Componente
+            próprio (FilamentsInventoryPage), não InventoryPage — forma de
+            dado diferente (tipo com drill-down de rolos). */}
+        <Route
+          path="/estoque/filamentos"
+          element={
+            <ProtectedRoute>
+              <FilamentsInventoryPage />
             </ProtectedRoute>
           }
         />

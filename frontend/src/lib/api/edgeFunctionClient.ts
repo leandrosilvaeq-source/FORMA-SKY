@@ -19,7 +19,9 @@ const PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 // Incrementos 2 e 3 — backend protegido dos cadastros mestre de Acessórios
 // e Embalagens, docs/05_ROADMAP_MODULOS.md §9) + `stock-movements` (Módulo
 // 3, Incremento 1 — register_stock_movement, docs/05_ROADMAP_MODULOS.md
-// §9b) (supabase/config.toml [functions.*]).
+// §9b) + `filament-types`/`filament-spools`/`filament-movements` (Módulo 3,
+// Incremento 4 — MVP de filamentos, ainda NÃO publicadas — rodam só
+// localmente nesta rodada) (supabase/config.toml [functions.*]).
 export type EdgeFunctionName =
   | 'products'
   | 'orders'
@@ -30,6 +32,9 @@ export type EdgeFunctionName =
   | 'accessories'
   | 'packaging'
   | 'stock-movements'
+  | 'filament-types'
+  | 'filament-spools'
+  | 'filament-movements'
 
 type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
 

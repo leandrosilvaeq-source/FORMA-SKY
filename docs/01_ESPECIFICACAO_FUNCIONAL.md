@@ -411,34 +411,52 @@ Estoque mínimo inicial:
 - Demais cores: **300 g**.
 
 **Regras operacionais do MVP — versão inicial para validação, sujeitas a revisão após o
-teste prático do usuário.** Aprovadas em 2026-08-27, contexto para a continuação do
-Módulo 3 — implementação de filamentos ainda **não** iniciada (nenhum código,
-Incremento 1 cobriu só Acessórios/Embalagens), ver `05_ROADMAP_MODULOS.md` §9b:
+teste prático do usuário.** Aprovadas em 2026-08-27. **Atualização (mesmo dia,
+continuação — Incremento 4):** implementação **local** dos tipos/rolos/movimentações de
+filamento concluída (migrations, Edge Functions e interface — ver
+`05_ROADMAP_MODULOS.md` §9b); **ainda não aplicada ao Supabase remoto nem validada
+manualmente pelo usuário**:
 
 - Um **tipo de filamento** é definido pela combinação **material + fabricante + linha +
   cor** — não existe "tipo" sem essas quatro dimensões.
+- Materiais aceitos: **PLA, PETG, TPU** — **ABS explicitamente fora do MVP aprovado**
+  (não é uma opção em nenhum formulário nem aceito pelo backend).
+- Linha continua **livre** (texto cadastrável, sem enum travado no banco) — as 5
+  sugeridas acima aparecem como atalhos na interface, nunca como limite.
 - Podem existir **vários rolos físicos do mesmo tipo** (mesmo material/fabricante/
-  linha/cor), controlados individualmente.
+  linha/cor), controlados individualmente, cada um com saldo próprio.
 - **Peso nominal do rolo é livre** (não há um valor fixo obrigatório) — 1.000 g pode ser
-  sugerido como valor inicial pela interface, mas o operador pode informar qualquer
-  outro peso. Corrige uma suposição anterior desta rodada de que "rolos normalmente com
-  1 kg" seria uma regra fixa de schema — não é; é só uma sugestão de preenchimento.
+  sugerido como valor inicial pela interface (junto de 250/500/750 g), mas o operador
+  pode informar qualquer outro peso positivo.
+- Cada rolo recebe um **identificador interno gerado automaticamente** (formato
+  `RL-XX-YYY`, mesmo padrão de `orders.order_number`).
+- Status mínimos do rolo: **LACRADO, ABERTO, ESGOTADO, DESCARTADO** (4 valores,
+  substituindo a proposta anterior de 5 valores minúsculos de `03_MODELO_BANCO_DADOS.md`
+  §12, nunca implementada — ver nota de divergência lá). DESCARTADO é terminal: nenhum
+  rolo descartado é reativado automaticamente.
 - A ficha do produto deverá **futuramente** aceitar **múltiplos filamentos/cores**, cada
-  um com seu próprio peso — não um único peso agregado por produto (ver
-  `03_MODELO_BANCO_DADOS.md` §9.1, nota sobre `default_weight_grams`).
+  um com seu próprio peso teórico — o MODELO para isso (`product_filaments`) já existe
+  localmente, mas o **consumo automático continua fora de escopo** (nenhuma automação
+  lê essa tabela ainda).
 
 ---
 
 # 17. Tara de carretéis
 
-Cadastro:
+**Atualização (2026-08-27, Incremento 4):** decisão de implementação — a tara passou a
+ser um **campo do próprio rolo** (`empty_spool_weight_grams`, opcional), não um cadastro
+separado por fabricante como sugerido originalmente abaixo. Simplifica o MVP sem
+bloquear nada: uma tabela de tara por fabricante pode ser adicionada depois como
+conveniência, sem exigir mudança de modelo.
 
-- fabricante;
-- peso vazio em gramas.
+Cadastro (campo do rolo, não mais um cadastro à parte):
 
-**Peso líquido = peso medido − tara**.
+- peso vazio em gramas, quando conhecido.
 
-Caso a tara não esteja cadastrada, a Sky deverá solicitar o dado ou gerar pendência.
+**Peso líquido = peso bruto medido − tara**.
+
+Quando a tara **não** é conhecida, a interface não a inventa: aceita o **peso líquido
+disponível informado diretamente** pelo operador, sinalizando que é uma estimativa.
 
 ---
 
@@ -483,26 +501,38 @@ depois que o usuário operar o sistema de verdade. **Nenhuma regra desta lista d
 lida como validada** — só como o ponto de partida aprovado para implementação.
 Correções futuras, quando necessárias, serão feitas por **novas movimentações e
 migrations** — o ledger e o histórico já gravados **nunca são reescritos**. O Incremento
-1 (único implementado até agora, ver `05_ROADMAP_MODULOS.md` §9b) cobre **somente o
-núcleo seguro de saldo e movimentações manuais** de Acessórios/Embalagens; reserva,
-consumo, cancelamento, pesagem, escolha de rolo e perdas por reimpressão descritos
-abaixo **ainda não têm nenhuma linha de código** — são só a intenção aprovada. O Módulo
-3 só avança para validação operacional real quando existir **interface utilizável**
-(Incremento 2 em diante) — não antes. Ver `03_MODELO_BANCO_DADOS.md` §15.1 e
+1 cobre o núcleo seguro de saldo e movimentações manuais de Acessórios/Embalagens
+(validado manualmente pelo usuário em 2026-08-27); o **Incremento 4 (mesmo dia,
+continuação)** estende o mesmo princípio a **Filamentos**, com um ledger dedicado
+(`filament_movements`, independente de `stock_movements` — grama é fracionário e cada
+linha referencia tipo E rolo, ver decisão de arquitetura em
+`03_MODELO_BANCO_DADOS.md` §12) — implementado **localmente**, ainda **não aplicado ao
+Supabase remoto nem validado manualmente**. Reserva, consumo automático por pedido,
+cancelamento e perdas por reimpressão descritos abaixo **ainda não têm nenhuma linha de
+código** — são só a intenção aprovada. Ver `03_MODELO_BANCO_DADOS.md` §12 e
 `05_ROADMAP_MODULOS.md` para o estado técnico atual:
 
 - **Estoque inicial**: registrado pela interface como movimentação "Saldo inicial",
-  preservando histórico (nunca um `UPDATE` direto de saldo).
-- **Entradas permitidas**: Saldo inicial, Compra, Devolução, Ajuste positivo.
-- **Saídas manuais permitidas**: Perda/Avaria, Amostra/Doação, Uso interno, Ajuste
-  negativo.
+  preservando histórico (nunca um `UPDATE` direto de saldo). Para filamentos, é sempre
+  **por rolo** (não por tipo) — cada rolo tem seu próprio saldo inicial.
+- **Entradas permitidas**: Saldo inicial, Compra, Devolução, Ajuste positivo (Acessórios/
+  Embalagens/Filamentos, mesmos 4 nomes).
+- **Saídas manuais permitidas**: Acessórios/Embalagens — Perda/Avaria, Amostra/Doação,
+  Uso interno, Ajuste negativo. Filamentos — **Consumo manual, Perda/Avaria,
+  Amostra/Teste, Ajuste negativo** (nomes próprios, mesma função).
 - **Saldo negativo é proibido** — toda saída que excederia o saldo físico disponível é
-  bloqueada.
+  bloqueada, em qualquer categoria.
+- **Teto do peso nominal (filamentos, Incremento 4)**: entradas de rotina
+  (Saldo inicial/Compra/Devolução) nunca deixam o peso disponível de um rolo ultrapassar
+  seu peso nominal cadastrado; a família de ajuste (Ajuste positivo/negativo/pesagem) é
+  isenta desse teto — é o mecanismo formal para registrar um peso real acima do nominal,
+  sempre com motivo documentado.
 - **Reserva**: ocorrerá quando o pedido entrar na **Fila de produção** (ainda não
   implementado — ver gatilho pendente em `05_ROADMAP_MODULOS.md` §6).
 - **Consumo de acessórios**: ao **iniciar a produção** (ainda não implementado).
 - **Consumo de filamento**: pelo **peso teórico**, ao **iniciar a produção** (ainda não
-  implementado — depende do cadastro de filamentos, fora do escopo desta rodada).
+  implementado — o MODELO de composição por filamento (`product_filaments`) já existe
+  localmente desde o Incremento 4, mas nenhuma automação de consumo o lê ainda).
 - **Consumo de embalagens**: quando o pedido passar para **Aguardando entrega** (ainda
   não implementado).
 - **Cancelamento antes do consumo**: libera a reserva automaticamente (ainda não
@@ -511,10 +541,16 @@ abaixo **ainda não têm nenhuma linha de código** — são só a intenção ap
   devolução é sempre manual (decisão deliberada, evita estorno automático incorreto).
 - **Falha/reimpressão**: perda e consumo adicional são lançados **manualmente** até
   existir o Módulo de Produção — nenhuma automação é assumida antes disso.
-- **Escolha de rolo de filamento** (quando implementado): primeiro o rolo já aberto;
-  depois o mais antigo. O consumo pode ser dividido entre vários rolos do mesmo tipo.
-- **Pesagem** (quando implementada): registra o peso físico e gera um ajuste pela
-  diferença — nunca substitui o saldo silenciosamente.
+- **Escolha de rolo de filamento** (quando o consumo automático existir): primeiro o
+  rolo já aberto; depois o mais antigo. O consumo pode ser dividido entre vários rolos do
+  mesmo tipo. Nesta etapa (Incremento 4) a escolha do rolo é sempre **manual** — o
+  operador seleciona qual rolo movimentar diretamente na interface.
+- **Pesagem (implementada localmente no Incremento 4)**: "Registrar pesagem" calcula o
+  peso disponível a partir do peso bruto medido menos a tara do rolo (quando conhecida)
+  ou aceita o peso líquido informado diretamente (quando não é — nunca inventa uma
+  tara); gera um ajuste pela diferença (`WEIGHING_ADJUSTMENT`), preservando saldo
+  anterior/posterior — nunca substitui o saldo silenciosamente. Motivo é sempre
+  obrigatório; nenhuma tolerância percentual foi definida ou inventada nesta rodada.
 - **Perdas exigem motivo** em todos os casos, sem exceção.
 - **Movimentações automáticas** (reserva/consumo, ainda não implementadas) terão
   proteção contra duplicidade por pedido, item e evento — nenhuma pode ser registrada
