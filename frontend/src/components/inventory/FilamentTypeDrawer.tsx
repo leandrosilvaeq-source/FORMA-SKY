@@ -293,36 +293,62 @@ export function FilamentTypeDrawer({ filamentType, onSummaryChanged, onClose }: 
     setIsManageDialogOpen(true)
   }
 
-  // Menu compacto (Editar/Descartar/Excluir ou Arquivar rolo) — reaproveitado
-  // pela tabela (desktop) e pelos cartões (telas pequenas). "Movimentar /
-  // Pesar" e o Switch "Ativo" continuam como controles diretos, fora do
-  // menu, por serem as ações mais usadas (requisito: evitar grande
-  // quantidade de botões lado a lado, mas sem esconder as ações principais).
+  // Menu compacto (Editar/Ativar-ou-desativar/Descartar/Excluir ou Arquivar
+  // rolo) — reaproveitado pela tabela (desktop) e pelos cartões (telas
+  // pequenas). Terceira rodada de validação manual (2026-08-28): a coluna
+  // "Ativo" (Switch) e o botão largo "Movimentar / Pesar" foram removidos —
+  // ativar/desativar virou item deste menu, e o botão de gatilho agora é só
+  // o ícone de três pontos (sem texto visível), para que a célula de ações
+  // caiba em ~720px de largura de diálogo sem sobrepor o botão "Gerenciar".
   function SpoolActionsMenu({ spool }: { spool: FilamentSpool }) {
     const isDiscarded = spool.status === 'DESCARTADO'
     return (
       <DropdownMenu>
         <DropdownMenuTrigger
-          aria-label={`Mais ações — rolo ${spool.code}`}
+          aria-label={`Mais ações para o rolo ${spool.code}`}
           render={
             <Button
               variant="outline"
-              size="sm"
-              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+              size="icon-sm"
+              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0"
             />
           }
         >
           <EllipsisIcon className="size-4" aria-hidden="true" />
-          Mais ações
         </DropdownMenuTrigger>
         <DropdownMenuContent>
           <DropdownMenuItem onClick={() => openEditDialog(spool)}>Editar</DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={pendingToggleId === spool.id}
+            onClick={() => openToggleDialog(spool)}
+          >
+            {spool.is_active ? 'Desativar' : 'Ativar'}
+          </DropdownMenuItem>
           {!isDiscarded && <DropdownMenuItem onClick={() => openDiscardDialog(spool)}>Descartar</DropdownMenuItem>}
           <DropdownMenuItem onClick={() => openDeleteDialog(spool)}>
             {spool.has_movement_history ? 'Arquivar rolo' : 'Excluir rolo'}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+    )
+  }
+
+  // Botão "Gerenciar" (abre o FilamentSpoolPanel — Movimentar / Pesar /
+  // Histórico) — reaproveitado pela tabela e pelos cartões. Para um rolo
+  // arquivado, continua clicável: o painel já restringe sozinho a apenas
+  // consultar o histórico (isArchived/isReadOnly em FilamentSpoolPanel.tsx),
+  // nunca bloqueado aqui na linha.
+  function ManageSpoolButton({ spool }: { spool: FilamentSpool }) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => openManageDialog(spool)}
+        aria-label={`Gerenciar rolo ${spool.code} — movimentar, pesar ou consultar histórico`}
+        className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0"
+      >
+        Gerenciar
+      </Button>
     )
   }
 
@@ -402,113 +428,80 @@ export function FilamentTypeDrawer({ filamentType, onSummaryChanged, onClose }: 
         </p>
       ) : (
         <>
-          {/* Tabela: só a partir de sm (≥640px) — 7 colunas compactas
-              (peso nominal/disponível/% restante mesclados numa só célula,
-              ações secundárias num menu) cabem sem min-width forçado,
-              nunca provocando rolagem horizontal em resolução normal de
-              notebook/desktop (achado real da segunda rodada de validação
-              manual, 2026-08-28). overflow-x-auto continua como rede de
-              segurança para uma janela genuinamente estreita. */}
-          <div className="hidden overflow-x-auto sm:block">
+          {/* Tabela: só a partir de sm (≥640px) — 5 colunas semânticas
+              (Identificador, Peso, Status, Abertura, Ações). Terceira rodada
+              de validação manual (2026-08-28): a coluna "Ativo" (Switch) foi
+              removida — ativo/arquivado agora aparece como badge junto ao
+              Status; e as DUAS colunas de ação ("Movimentar / Pesar" +
+              três-pontos) viraram UMA só (Gerenciar + três-pontos, num
+              único flex com gap), causa raiz real do botão sobreposto e da
+              rolagem horizontal num diálogo de ~720px. Sem overflow-x-auto
+              próprio nem min-w no <Table>: table-fixed + larguras
+              percentuais bastam porque o conteúdo de cada célula agora cabe
+              genuinamente no orçamento de ~720px — não escondemos rolagem
+              com overflow-x-hidden, simplesmente deixou de haver conteúdo
+              que precise rolar. */}
+          <div className="hidden sm:block">
             <Table className="table-fixed text-sm">
               <TableHeader>
                 <TableRow>
                   <TableHead className="h-auto w-[16%] py-2 whitespace-normal">Identificador</TableHead>
-                  <TableHead className="h-auto w-[22%] py-2 whitespace-normal">Peso</TableHead>
-                  <TableHead className="h-auto w-[14%] py-2 whitespace-normal">Status</TableHead>
-                  <TableHead className="h-auto w-[12%] py-2 whitespace-normal">Abertura</TableHead>
-                  <TableHead className="h-auto w-[9%] py-2 whitespace-normal">Ativo</TableHead>
-                  <TableHead className="h-auto w-[15%] py-2" />
-                  <TableHead className="h-auto w-[12%] py-2" />
+                  <TableHead className="h-auto w-[26%] py-2 whitespace-normal">Peso</TableHead>
+                  <TableHead className="h-auto w-[18%] py-2 whitespace-normal">Status</TableHead>
+                  <TableHead className="h-auto w-[14%] py-2 whitespace-normal">Abertura</TableHead>
+                  <TableHead className="h-auto w-[26%] py-2 text-right whitespace-normal">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {visibleSpools.map((spool) => {
-                  const isArchived = !spool.is_active
-                  return (
-                    <TableRow key={spool.id} className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft">
-                      <TableCell className="truncate" title={spool.code}>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {spool.code}
-                          {isArchived && <ArchivedBadge />}
-                        </div>
-                      </TableCell>
-                      <TableCell className="tabular-nums">{formatPeso(spool)}</TableCell>
-                      <TableCell>{spool.status}</TableCell>
-                      <TableCell>{formatDate(spool.opened_at ? spool.opened_at.slice(0, 10) : null)}</TableCell>
-                      <TableCell>
-                        <Switch
-                          checked={spool.is_active}
-                          disabled={pendingToggleId === spool.id}
-                          onCheckedChange={() => openToggleDialog(spool)}
-                          aria-label={`${spool.is_active ? 'Arquivar' : 'Ativar'} rolo ${spool.code}`}
-                          className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => openManageDialog(spool)}
-                          aria-label={`Movimentar, pesar ou consultar histórico — rolo ${spool.code}`}
-                          className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-                        >
-                          Movimentar / Pesar
-                        </Button>
-                      </TableCell>
-                      <TableCell>
+                {visibleSpools.map((spool) => (
+                  <TableRow key={spool.id} className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft">
+                    <TableCell className="truncate" title={spool.code}>
+                      {spool.code}
+                    </TableCell>
+                    <TableCell className="tabular-nums">{formatPeso(spool)}</TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap items-center gap-1.5 whitespace-normal">
+                        <span>{spool.status}</span>
+                        {!spool.is_active && <ArchivedBadge />}
+                      </div>
+                    </TableCell>
+                    <TableCell>{formatDate(spool.opened_at ? spool.opened_at.slice(0, 10) : null)}</TableCell>
+                    <TableCell>
+                      <div className="flex min-w-0 items-center justify-end gap-2">
+                        <ManageSpoolButton spool={spool} />
                         <SpoolActionsMenu spool={spool} />
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
               </TableBody>
             </Table>
           </div>
 
           {/* Cartões: abaixo de sm — cada rolo vira um bloco empilhado, sem
               depender de uma tabela larga (requisito explícito da segunda
-              rodada de validação manual). */}
+              rodada de validação manual, mantido na terceira). Gerenciar e
+              três-pontos ficam em linha própria, igual à tabela. */}
           <div className="flex flex-col gap-3 sm:hidden">
-            {visibleSpools.map((spool) => {
-              const isArchived = !spool.is_active
-              return (
-                <Card key={spool.id} size="sm">
-                  <CardContent className="flex flex-col gap-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="font-medium">{spool.code}</span>
-                        {isArchived && <ArchivedBadge />}
-                      </div>
-                      <Switch
-                        checked={spool.is_active}
-                        disabled={pendingToggleId === spool.id}
-                        onCheckedChange={() => openToggleDialog(spool)}
-                        aria-label={`${spool.is_active ? 'Arquivar' : 'Ativar'} rolo ${spool.code}`}
-                        className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
-                      />
-                    </div>
-                    <div className="text-muted-foreground grid grid-cols-2 gap-1 text-xs">
-                      <span>Peso: {formatPeso(spool)}</span>
-                      <span>Status: {spool.status}</span>
-                      <span>Abertura: {formatDate(spool.opened_at ? spool.opened_at.slice(0, 10) : null)}</span>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => openManageDialog(spool)}
-                        aria-label={`Movimentar, pesar ou consultar histórico — rolo ${spool.code}`}
-                        className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-                      >
-                        Movimentar / Pesar
-                      </Button>
-                      <SpoolActionsMenu spool={spool} />
-                    </div>
-                  </CardContent>
-                </Card>
-              )
-            })}
+            {visibleSpools.map((spool) => (
+              <Card key={spool.id} size="sm">
+                <CardContent className="flex flex-col gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-medium">{spool.code}</span>
+                    {!spool.is_active && <ArchivedBadge />}
+                  </div>
+                  <div className="text-muted-foreground grid grid-cols-2 gap-1 text-xs">
+                    <span>Peso: {formatPeso(spool)}</span>
+                    <span>Status: {spool.status}</span>
+                    <span>Abertura: {formatDate(spool.opened_at ? spool.opened_at.slice(0, 10) : null)}</span>
+                  </div>
+                  <div className="flex items-center justify-end gap-2">
+                    <ManageSpoolButton spool={spool} />
+                    <SpoolActionsMenu spool={spool} />
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </div>
         </>
       )}

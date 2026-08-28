@@ -136,17 +136,25 @@ function renderPage() {
 // tempo — uma <table> (classe "hidden sm:block") e uma lista de cartões
 // (classe "sm:hidden") — a alternância entre as duas é só CSS/media query,
 // que o jsdom não avalia; as duas ficam presentes no DOM de teste ao mesmo
-// tempo. Interações por linha (código do rolo, botão Movimentar/Pesar,
-// switch Ativo, menu Mais ações) precisam ser escopadas à tabela
-// especificamente para não colidir com o cartão espelhado — helper único
-// para não repetir isso em cada teste.
+// tempo. Interações por linha (código do rolo, botão Gerenciar, menu Mais
+// ações) precisam ser escopadas à tabela especificamente para não colidir
+// com o cartão espelhado — helper único para não repetir isso em cada teste.
 function getSpoolsTable(dialog: HTMLElement): HTMLElement {
   return within(dialog).getByRole('table')
 }
 
 async function openMoreActionsMenu(user: ReturnType<typeof userEvent.setup>, table: HTMLElement, spoolCode: string) {
-  await user.click(within(table).getByRole('button', { name: `Mais ações — rolo ${spoolCode}` }))
+  await user.click(within(table).getByRole('button', { name: `Mais ações para o rolo ${spoolCode}` }))
   return screen
+}
+
+// Botão "Gerenciar" (abre Movimentar/Pesar/Histórico) — terceira rodada de
+// validação manual (2026-08-28): substituiu o antigo botão largo
+// "Movimentar / Pesar" por um rótulo curto, com o restante do contexto só
+// no aria-label, para caber ao lado do menu "Mais ações" sem sobrepor em
+// ~720px de largura de diálogo.
+function getManageButton(table: HTMLElement, spoolCode: string) {
+  return within(table).getByRole('button', { name: new RegExp(`^gerenciar rolo ${spoolCode}`, 'i') })
 }
 
 describe('FilamentsInventoryPage', () => {
@@ -643,7 +651,7 @@ describe('FilamentsInventoryPage', () => {
     expect(within(getSpoolsTable(dialog)).getByText('RL-26-002')).toBeInTheDocument()
   })
 
-  it('rolo arquivado: "Movimentar / Pesar" continua clicável (histórico precisa continuar acessível), mas o painel mostra mensagem somente leitura, sem formulários', async () => {
+  it('rolo arquivado: "Gerenciar" continua clicável (histórico precisa continuar acessível), mas o painel mostra mensagem somente leitura, sem formulários', async () => {
     mockTypes([typeFixture()])
     mockSpools([spoolFixture({ is_active: false })])
     renderPage()
@@ -652,7 +660,7 @@ describe('FilamentsInventoryPage', () => {
     await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
     const dialog = screen.getByRole('dialog', { name: 'Rolos do tipo' })
     await user.click(within(dialog).getByRole('switch', { name: 'Mostrar arquivados' }))
-    await user.click(within(getSpoolsTable(dialog)).getByRole('button', { name: /movimentar, pesar ou consultar histórico/i }))
+    await user.click(getManageButton(getSpoolsTable(dialog), 'RL-26-001'))
 
     expect(screen.getByText(/está arquivado e não aceita movimentar ou pesar/i)).toBeInTheDocument()
     expect(screen.queryByRole('radiogroup', { name: 'Ação' })).not.toBeInTheDocument()
@@ -687,6 +695,119 @@ describe('FilamentsInventoryPage', () => {
     // min-width, só table-fixed com larguras percentuais.
     const table = getSpoolsTable(dialog)
     expect(table.className).not.toMatch(/min-w-\[/)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Layout da linha de rolo — TERCEIRA rodada de validação manual
+  // (2026-08-28): num diálogo de ~720px de largura, a versão anterior (7
+  // colunas, incluindo uma coluna "Ativo" com Switch e um botão largo
+  // "Movimentar / Pesar" numa célula separada do menu "Mais ações") ainda
+  // rolava horizontalmente e tinha os dois botões de ação sobrepostos. A
+  // correção reduziu a tabela a 5 colunas semânticas e uniu as duas ações
+  // secundárias (Gerenciar + Mais ações) numa única célula, num único flex
+  // com gap — nunca posicionamento absoluto, nunca escondendo rolagem
+  // atrás de overflow-x-hidden.
+  // ---------------------------------------------------------------------------
+
+  it('a tabela de rolos tem exatamente 5 colunas (Identificador, Peso, Status, Abertura, Ações) — sem coluna "Ativo" separada', async () => {
+    mockTypes([typeFixture()])
+    mockSpools([spoolFixture()])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+    const dialog = screen.getByRole('dialog', { name: 'Rolos do tipo' })
+    const table = getSpoolsTable(dialog)
+
+    const headers = within(table).getAllByRole('columnheader')
+    expect(headers.map((header) => header.textContent)).toEqual(['Identificador', 'Peso', 'Status', 'Abertura', 'Ações'])
+  })
+
+  it('a tabela de rolos não usa overflow-x-auto/overflow-x-scroll nem min-w — table-fixed com w-full', async () => {
+    mockTypes([typeFixture()])
+    mockSpools([spoolFixture()])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+    const dialog = screen.getByRole('dialog', { name: 'Rolos do tipo' })
+    const table = getSpoolsTable(dialog)
+
+    // O wrapper que esconde/mostra a tabela por breakpoint não pode mais
+    // carregar overflow-x-auto/overflow-x-scroll — a correção não esconde a
+    // rolagem, elimina a necessidade dela.
+    const tableWrapper = table.closest('.hidden')
+    expect(tableWrapper?.className).not.toMatch(/overflow-x-auto/)
+    expect(tableWrapper?.className).not.toMatch(/overflow-x-scroll/)
+    expect(table.className).not.toMatch(/min-w-\[/)
+    expect(table.className).toContain('table-fixed')
+  })
+
+  it('a linha do rolo mostra o botão "Gerenciar" (compacto) e o botão "Mais ações" (só ícone) lado a lado, sem repetir "Movimentar / Pesar" nem posicionamento absoluto', async () => {
+    mockTypes([typeFixture()])
+    mockSpools([spoolFixture()])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+    const dialog = screen.getByRole('dialog', { name: 'Rolos do tipo' })
+    const table = getSpoolsTable(dialog)
+
+    const manageButton = getManageButton(table, 'RL-26-001')
+    expect(manageButton).toHaveTextContent('Gerenciar')
+    expect(within(table).queryByText('Movimentar / Pesar')).not.toBeInTheDocument()
+
+    const moreActionsButton = within(table).getByRole('button', { name: 'Mais ações para o rolo RL-26-001' })
+    expect(within(moreActionsButton).queryByText('Mais ações')).not.toBeInTheDocument()
+
+    const actionsCell = manageButton.closest('td')
+    expect(actionsCell).not.toBeNull()
+    expect(within(actionsCell as HTMLElement).getByRole('button', { name: 'Mais ações para o rolo RL-26-001' })).toBe(moreActionsButton)
+    const actionsContainer = manageButton.parentElement
+    expect(actionsContainer?.className).toContain('flex')
+    expect(actionsContainer?.className).toContain('gap-2')
+    expect(actionsContainer?.className).not.toContain('absolute')
+    expect(manageButton.className).not.toContain('absolute')
+    expect(moreActionsButton.className).not.toContain('absolute')
+  })
+
+  it('o menu "Mais ações" contém Editar, Ativar/Desativar, Descartar e Excluir/Arquivar rolo — nunca repete Movimentar/Pesar', async () => {
+    mockTypes([typeFixture()])
+    mockSpools([spoolFixture({ has_movement_history: false })])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+    const dialog = screen.getByRole('dialog', { name: 'Rolos do tipo' })
+    await openMoreActionsMenu(user, getSpoolsTable(dialog), 'RL-26-001')
+
+    expect(await screen.findByRole('menuitem', { name: 'Editar' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Desativar' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Descartar' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Excluir rolo' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /movimentar/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /pesar/i })).not.toBeInTheDocument()
+  })
+
+  it('o item "Ativar"/"Desativar" do menu aciona o mesmo fluxo de confirmação que antes vivia na coluna "Ativo"', async () => {
+    const typesRefetch = vi.fn()
+    const update = vi.fn().mockResolvedValue(spoolFixture({ is_active: false }))
+    mockTypes([typeFixture()], { refetch: typesRefetch })
+    mockSpools([spoolFixture({ is_active: true })], { update })
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+    const dialog = screen.getByRole('dialog', { name: 'Rolos do tipo' })
+    await openMoreActionsMenu(user, getSpoolsTable(dialog), 'RL-26-001')
+    await user.click(await screen.findByRole('menuitem', { name: 'Desativar' }))
+
+    const confirmDialog = screen.getByRole('dialog', { name: 'Arquivar rolo' })
+    await user.click(within(confirmDialog).getByRole('button', { name: /^arquivar$/i }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('s1', { is_active: false }))
+    expect(toastMock.success).toHaveBeenCalledWith('Rolo arquivado.')
+    expect(typesRefetch).toHaveBeenCalledTimes(1)
   })
 
   it('a janela "Movimentar/Pesar/Histórico" usa max-width/max-height/overflow do padrão já estabelecido no projeto', async () => {
