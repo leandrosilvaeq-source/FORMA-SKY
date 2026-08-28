@@ -63,8 +63,15 @@ export function FilamentsInventoryPage() {
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  const [openType, setOpenType] = useState<FilamentTypeSummary | null>(null)
+  // openTypeId (não o objeto inteiro): o resumo exibido no drawer precisa
+  // ficar vivo — derivado de `types` a cada render — para refletir um
+  // refetch() disparado de dentro do drawer (ver onSummaryChanged). Um
+  // snapshot congelado no momento do clique nunca atualizaria depois de uma
+  // movimentação feita no painel aninhado (achado real da validação manual,
+  // 2026-08-28: saldo consolidado nunca aparecia atualizado).
+  const [openTypeId, setOpenTypeId] = useState<string | null>(null)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
+  const openType = useMemo(() => types.find((type) => type.filament_type_id === openTypeId) ?? null, [types, openTypeId])
 
   const filteredTypes = useMemo(() => {
     const term = normalizeForSearch(searchTerm)
@@ -162,7 +169,7 @@ export function FilamentsInventoryPage() {
   }
 
   function openDrawer(type: FilamentTypeSummary) {
-    setOpenType(type)
+    setOpenTypeId(type.filament_type_id)
     setIsDrawerOpen(true)
   }
 
@@ -416,14 +423,16 @@ export function FilamentsInventoryPage() {
       </Dialog>
 
       <Dialog open={isDrawerOpen} onOpenChange={setIsDrawerOpen}>
-        <DialogContent className="sm:max-w-4xl">
+        <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Rolos do tipo</DialogTitle>
             <DialogDescription>
               {openType && `${openType.material} · ${openType.manufacturer} · ${openType.line} · ${openType.commercial_color}`}
             </DialogDescription>
           </DialogHeader>
-          {openType && <FilamentTypeDrawer filamentType={openType} onClose={() => setIsDrawerOpen(false)} />}
+          {openType && (
+            <FilamentTypeDrawer filamentType={openType} onSummaryChanged={refetch} onClose={() => setIsDrawerOpen(false)} />
+          )}
         </DialogContent>
       </Dialog>
     </InventoryPageShell>

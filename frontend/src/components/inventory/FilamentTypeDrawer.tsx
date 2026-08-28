@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { FilamentSpoolForm, type FilamentSpoolFormValues } from './FilamentSpoolForm'
 import { FilamentSpoolPanel } from './FilamentSpoolPanel'
+import { StockLevelBadge, getStockLevel } from './StockMovementPanel'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -29,21 +30,46 @@ function typeLabel(type: FilamentTypeSummary): string {
   return `${type.material} · ${type.manufacturer} · ${type.line} · ${type.commercial_color}`
 }
 
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <p className="text-muted-foreground text-xs">{label}</p>
+      <p className="text-sm font-medium">{value}</p>
+    </div>
+  )
+}
+
 export interface FilamentTypeDrawerProps {
   filamentType: FilamentTypeSummary
+  // Chamado após qualquer ação que possa afetar o saldo consolidado do tipo
+  // (criar/editar/ativar/desativar/descartar/excluir/arquivar rolo, e —
+  // repassado ao FilamentSpoolPanel — movimentar/pesar). O chamador
+  // (FilamentsInventoryPage) reaproveita o `refetch` de useFilamentTypes:
+  // o resumo exibido aqui SEMPRE vem de `filamentType`
+  // (vw_filament_type_summary, nunca recalculado em JS) — este callback só
+  // pede ao pai para buscar a versão mais recente desse resumo. Achado real
+  // da validação manual (2026-08-28): sem isso, o saldo consolidado nunca
+  // era atualizado após uma movimentação feita no painel aninhado — a
+  // listagem de tipos e este resumo continuavam mostrando o valor do
+  // carregamento inicial da página.
+  onSummaryChanged: () => void
   onClose: () => void
 }
 
-// Ao abrir um tipo: lista os rolos com identificador, peso nominal, peso
-// disponível, percentual estimado restante, status, data de abertura e
-// ações (requisito 7). "Movimentar"/"Registrar pesagem"/"Consultar
-// histórico" abrem o mesmo FilamentSpoolPanel (painel único com as 3 ações),
-// num diálogo aninhado — mesmo padrão já em produção em
+// Ao abrir um tipo: mostra um resumo consolidado (saldo disponível, rolos,
+// abertos, esgotados, estoque mínimo, situação — sempre vindo do resumo do
+// backend, nunca recalculado aqui) e lista os rolos com identificador, peso
+// nominal, peso disponível, percentual estimado restante, status, data de
+// abertura e ações (requisito 7). "Movimentar"/"Registrar pesagem"/
+// "Consultar histórico" abrem o mesmo FilamentSpoolPanel (painel único com
+// as 3 ações), num diálogo aninhado — mesmo padrão já em produção em
 // OrderManagementPanel.tsx (diálogo dentro de diálogo).
-export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawerProps) {
+export function FilamentTypeDrawer({ filamentType, onSummaryChanged, onClose }: FilamentTypeDrawerProps) {
   const { spools, isLoading, error, refetch, create, update, delete: deleteSpool, setLocalSpoolState } = useFilamentSpools(
     filamentType.filament_type_id,
   )
+
+  const [showArchived, setShowArchived] = useState(false)
 
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
@@ -65,13 +91,32 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
   const [isDiscarding, setIsDiscarding] = useState(false)
   const [discardError, setDiscardError] = useState<string | null>(null)
 
+  // Fluxo de exclusão revisado (validação manual, 2026-08-28): um único
+  // botão "Excluir rolo" por linha. Se a exclusão física for bloqueada pelo
+  // backend (histórico/vínculo — FILAMENT_SPOOL_HAS_MOVEMENTS:, já mapeado
+  // para business_rule/409), o MESMO diálogo pivota para oferecer
+  // "Arquivar rolo" (is_active=false, contrato já existente) em vez de
+  // deixar o usuário num beco sem saída com um erro cru. offerArchive
+  // controla qual dos dois modos o diálogo mostra.
   const [deletingSpool, setDeletingSpool] = useState<FilamentSpool | null>(null)
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [offerArchive, setOfferArchive] = useState(false)
 
   const [managingSpool, setManagingSpool] = useState<FilamentSpool | null>(null)
   const [isManageDialogOpen, setIsManageDialogOpen] = useState(false)
+
+  // "Rolos abertos"/"rolos esgotados" no resumo: uma contagem por status dos
+  // rolos JÁ carregados para a tabela abaixo — não é o mesmo cálculo que
+  // total_available_grams/usable_spool_count (que vêm sempre do resumo do
+  // backend, vw_filament_type_summary, nunca recalculados aqui). Contar
+  // quantas linhas já renderizadas têm um status específico é uma agregação
+  // de exibição comum, não uma segunda fonte de verdade para o saldo.
+  const openCount = useMemo(() => spools.filter((spool) => spool.status === 'ABERTO').length, [spools])
+  const exhaustedCount = useMemo(() => spools.filter((spool) => spool.status === 'ESGOTADO').length, [spools])
+  const visibleSpools = useMemo(() => (showArchived ? spools : spools.filter((spool) => spool.is_active)), [spools, showArchived])
+  const stockLevel = getStockLevel(filamentType.total_available_grams, filamentType.minimum_stock_grams)
 
   async function handleCreateSubmit(values: FilamentSpoolFormValues) {
     setIsSubmittingCreate(true)
@@ -80,6 +125,7 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
       await create(values)
       toast.success('Rolo cadastrado.')
       setIsCreateDialogOpen(false)
+      onSummaryChanged()
     } catch (err) {
       const message = toErrorMessage(err)
       if (err instanceof ApiError && err.type === 'validation') {
@@ -112,6 +158,7 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
       })
       toast.success('Rolo atualizado.')
       setIsEditDialogOpen(false)
+      onSummaryChanged()
     } catch (err) {
       const message = toErrorMessage(err)
       if (err instanceof ApiError && err.type === 'validation') {
@@ -140,6 +187,7 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
       await update(togglingSpool.id, { is_active: willActivate })
       toast.success(`Rolo ${willActivate ? 'ativado' : 'desativado'}.`)
       setIsToggleDialogOpen(false)
+      onSummaryChanged()
     } catch (err) {
       setToggleError(toErrorMessage(err))
     } finally {
@@ -166,6 +214,7 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
       await update(discardingSpool.id, { status: 'DESCARTADO' })
       toast.success('Rolo descartado.')
       setIsDiscardDialogOpen(false)
+      onSummaryChanged()
     } catch (err) {
       setDiscardError(toErrorMessage(err))
     } finally {
@@ -176,9 +225,16 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
   function openDeleteDialog(spool: FilamentSpool) {
     setDeletingSpool(spool)
     setDeleteError(null)
+    setOfferArchive(false)
     setIsDeleteDialogOpen(true)
   }
 
+  // Tenta a exclusão física primeiro (a única forma de saber com certeza se
+  // o rolo tem histórico é perguntar ao backend, que já faz essa checagem
+  // de forma confiável em delete_filament_spool — nunca duplicada aqui).
+  // Bloqueio por vínculo (business_rule/409) pivota o mesmo diálogo para
+  // oferecer arquivamento, em vez de deixar o usuário com um erro sem
+  // próximo passo.
   async function handleConfirmDelete() {
     if (!deletingSpool) return
     setIsDeleting(true)
@@ -187,6 +243,32 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
       await deleteSpool(deletingSpool.id)
       toast.success('Rolo excluído.')
       setIsDeleteDialogOpen(false)
+      onSummaryChanged()
+    } catch (err) {
+      if (err instanceof ApiError && err.type === 'business_rule') {
+        setOfferArchive(true)
+      } else {
+        setDeleteError(toErrorMessage(err))
+      }
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
+  // Arquivamento = is_active=false (contrato já existente, mesmo usado pelo
+  // Switch "Ativo" da tabela) — nunca um hard delete quando há histórico.
+  // Um rolo arquivado sai da lista ativa (a menos que "Mostrar arquivados"
+  // esteja marcado) e do saldo disponível do tipo (vw_filament_type_summary
+  // já exclui is_active=false), mas o histórico permanece consultável.
+  async function handleConfirmArchive() {
+    if (!deletingSpool) return
+    setIsDeleting(true)
+    setDeleteError(null)
+    try {
+      await update(deletingSpool.id, { is_active: false })
+      toast.success('Rolo arquivado.')
+      setIsDeleteDialogOpen(false)
+      onSummaryChanged()
     } catch (err) {
       setDeleteError(toErrorMessage(err))
     } finally {
@@ -217,6 +299,25 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
         </Button>
       </div>
 
+      {/* Resumo consolidado — requisito 3: sempre o resumo devolvido pelo
+          backend (filamentType, vw_filament_type_summary), nunca
+          recalculado aqui. Abertos/Esgotados são contagens de exibição dos
+          rolos já carregados, não uma segunda fonte para o saldo em si. */}
+      <div className="border-brand-primary/20 bg-brand-primary-soft/40 grid grid-cols-2 gap-3 rounded-lg border px-3 py-3 sm:grid-cols-3 lg:grid-cols-6">
+        <Field label="Disponível" value={formatGrams(filamentType.total_available_grams)} />
+        <Field label="Rolos" value={String(filamentType.total_spool_count)} />
+        <Field label="Abertos" value={String(openCount)} />
+        <Field label="Esgotados" value={String(exhaustedCount)} />
+        <Field
+          label="Estoque mínimo"
+          value={filamentType.minimum_stock_grams !== null ? formatGrams(filamentType.minimum_stock_grams) : 'Não informado'}
+        />
+        <div className="flex flex-col gap-0.5">
+          <p className="text-muted-foreground text-xs">Situação</p>
+          <StockLevelBadge level={stockLevel} />
+        </div>
+      </div>
+
       {error && (
         <div
           role="alert"
@@ -229,6 +330,19 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
         </div>
       )}
 
+      {/* Sem aria-label explícito no Switch: o <label> ao redor já provê o
+          nome acessível via aria-labelledby automático do base-ui — passar
+          os dois ao mesmo tempo duplicava o nome computado ("Mostrar
+          arquivados Mostrar arquivados"). */}
+      <label className="flex w-fit items-center gap-2 text-sm">
+        <Switch
+          checked={showArchived}
+          onCheckedChange={(checked) => setShowArchived(checked === true)}
+          className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
+        />
+        Mostrar arquivados
+      </label>
+
       {isLoading ? (
         <div role="status" className="flex flex-col gap-2">
           <Skeleton className="h-8 w-full" />
@@ -238,6 +352,10 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
       ) : spools.length === 0 ? (
         <p role="status" className="text-muted-foreground text-sm">
           Nenhum rolo cadastrado para este tipo.
+        </p>
+      ) : visibleSpools.length === 0 ? (
+        <p role="status" className="text-muted-foreground text-sm">
+          Todos os rolos deste tipo estão arquivados. Marque "Mostrar arquivados" para consultá-los.
         </p>
       ) : (
         <div className="overflow-x-auto">
@@ -255,9 +373,10 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
               </TableRow>
             </TableHeader>
             <TableBody>
-              {spools.map((spool) => {
+              {visibleSpools.map((spool) => {
                 const percentRemaining = Math.round((spool.current_net_weight_grams / spool.nominal_weight_grams) * 100)
                 const isDiscarded = spool.status === 'DESCARTADO'
+                const isArchived = !spool.is_active
                 return (
                   <TableRow key={spool.id} className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft">
                     <TableCell className="truncate" title={spool.code}>
@@ -291,7 +410,13 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
                           variant="outline"
                           size="sm"
                           onClick={() => openManageDialog(spool)}
-                          aria-label={`Movimentar, pesar ou consultar histórico — rolo ${spool.code}`}
+                          disabled={isArchived}
+                          aria-label={
+                            isArchived
+                              ? `Rolo ${spool.code} arquivado — reative para movimentar, pesar ou consultar histórico`
+                              : `Movimentar, pesar ou consultar histórico — rolo ${spool.code}`
+                          }
+                          title={isArchived ? 'Rolo arquivado — reative para movimentar.' : undefined}
                           className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
                         >
                           Movimentar / Pesar
@@ -307,7 +432,7 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
                           onClick={() => openDeleteDialog(spool)}
                           aria-label={`Excluir rolo ${spool.code}`}
                         >
-                          Excluir
+                          Excluir rolo
                         </Button>
                       </div>
                     </TableCell>
@@ -440,10 +565,12 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Excluir rolo</DialogTitle>
+            <DialogTitle>{offerArchive ? 'Arquivar rolo' : 'Excluir rolo'}</DialogTitle>
             <DialogDescription>
-              {deletingSpool &&
-                `Tem certeza que deseja excluir o rolo "${deletingSpool.code}"? Esta ação é permanente. Só é possível quando o rolo não tem nenhuma movimentação registrada.`}
+              {deletingSpool && !offerArchive &&
+                `Tem certeza que deseja excluir o rolo "${deletingSpool.code}"? Esta ação não poderá ser desfeita.`}
+              {deletingSpool && offerArchive &&
+                `O rolo "${deletingSpool.code}" possui histórico de movimentações e não pode ser excluído fisicamente. Deseja arquivá-lo? Um rolo arquivado sai da lista ativa e da quantidade disponível do tipo, mas o histórico continua acessível (use "Mostrar arquivados" para consultá-lo depois).`}
             </DialogDescription>
           </DialogHeader>
           {deleteError && (
@@ -461,15 +588,26 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
             >
               Cancelar
             </Button>
-            <Button type="button" variant="destructive" onClick={() => void handleConfirmDelete()} disabled={isDeleting}>
-              {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
-            </Button>
+            {offerArchive ? (
+              <Button
+                type="button"
+                onClick={() => void handleConfirmArchive()}
+                disabled={isDeleting}
+                className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
+              >
+                {isDeleting ? 'Arquivando...' : 'Arquivar rolo'}
+              </Button>
+            ) : (
+              <Button type="button" variant="destructive" onClick={() => void handleConfirmDelete()} disabled={isDeleting}>
+                {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={isManageDialogOpen} onOpenChange={setIsManageDialogOpen}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Movimentar / Pesar / Histórico</DialogTitle>
             <DialogDescription>{managingSpool?.code}</DialogDescription>
@@ -482,6 +620,7 @@ export function FilamentTypeDrawer({ filamentType, onClose }: FilamentTypeDrawer
               onSpoolChanged={(patch) => {
                 setLocalSpoolState(managingSpool.id, patch)
                 setManagingSpool((current) => (current ? { ...current, ...patch } : current))
+                onSummaryChanged()
               }}
               onClose={() => setIsManageDialogOpen(false)}
             />

@@ -782,6 +782,91 @@ automático de filamento por pedido continua **pendente** (nenhum código). **Pe
 alterado** — mesmo critério já aplicado: falta a validação manual para este trecho do Módulo 3
 reunir os três critérios (backend + interface + validação manual) juntos.
 
+## Incremento 4 — correção de UX pós-validação manual (2026-08-28)
+
+**Primeira validação manual real do usuário na interface de Filamentos.** Resultado: passos 1-10,
+12-17 e 19-22 do checklist **aprovados**; passo 11 (saldo consolidado de 1.300 g esperado após os
+saldos iniciais/entradas dos dois rolos de teste) e passo 18 (saldo consolidado de 950 g esperado
+após consumo/perda/pesagens) **pendentes** — o usuário não encontrou o saldo consolidado nem na
+listagem principal nem em "Rolos do tipo". Observações adicionais: janela "Ver rolos"
+desproporcional; usuário precisa conseguir excluir rolos com confirmação; janela "Movimentar/
+Pesar/Histórico" desproporcional; coluna Data invadindo a coluna Tipo no histórico.
+
+**Diagnóstico do saldo consolidado** — reconstrução completa via consultas **somente leitura**
+contra o remoto `tjhacqreupfqefntjevf`, usando exclusivamente os próprios registros `TESTE%` já
+criados pelo usuário durante a validação (nenhum dado criado por esta auditoria):
+histórico completo de `filament_movements` dos dois rolos de teste confirmou **cada saldo exatamente
+igual ao documentado pelo usuário** — Rolo 1: 0→800 (saldo inicial)→1.000 (entrada 200g)→900
+(consumo 100g)→850 (perda 50g)→750 (pesagem bruto 1000g/tara 250g); Rolo 2: 0→300 (saldo
+inicial)→200 (pesagem líquida direta). Consulta direta a `vw_filament_type_summary` para o tipo de
+teste confirmou o valor agregado correto no estado atual (750g, só o rolo 1 — o rolo 2 havia sido
+consumido a 0 e descartado em passos posteriores do checklist do usuário, fora da janela 750+200).
+**Conclusão: zero erro no banco, na view ou nas RPCs — todas as 6 movimentações/pesagens
+calcularam exatamente certo, no valor certo, na hora certa.** O problema era inteiramente de
+frontend, com duas causas concretas: (1) `FilamentTypeDrawer` ("Rolos do tipo") nunca exibia
+nenhum resumo consolidado — só a tabela de rolos individuais; (2) a listagem principal
+(`FilamentsInventoryPage`) buscava `vw_filament_type_summary` **uma única vez** no carregamento da
+página e nunca era informada quando uma movimentação/pesagem acontecia dentro do painel aninhado
+(`FilamentSpoolPanel`) — o `total_available_grams` exibido ficava permanentemente preso ao valor do
+carregamento inicial (tipicamente 0g, antes de qualquer rolo existir). Nenhuma correção foi feita
+diretamente no banco — o saldo já estava certo o tempo todo.
+
+**Correções de frontend** (nenhuma migration, nenhuma Edge Function, nenhum objeto remoto tocado):
+
+- `FilamentsInventoryPage.tsx` — `openType` deixou de ser um snapshot congelado no momento do
+  clique em "Ver rolos": agora é derivado (`types.find(...)`) do array `types` a cada render, e um
+  novo prop `onSummaryChanged={refetch}` é repassado ao drawer. Qualquer ação que possa afetar o
+  saldo do tipo agora aciona um refetch de `vw_filament_type_summary` — a listagem e o drawer
+  passam a refletir o valor real imediatamente após a ação (requisito explícito: nunca recalcular
+  o saldo em JS, sempre usar o resumo devolvido pelo backend).
+- `FilamentTypeDrawer.tsx` — novo bloco de resumo no topo (Disponível, Rolos, Abertos, Esgotados,
+  Estoque mínimo, Situação): Disponível/Estoque mínimo/Situação vêm sempre de `filamentType`
+  (prop, nunca recalculado); Abertos/Esgotados são uma contagem de exibição dos rolos já
+  carregados para a própria tabela (não uma segunda fonte de saldo). `onSummaryChanged` é chamado
+  após criar/editar/ativar-desativar/descartar/excluir/arquivar um rolo, e repassado ao
+  `FilamentSpoolPanel` para ser chamado também após uma movimentação/pesagem bem-sucedida.
+- Fluxo de exclusão revisado: um único botão "Excluir rolo" por linha, sempre com confirmação
+  explícita ("Tem certeza..."). Tenta a exclusão física primeiro (via `delete_filament_spool`, já
+  existente, que já sabe com certeza se há histórico vinculado — nunca duplicada no frontend); se o
+  backend bloquear por histórico (`business_rule`/409), o **mesmo diálogo pivota** para oferecer
+  "Arquivar rolo" em vez de deixar um erro sem próximo passo — arquivar reaproveita o contrato já
+  existente `update_filament_spool({ is_active: false })` (o mesmo do Switch "Ativo" da tabela),
+  nunca um hard delete de rolo com histórico. Novo filtro "Mostrar arquivados" (oculto por padrão)
+  na tabela de rolos. Botão "Movimentar / Pesar" desabilitado para rolo arquivado — **restrição
+  aplicada só no frontend nesta rodada**: `register_filament_movement`/`register_filament_weighing`
+  ainda não verificam `is_active` no banco (só bloqueiam `status=DESCARTADO`) — registrado aqui como
+  lacuna real para um incremento futuro, não escondida.
+- `FilamentMovementHistory.tsx` — corrigida definitivamente a sobreposição Data/Tipo: causa raiz
+  era `TableCell` herdar `whitespace-nowrap` por padrão (`ui/table.tsx`) sem nenhuma proteção contra
+  transbordo na célula de Data — `table-fixed` reserva a largura da coluna mas não corta conteúdo
+  que a ultrapassa. Aplicada a mesma classe `truncate` já usada em Tipo/Motivo, larguras de coluna
+  reequilibradas (Data 16%→18%) e `min-w-[720px]` adicionado à tabela (mesmo padrão de rolagem
+  horizontal controlada já usado nas demais tabelas do projeto).
+- Dimensionamento das duas janelas: "Ver rolos" (`sm:max-w-4xl max-h-[90vh] overflow-y-auto`) e
+  "Movimentar/Pesar/Histórico" (`sm:max-w-3xl max-h-[90vh] overflow-y-auto`, alargada de
+  `max-w-2xl` para dar mais espaço ao histórico) — reaproveitando **exatamente** o padrão já
+  estabelecido em `OrdersPage.tsx` ("Gerenciar pedido"), nenhum valor arbitrário novo introduzido.
+
+**Testes**: 18 testes novos em `FilamentsInventoryPage.test.tsx` (saldo consolidado de 1.300g/950g
+na listagem, resumo consolidado completo no drawer, prova de que o resumo nunca é recalculado em
+JS, refetch do resumo após movimentação/pesagem, exclusão física com sucesso, pivô para
+arquivamento, erro inesperado não pivota, bloqueio de duplo envio, filtro "Mostrar arquivados",
+botão desabilitado em rolo arquivado, classes de dimensionamento das duas janelas) + novo arquivo
+`FilamentMovementHistory.test.tsx` (5 testes, incl. a proteção `truncate` contra o transbordo
+Data→Tipo). Suíte completa 1332 → **1350 testes, todos passando**; lint 0 erros (mesmos 6 avisos
+pré-existentes); `tsc -b`/`vite build` sem erros; `git diff --check` limpo; scan de segredos sem
+ocorrências reais; `.env.local` confirmado ignorado; nenhum resíduo `TESTE` novo criado por esta
+auditoria (todas as consultas de diagnóstico foram somente leitura, contra registros que o próprio
+usuário já havia criado e mantido durante a validação manual).
+
+**Nenhuma migration aplicada, nenhuma Edge Function publicada, nenhum objeto remoto alterado, nenhum
+push, nenhum deploy de frontend, nenhuma alteração em Petlink ou dado oficial.** Validação final da
+interface de Filamentos continua **pendente** — o usuário precisa reexecutar especificamente os
+passos 11 e 18 (agora com o resumo consolidado visível) e as 4 observações de proporção/exclusão
+antes de o Módulo 3 avançar para este critério. Consumo automático de filamento por pedido continua
+**sem nenhuma linha de código** (fora de escopo desta rodada). Percentual macro **não alterado**.
+Checkpoint local: commit `fix: refine filament inventory validation flow`, sem push.
+
 ---
 
 # 10. Histórico de atualizações deste roadmap
@@ -811,3 +896,4 @@ reunir os três critérios (backend + interface + validação manual) juntos.
 | 2026-08-27 | **Edge Function `stock-movements` publicada e ativa** no projeto Supabase remoto `tjhacqreupfqefntjevf` (versão 1) — revisão estática integral antes da publicação não encontrou inconsistências (payload/RPC/CORS/auth/logs todos conferidos); Deno seguiu indisponível nesta sessão, testes Deno já escritos não executados, cobertura complementar via suíte de frontend/API (1261/1261). Publicação exclusiva de `stock-movements` via `npx supabase functions deploy` — as 8 Edge Functions já existentes permaneceram com a mesma versão/`updated_at`. Verificação HTTP real: `OPTIONS` sem autenticação → 204; `POST` sem autenticação (payload fictício, item não real) → 401 (`Header Authorization ausente.`), rejeitado antes de tocar o banco. Consultas pós-teste confirmaram zero movimentação criada e nenhum `current_stock` alterado. Frontend local confirmado apontando para o projeto correto, `.env.local` continua ignorado, nenhuma URL hardcoded — **nenhum deploy de frontend realizado**. **A interface completa (backend + Edge Function publicada) está tecnicamente pronta, mas nenhuma validação manual do usuário ainda ocorreu** — as 22 regras aprovadas continuam provisórias do MVP; Fase 5/6/7 do Módulo 1 e percentual macro do Módulo 3 **não alterados** por esta entrada. Incrementos 4–9 do plano de estoque continuam pendentes. Nenhum dado oficial/Petlink alterado, nenhuma outra migration/Edge Function tocada. Checkpoint local: commit `docs: record stock movement function deployment`, sem push. |
 | 2026-08-27 | **Validação manual do usuário aprovada** para quantidade disponível, entradas, saídas e histórico de Acessórios e Embalagens — 15/15 passos de um checklist manual aprovados; nenhuma alteração em Petlink/dados oficiais durante a validação. Reconciliação confirmou HEAD `41ab62c`, árvore limpa, 31/31 migrations sincronizadas, 5 commits à frente de `feature/customers-orders`. Em seguida, **Incremento 4 do plano de estoque (filamentos — tipos, rolos, movimentações, pesagem) implementado localmente**, cobrindo os requisitos 1-8 do pedido e parcialmente o 9 (preparação de composição, sem ativar consumo automático) — ver detalhamento técnico completo em §9b. Resumo: 4 migrations novas (`filament_types`/`filament_spools`/`filament_movements`+`vw_filament_type_summary`/`product_filaments`), decisão de arquitetura de **não** reaproveitar `stock_movements` (ledger próprio, `filament_movements`, por unidade de medida fracionária e necessidade de referenciar tipo+rolo); 3 Edge Functions novas (`filament-types`/`filament-spools`/`filament-movements`, nenhuma publicada); ~30 novos padrões de erro estáveis; página `/estoque/filamentos` (terceira aba, listagem de tipos com drill-down para rolos, ações de cadastro/ativação/descarte/exclusão/movimentar/pesar/histórico). Materiais fechados em PLA/PETG/TPU (**ABS explicitamente fora do MVP**); status do rolo `LACRADO`/`ABERTO`/`ESGOTADO`/`DESCARTADO` (4 valores, corrigindo a proposta de 5 valores nunca implementada de `03_MODELO_BANCO_DADOS.md` §12); tara como campo do próprio rolo, não mais um cadastro `spool_tares` separado. Teste de integração SQL (`filament_inventory_test.sql`) e 3 `handler.test.ts` Deno escritos, **não executados** (mesma limitação de ambiente de todas as rodadas anteriores — sem Docker/Postgres local/Deon, migrations não aplicadas ao remoto). Suíte completa do frontend 1261 → **1332 testes, todos passando**; lint 0 erros; `tsc -b`/`vite build` sem erros; `git diff --check` limpo; scan de segredos sem ocorrências reais; `.env.local` confirmado ignorado. **Nada desta entrada foi aplicado ao Supabase remoto, publicado ou validado manualmente pelo usuário** — regras operacionais do MVP, versão inicial para validação, sujeitas a revisão. **Módulo 3 continua NÃO concluído** (falta validação manual de Filamentos e todos os incrementos 5+ — consumo automático, reserva, inventário periódico); **integração Pedidos↔Estoque continua NÃO concluída**. Percentual macro **não alterado**. Checkpoint local: commit `feat: add filament roll inventory`, sem push. |
 | 2026-08-27 | Auditoria pré-deploy do backend de filamentos encontrou um problema técnico real antes de qualquer aplicação: 2 das 4 migrations (`...106000`/`...109000`) tinham identificadores `YYYYMMDDHHMMSS` inválidos (minuto 60 e minuto 90, fora de 0–59) — confirmado por decodificação manual e pela própria saída de `migration list` (campo `time` não formatado para essas duas). Renomeadas para `...110000`/`...113000` (válidas, ordem cronológica preservada) antes de qualquer aplicação remota — nenhuma migration já aplicada foi editada; todas as referências cruzadas atualizadas em 9 arquivos. Resto da auditoria (RLS, políticas, `SECURITY DEFINER`/`search_path`, `EXECUTE` restrito, ausência de permissão a `anon`, idempotência, saldo negativo, imutabilidade, vínculos, `vw_filament_type_summary`, `ESGOTADO`/`DESCARTADO`, `product_filaments` sem consumo automático) aprovada sem ressalva. **As 4 migrations aplicadas ao projeto Supabase remoto `tjhacqreupfqefntjevf`** via `npx supabase db push --linked` (dry run prévio mostrou exclusivamente as 4 migrations) — 35/35 migrations agora sincronizadas local/remoto. Teste de integração SQL executado contra o remoto dentro de `BEGIN...ROLLBACK`: primeira execução **50 PASS/1 FAIL** — o FAIL era um bug da própria asserção do teste (Seção 6.1 reutilizava rolos já mutados por seções anteriores, um `ESGOTADO` que nunca reverte automaticamente ao saldo voltar a ficar positivo, comportamento correto e documentado — não um bug de banco); corrigida a asserção com fixtures dedicados, reexecutado: **51 PASS, 0 FAIL, 0 SKIP**. Consultas pós-teste confirmaram **zero resíduo** (todas as 4 tabelas novas com 0 linhas, nenhum produto `TESTE%`). **As 3 novas Edge Functions publicadas individualmente** (`filament-types`/`filament-spools`/`filament-movements`, todas ACTIVE versão 1) — as 9 já existentes preservaram `updated_at`, nenhuma redeployada. Smoke tests HTTP reais: `OPTIONS` → 204 com CORS correto; `POST` sem autenticação → 401 (`Header Authorization ausente.`) nas 3 rotas, confirmado sem tocar o banco. Teste CRUD autenticado não realizado (sem sessão de teste disponível neste ambiente) — fica para a validação manual pela interface. Frontend: nenhuma alteração funcional (só comentários citando os nomes de migration renomeados); suíte completa reexecutada por precaução, **1332/1332 passando**, lint 0 erros, `tsc -b`/`vite build` sem erros, `git diff --check` limpo. **Nenhum push, nenhum deploy de frontend, nenhuma alteração em Petlink/dado oficial, nenhum `migration repair`, nenhum `db reset`, nenhuma migration já aplicada foi editada.** Interface de Filamentos continua aguardando validação manual do usuário; regras do MVP continuam sujeitas a revisão; consumo automático por pedido continua pendente. Percentual macro **não alterado** — falta a validação manual para reunir os três critérios. Checkpoint local: commit `fix: harden filament inventory operations`, sem push. |
+| 2026-08-28 | Primeira validação manual real do usuário na interface de Filamentos: passos 1-10/12-17/19-22 aprovados; passos 11 (saldo consolidado de 1.300g) e 18 (950g) pendentes — saldo não encontrado nem na listagem nem em "Rolos do tipo". Mais 4 observações: janelas "Ver rolos" e "Movimentar/Pesar/Histórico" desproporcionais, exclusão de rolo sem confirmação clara, coluna Data invadindo Tipo no histórico. Diagnóstico por consultas somente leitura contra o remoto (registros `TESTE%` já criados pelo usuário) reconstruiu as 6 movimentações/pesagens reais e confirmou **cada saldo exatamente igual ao documentado pelo usuário em todos os passos** — `vw_filament_type_summary` também conferida correta no estado atual. **Zero erro de banco, view ou RPC** — causa 100% frontend: `FilamentTypeDrawer` nunca exibia nenhum resumo consolidado, e a listagem de tipos buscava o resumo só uma vez no carregamento da página, nunca sendo informada de movimentações feitas no painel aninhado. Corrigido sem tocar nenhum objeto remoto: `openType` passou a ser derivado ao vivo do array `types` (não mais um snapshot); novo callback `onSummaryChanged` aciona `refetch()` do resumo após qualquer ação que afete o saldo (criar/editar/ativar-desativar/descartar/excluir/arquivar rolo, movimentar, pesar); novo bloco de resumo no topo do drawer (Disponível/Rolos/Abertos/Esgotados/Estoque mínimo/Situação — sempre do resumo do backend, nunca recalculado em JS). Fluxo de exclusão revisado: botão único "Excluir rolo" com confirmação explícita, tenta exclusão física e — se bloqueada por histórico (business_rule/409) — pivota o mesmo diálogo para oferecer "Arquivar rolo" (reaproveita `update_filament_spool({is_active:false})`, já existente); novo filtro "Mostrar arquivados"; "Movimentar/Pesar" desabilitado em rolo arquivado (restrição só de frontend nesta rodada — a RPC ainda não verifica `is_active`, lacuna registrada para incremento futuro). Sobreposição Data/Tipo corrigida (causa raiz: `TableCell` herda `whitespace-nowrap` por padrão sem proteção contra transbordo — aplicada a mesma classe `truncate` já usada em Tipo/Motivo). Dimensionamento das duas janelas ajustado para `max-h-[90vh] overflow-y-auto` + `sm:max-w-4xl`/`sm:max-w-3xl`, reaproveitando exatamente o padrão já usado em `OrdersPage.tsx`. 18 testes novos em `FilamentsInventoryPage.test.tsx` + novo arquivo `FilamentMovementHistory.test.tsx` (5 testes). Suíte completa 1332 → **1350 testes, todos passando**; lint 0 erros; `tsc -b`/`vite build` sem erros; `git diff --check` limpo; scan de segredos sem ocorrências reais; nenhum resíduo `TESTE` novo criado (auditoria só leu dados já existentes). **Nenhuma migration aplicada, nenhuma Edge Function publicada, nenhum objeto remoto alterado, nenhum push, nenhum deploy de frontend, nenhuma alteração em Petlink/dado oficial.** Validação final (passos 11/18 + as 4 observações) continua pendente. Percentual macro **não alterado**. Checkpoint local: commit `fix: refine filament inventory validation flow`, sem push. |

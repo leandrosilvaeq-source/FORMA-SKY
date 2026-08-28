@@ -89,14 +89,14 @@ export function FilamentMovementHistory({ movements, isLoading, error, onRetry }
 
   return (
     <div className="overflow-x-auto">
-      <Table className="table-fixed text-sm">
+      <Table className="min-w-[720px] table-fixed text-sm">
         <TableHeader>
           <TableRow>
-            <TableHead className="h-auto w-[16%] py-2 whitespace-normal">Data</TableHead>
+            <TableHead className="h-auto w-[18%] py-2 whitespace-normal">Data</TableHead>
             <TableHead className="h-auto w-[18%] py-2 whitespace-normal">Tipo</TableHead>
             <TableHead className="h-auto w-[13%] py-2 text-right whitespace-normal">Quantidade</TableHead>
-            <TableHead className="h-auto w-[17%] py-2 text-right whitespace-normal">Saldo</TableHead>
-            <TableHead className="h-auto w-[36%] py-2 whitespace-normal">Motivo/Observação</TableHead>
+            <TableHead className="h-auto w-[18%] py-2 text-right whitespace-normal">Saldo</TableHead>
+            <TableHead className="h-auto w-[33%] py-2 whitespace-normal">Motivo/Observação</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -104,7 +104,18 @@ export function FilamentMovementHistory({ movements, isLoading, error, onRetry }
             const delta = formatSignedQuantity(movement.quantity_delta)
             return (
               <TableRow key={movement.id}>
-                <TableCell>{formatDateTime(movement.occurred_at)}</TableCell>
+                {/* Data/Hora: table-fixed constrange a LARGURA da coluna,
+                    mas TableCell herda whitespace-nowrap por padrão (ver
+                    ui/table.tsx) — sem truncate/overflow-hidden aqui, um
+                    texto de data mais longo que a coluna transbordava
+                    visualmente por cima da coluna Tipo em vez de quebrar ou
+                    cortar (achado real da validação manual, 2026-08-28).
+                    truncate (mesma classe já usada em Tipo/Motivo abaixo)
+                    resolve definitivamente: nunca invade a coluna seguinte,
+                    mesmo num valor de data anormalmente longo. */}
+                <TableCell className="truncate" title={formatDateTime(movement.occurred_at)}>
+                  {formatDateTime(movement.occurred_at)}
+                </TableCell>
                 <TableCell className="truncate" title={movementTypeLabel(movement.movement_type)}>
                   {movementTypeLabel(movement.movement_type)}
                 </TableCell>

@@ -239,8 +239,16 @@ describe('FilamentsInventoryPage', () => {
     expect(within(dialog).getByText('ABERTO')).toBeInTheDocument()
   })
 
-  it('registra uma movimentação de um rolo e atualiza o saldo local (sem refetch)', async () => {
+  it('registra uma movimentação de um rolo, atualiza o saldo local do rolo (sem refetch de rolos) E aciona o refetch do resumo do tipo', async () => {
+    // Achado real da validação manual (2026-08-28): sem acionar o refetch
+    // do resumo do TIPO (useFilamentTypes.refetch), o saldo consolidado
+    // exibido na listagem/drawer nunca refletia uma movimentação feita
+    // dentro deste painel aninhado — este teste prova que a movimentação
+    // agora aciona esse refetch, além de continuar atualizando o rolo
+    // localmente (sem refetch de rolos, que segue sendo desnecessário: a
+    // resposta da RPC já traz balance_after).
     const setLocalSpoolState = vi.fn()
+    const typesRefetch = vi.fn()
     const register = vi.fn().mockResolvedValue({
       id: 'm1',
       filament_type_id: 't1',
@@ -257,7 +265,7 @@ describe('FilamentsInventoryPage', () => {
       created_by: 'u1',
       created_at: '2026-08-27T12:00:00Z',
     })
-    mockTypes([typeFixture()])
+    mockTypes([typeFixture()], { refetch: typesRefetch })
     mockSpools([spoolFixture()], { setLocalSpoolState })
     mockMovements({ register })
     renderPage()
@@ -273,6 +281,42 @@ describe('FilamentsInventoryPage', () => {
     await waitFor(() => expect(register).toHaveBeenCalledTimes(1))
     expect(setLocalSpoolState).toHaveBeenCalledWith('s1', { current_net_weight_grams: 600, status: undefined })
     expect(toastMock.success).toHaveBeenCalledWith('Movimentação registrada.')
+    expect(typesRefetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('registrar pesagem também aciona o refetch do resumo do tipo', async () => {
+    const typesRefetch = vi.fn()
+    const weigh = vi.fn().mockResolvedValue({
+      id: 'm2',
+      filament_type_id: 't1',
+      spool_id: 's1',
+      movement_type: 'WEIGHING_ADJUSTMENT',
+      quantity_delta: -50,
+      balance_before: 500,
+      balance_after: 450,
+      reason: 'conferência',
+      reference_type: null,
+      reference_id: null,
+      idempotency_key: null,
+      occurred_at: '2026-08-27T12:00:00Z',
+      created_by: 'u1',
+      created_at: '2026-08-27T12:00:00Z',
+    })
+    mockTypes([typeFixture()], { refetch: typesRefetch })
+    mockSpools([spoolFixture({ empty_spool_weight_grams: null })])
+    mockMovements({ weigh })
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+    await user.click(screen.getByRole('button', { name: /movimentar, pesar ou consultar histórico/i }))
+    await user.click(screen.getByRole('radio', { name: 'Registrar pesagem' }))
+    await user.type(screen.getByLabelText(/peso líquido disponível/i), '450')
+    await user.type(screen.getByLabelText(/motivo\/observação/i), 'conferência')
+    await user.click(screen.getByRole('button', { name: /^registrar pesagem$/i }))
+
+    await waitFor(() => expect(weigh).toHaveBeenCalledTimes(1))
+    expect(typesRefetch).toHaveBeenCalledTimes(1)
   })
 
   it('rolo descartado não exibe os formulários de movimentação/pesagem, só o histórico', async () => {
@@ -286,5 +330,234 @@ describe('FilamentsInventoryPage', () => {
 
     expect(screen.getByText(/foi descartado e não aceita novas movimentações/i)).toBeInTheDocument()
     expect(screen.queryByRole('radiogroup', { name: 'Movimentação' })).not.toBeInTheDocument()
+  })
+
+  // ---------------------------------------------------------------------------
+  // Saldo consolidado — achado real da validação manual (2026-08-28): o
+  // usuário não encontrou 1300g nem 950g nem na listagem nem em "Rolos do
+  // tipo". Diagnóstico confirmou o backend/view corretos em todos os passos
+  // (reconstrução completa via consultas de leitura contra o remoto,
+  // supabase/tests/filament_inventory_test.sql) — o problema era só a
+  // ausência de um resumo na drawer e a listagem nunca sendo atualizada
+  // após uma movimentação feita no painel aninhado. Estes testes cobrem
+  // exatamente os dois cenários numéricos documentados na validação.
+  // ---------------------------------------------------------------------------
+
+  it('saldo consolidado de 1300g aparece na listagem principal (cenário de dois rolos)', () => {
+    mockTypes([typeFixture({ total_available_grams: 1300, usable_spool_count: 2, total_spool_count: 2 })])
+    renderPage()
+    expect(screen.getByText('1.300g')).toBeInTheDocument()
+  })
+
+  it('saldo consolidado de 950g aparece na listagem principal (após movimentos e pesagens)', () => {
+    mockTypes([typeFixture({ total_available_grams: 950, usable_spool_count: 2, total_spool_count: 2 })])
+    renderPage()
+    expect(screen.getByText('950g')).toBeInTheDocument()
+  })
+
+  it('"Rolos do tipo" mostra um resumo consolidado: disponível, rolos, abertos, esgotados, estoque mínimo e situação', async () => {
+    mockTypes([typeFixture({ total_available_grams: 950, minimum_stock_grams: 300, total_spool_count: 2 })])
+    mockSpools([
+      spoolFixture({ id: 's1', code: 'RL-26-001', status: 'ABERTO' }),
+      spoolFixture({ id: 's2', code: 'RL-26-002', status: 'ESGOTADO', current_net_weight_grams: 0 }),
+    ])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Rolos do tipo' })
+    expect(within(dialog).getByText('Disponível')).toBeInTheDocument()
+    expect(within(dialog).getByText('950g')).toBeInTheDocument()
+    expect(within(dialog).getByText('Estoque mínimo')).toBeInTheDocument()
+    expect(within(dialog).getByText('300g')).toBeInTheDocument()
+    expect(within(dialog).getByText('Abertos')).toBeInTheDocument()
+    expect(within(dialog).getByText('Esgotados')).toBeInTheDocument()
+    // "1" aparece duas vezes (Abertos e Esgotados, um rolo cada) — basta
+    // confirmar que a contagem existe, sem depender de qual delas.
+    expect(within(dialog).getAllByText('1').length).toBeGreaterThanOrEqual(2)
+    expect(within(dialog).getByText('Situação')).toBeInTheDocument()
+  })
+
+  it('o resumo consolidado NUNCA é recalculado em JS — reflete total_available_grams do backend mesmo quando difere da soma dos rolos carregados', async () => {
+    // Dois rolos somando 800g na tela, mas o resumo do backend diz 1300g —
+    // se o resumo exibido fosse uma soma client-side dos rolos visíveis,
+    // apareceria 800g. Precisa aparecer exatamente 1300g (o valor do
+    // resumo), provando que não há um segundo cálculo duplicado no
+    // frontend.
+    mockTypes([typeFixture({ total_available_grams: 1300, total_spool_count: 2 })])
+    mockSpools([
+      spoolFixture({ id: 's1', current_net_weight_grams: 400 }),
+      spoolFixture({ id: 's2', current_net_weight_grams: 400 }),
+    ])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Rolos do tipo' })
+    expect(within(dialog).getByText('1.300g')).toBeInTheDocument()
+    expect(within(dialog).queryByText('800g')).not.toBeInTheDocument()
+  })
+
+  // ---------------------------------------------------------------------------
+  // Exclusão e arquivamento de rolos — regra revisada pelo usuário: um
+  // único botão "Excluir rolo" sempre pede confirmação; se o backend
+  // bloquear a exclusão física por histórico (business_rule/409, já
+  // validado por delete_filament_spool), o MESMO diálogo pivota para
+  // oferecer arquivamento (is_active=false) em vez de um beco sem saída.
+  // ---------------------------------------------------------------------------
+
+  it('exclui fisicamente um rolo sem histórico, com confirmação, e atualiza o resumo do tipo', async () => {
+    const typesRefetch = vi.fn()
+    const deleteSpool = vi.fn().mockResolvedValue(undefined)
+    mockTypes([typeFixture()], { refetch: typesRefetch })
+    mockSpools([spoolFixture()], { delete: deleteSpool })
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+    await user.click(screen.getByRole('button', { name: 'Excluir rolo RL-26-001' }))
+
+    const confirmDialog = screen.getByRole('dialog', { name: 'Excluir rolo' })
+    expect(within(confirmDialog).getByText(/não poderá ser desfeita/i)).toBeInTheDocument()
+    await user.click(within(confirmDialog).getByRole('button', { name: /^excluir definitivamente$/i }))
+
+    await waitFor(() => expect(deleteSpool).toHaveBeenCalledWith('s1'))
+    expect(toastMock.success).toHaveBeenCalledWith('Rolo excluído.')
+    expect(typesRefetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('exclusão bloqueada por histórico pivota o mesmo diálogo para oferecer "Arquivar rolo"', async () => {
+    const { ApiError } = await import('@/lib/api/errors')
+    const typesRefetch = vi.fn()
+    const deleteSpool = vi.fn().mockRejectedValue(
+      new ApiError('business_rule', 409, 'Este rolo possui movimentações registradas e não pode ser excluído.'),
+    )
+    const update = vi.fn().mockResolvedValue(spoolFixture({ is_active: false }))
+    mockTypes([typeFixture()], { refetch: typesRefetch })
+    mockSpools([spoolFixture()], { delete: deleteSpool, update })
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+    await user.click(screen.getByRole('button', { name: 'Excluir rolo RL-26-001' }))
+    await user.click(screen.getByRole('button', { name: /^excluir definitivamente$/i }))
+
+    const archiveDialog = await screen.findByRole('dialog', { name: 'Arquivar rolo' })
+    expect(within(archiveDialog).getByText(/possui histórico de movimentações/i)).toBeInTheDocument()
+
+    await user.click(within(archiveDialog).getByRole('button', { name: /^arquivar rolo$/i }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('s1', { is_active: false }))
+    expect(toastMock.success).toHaveBeenCalledWith('Rolo arquivado.')
+    expect(typesRefetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('erro inesperado (não business_rule) ao excluir mantém o diálogo em modo Excluir, sem pivotar para arquivamento', async () => {
+    const { ApiError } = await import('@/lib/api/errors')
+    const deleteSpool = vi.fn().mockRejectedValue(new ApiError('database', 500, 'falhou'))
+    mockTypes([typeFixture()])
+    mockSpools([spoolFixture()], { delete: deleteSpool })
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+    await user.click(screen.getByRole('button', { name: 'Excluir rolo RL-26-001' }))
+    await user.click(screen.getByRole('button', { name: /^excluir definitivamente$/i }))
+
+    expect(await screen.findByText('falhou')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Excluir rolo' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Arquivar rolo' })).not.toBeInTheDocument()
+  })
+
+  it('bloqueia duplo envio durante a exclusão (botão desabilitado enquanto a chamada está em andamento)', async () => {
+    let resolveDelete: () => void = () => {}
+    const deleteSpool = vi.fn().mockReturnValue(new Promise<void>((resolve) => { resolveDelete = resolve }))
+    mockTypes([typeFixture()])
+    mockSpools([spoolFixture()], { delete: deleteSpool })
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+    await user.click(screen.getByRole('button', { name: 'Excluir rolo RL-26-001' }))
+    const confirmButton = screen.getByRole('button', { name: /^excluir definitivamente$/i })
+    await user.click(confirmButton)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /^excluindo\.\.\.$/i })).toBeDisabled())
+    expect(deleteSpool).toHaveBeenCalledTimes(1)
+
+    resolveDelete()
+  })
+
+  // ---------------------------------------------------------------------------
+  // Filtro "Mostrar arquivados" e bloqueio de movimentação em rolo arquivado
+  // ---------------------------------------------------------------------------
+
+  it('rolo arquivado (inativo) fica oculto por padrão; "Mostrar arquivados" revela', async () => {
+    mockTypes([typeFixture()])
+    mockSpools([
+      spoolFixture({ id: 's1', code: 'RL-26-001', is_active: true }),
+      spoolFixture({ id: 's2', code: 'RL-26-002', is_active: false }),
+    ])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Rolos do tipo' })
+    expect(within(dialog).getByText('RL-26-001')).toBeInTheDocument()
+    expect(within(dialog).queryByText('RL-26-002')).not.toBeInTheDocument()
+
+    await user.click(within(dialog).getByRole('switch', { name: 'Mostrar arquivados' }))
+
+    expect(within(dialog).getByText('RL-26-002')).toBeInTheDocument()
+  })
+
+  it('rolo arquivado (inativo) tem o botão Movimentar/Pesar desabilitado', async () => {
+    mockTypes([typeFixture()])
+    mockSpools([spoolFixture({ is_active: false })])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+    const dialog = screen.getByRole('dialog', { name: 'Rolos do tipo' })
+    await user.click(within(dialog).getByRole('switch', { name: 'Mostrar arquivados' }))
+
+    expect(within(dialog).getByRole('button', { name: /arquivado — reative para movimentar/i })).toBeDisabled()
+  })
+
+  // ---------------------------------------------------------------------------
+  // Dimensões/classes responsivas das duas janelas (observações do usuário:
+  // "Ver rolos" e "Movimentar/Pesar/Histórico" estavam desproporcionais).
+  // ---------------------------------------------------------------------------
+
+  it('a janela "Ver rolos" usa max-width/max-height/overflow do padrão já estabelecido no projeto (mesmo de OrdersPage)', async () => {
+    mockTypes([typeFixture()])
+    mockSpools([spoolFixture()])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Rolos do tipo' })
+    expect(dialog.className).toContain('sm:max-w-4xl')
+    expect(dialog.className).toContain('max-h-[90vh]')
+    expect(dialog.className).toContain('overflow-y-auto')
+  })
+
+  it('a janela "Movimentar/Pesar/Histórico" usa max-width/max-height/overflow do padrão já estabelecido no projeto', async () => {
+    mockTypes([typeFixture()])
+    mockSpools([spoolFixture()])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Ver rolos' }))
+    await user.click(screen.getByRole('button', { name: /movimentar, pesar ou consultar histórico/i }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Movimentar / Pesar / Histórico' })
+    expect(dialog.className).toContain('sm:max-w-3xl')
+    expect(dialog.className).toContain('max-h-[90vh]')
+    expect(dialog.className).toContain('overflow-y-auto')
   })
 })
