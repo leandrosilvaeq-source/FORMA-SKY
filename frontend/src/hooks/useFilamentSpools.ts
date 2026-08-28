@@ -64,19 +64,36 @@ export function useFilamentSpools(filamentTypeId: string): UseFilamentSpoolsResu
 
   const refetch = useCallback(() => setRequestId((id) => id + 1), [])
 
+  // Um rolo recém-criado nunca teve nenhuma movimentação — has_movement_history
+  // sempre começa false (afirmação, não suposição: create_filament_spool
+  // sempre zera current_net_weight_grams e não grava nenhuma linha em
+  // filament_movements).
   const create = useCallback(
     async (input: Omit<CreateFilamentSpoolInput, 'filament_type_id'>) => {
       const created = await createFilamentSpool({ ...input, filament_type_id: filamentTypeId })
-      setSpools((current) => [created, ...current])
-      return created
+      const withHistory: FilamentSpool = { ...created, has_movement_history: false }
+      setSpools((current) => [withHistory, ...current])
+      return withHistory
     },
     [filamentTypeId],
   )
 
+  // A resposta de update_filament_spool não inclui has_movement_history
+  // (campo derivado só calculado por listFilamentSpools) — nenhum dos
+  // campos editáveis por esta função (nominal/tara/data/status/notas/
+  // is_active) altera se o rolo tem histórico ou não, então o valor
+  // anterior é sempre preservado aqui, nunca perdido nem recalculado.
   const update = useCallback(async (id: string, input: UpdateFilamentSpoolInput) => {
     const updated = await updateFilamentSpool(id, input)
-    setSpools((current) => current.map((item) => (item.id === id ? updated : item)))
-    return updated
+    let merged: FilamentSpool | undefined
+    setSpools((current) =>
+      current.map((item) => {
+        if (item.id !== id) return item
+        merged = { ...updated, has_movement_history: item.has_movement_history }
+        return merged
+      }),
+    )
+    return merged as FilamentSpool
   }, [])
 
   const deleteItem = useCallback(async (id: string) => {
@@ -84,12 +101,20 @@ export function useFilamentSpools(filamentTypeId: string): UseFilamentSpoolsResu
     setSpools((current) => current.filter((item) => item.id !== id))
   }, [])
 
+  // Só é chamada depois de uma movimentação/pesagem bem-sucedida
+  // (FilamentSpoolPanel.onSpoolChanged) — o rolo passa a ter histórico a
+  // partir daqui, sempre true (mesmo que já fosse true antes).
   const setLocalSpoolState = useCallback(
     (id: string, patch: { current_net_weight_grams: number; status?: FilamentSpoolStatus }) => {
       setSpools((current) =>
         current.map((item) =>
           item.id === id
-            ? { ...item, current_net_weight_grams: patch.current_net_weight_grams, status: patch.status ?? item.status }
+            ? {
+                ...item,
+                current_net_weight_grams: patch.current_net_weight_grams,
+                status: patch.status ?? item.status,
+                has_movement_history: true,
+              }
             : item,
         ),
       )

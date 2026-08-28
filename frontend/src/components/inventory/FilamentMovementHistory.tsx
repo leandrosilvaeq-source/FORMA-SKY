@@ -89,13 +89,13 @@ export function FilamentMovementHistory({ movements, isLoading, error, onRetry }
 
   return (
     <div className="overflow-x-auto">
-      <Table className="min-w-[720px] table-fixed text-sm">
+      <Table className="min-w-[700px] table-fixed text-sm">
         <TableHeader>
           <TableRow>
-            <TableHead className="h-auto w-[18%] py-2 whitespace-normal">Data</TableHead>
-            <TableHead className="h-auto w-[18%] py-2 whitespace-normal">Tipo</TableHead>
-            <TableHead className="h-auto w-[13%] py-2 text-right whitespace-normal">Quantidade</TableHead>
-            <TableHead className="h-auto w-[18%] py-2 text-right whitespace-normal">Saldo</TableHead>
+            <TableHead className="h-auto w-[16%] py-2 whitespace-normal">Data</TableHead>
+            <TableHead className="h-auto w-[22%] py-2 whitespace-normal">Tipo</TableHead>
+            <TableHead className="h-auto w-[12%] py-2 text-right whitespace-normal">Quantidade</TableHead>
+            <TableHead className="h-auto w-[17%] py-2 text-right whitespace-normal">Saldo</TableHead>
             <TableHead className="h-auto w-[33%] py-2 whitespace-normal">Motivo/Observação</TableHead>
           </TableRow>
         </TableHeader>
@@ -110,13 +110,22 @@ export function FilamentMovementHistory({ movements, isLoading, error, onRetry }
                     texto de data mais longo que a coluna transbordava
                     visualmente por cima da coluna Tipo em vez de quebrar ou
                     cortar (achado real da validação manual, 2026-08-28).
-                    truncate (mesma classe já usada em Tipo/Motivo abaixo)
-                    resolve definitivamente: nunca invade a coluna seguinte,
-                    mesmo num valor de data anormalmente longo. */}
+                    truncate resolve definitivamente: nunca invade a coluna
+                    seguinte, mesmo num valor de data anormalmente longo. Só
+                    a Data usa truncate — é um valor atômico de formato fixo,
+                    nunca precisa ser lido por extenso além do que já cabe. */}
                 <TableCell className="truncate" title={formatDateTime(movement.occurred_at)}>
                   {formatDateTime(movement.occurred_at)}
                 </TableCell>
-                <TableCell className="truncate" title={movementTypeLabel(movement.movement_type)}>
+                {/* Tipo: NUNCA truncate aqui (achado real da validação
+                    manual seguinte, 2026-08-28 — segunda rodada: o mesmo
+                    truncate que corrigiu a invasão de Data cortava rótulos
+                    mais longos do próprio Tipo, ex. "Ajuste por pesagem").
+                    whitespace-normal + break-words permite quebra de linha
+                    controlada dentro da própria coluna (table-fixed já
+                    impede invadir a coluna seguinte) — o texto completo
+                    fica sempre visível, sem depender só do tooltip. */}
+                <TableCell className="whitespace-normal break-words" title={movementTypeLabel(movement.movement_type)}>
                   {movementTypeLabel(movement.movement_type)}
                 </TableCell>
                 <TableCell

@@ -55,6 +55,15 @@ export function FilamentSpoolPanel({ spool, filamentTypeLabel, onSpoolChanged, o
   const [submitError, setSubmitError] = useState<string | null>(null)
 
   const isDiscarded = spool.status === 'DESCARTADO'
+  // Arquivado (is_active=false) é um eixo independente de status — nunca
+  // confundir com ESGOTADO/DESCARTADO (ver migration). Requisito 4 da
+  // segunda rodada de validação manual (2026-08-28): ações Movimentar/Pesar
+  // ficam indisponíveis para um rolo arquivado, mas o histórico continua
+  // acessível — por isso este painel ainda abre normalmente (nunca
+  // desabilitado na tabela do drawer), só troca o formulário por uma
+  // mensagem, exatamente como já acontecia para DESCARTADO.
+  const isArchived = !spool.is_active
+  const isReadOnly = isDiscarded || isArchived
   const isEligibleForInitialBalance = spool.current_net_weight_grams === 0 && !isLoading && !loadError && movements.length === 0
 
   async function handleRegisterMovement(values: FilamentMovementFormValues) {
@@ -96,9 +105,9 @@ export function FilamentSpoolPanel({ spool, filamentTypeLabel, onSpoolChanged, o
           <p className="text-muted-foreground text-xs">{filamentTypeLabel}</p>
           <p className="text-base font-medium">{spool.code}</p>
         </div>
-        {!spool.is_active && (
+        {isArchived && (
           <span className="border-input text-muted-foreground inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium">
-            Inativo
+            Arquivado
           </span>
         )}
       </div>
@@ -116,6 +125,11 @@ export function FilamentSpoolPanel({ spool, filamentTypeLabel, onSpoolChanged, o
       {isDiscarded ? (
         <p role="status" className="text-muted-foreground text-sm">
           Este rolo foi descartado e não aceita novas movimentações. O histórico abaixo permanece disponível para consulta.
+        </p>
+      ) : isArchived ? (
+        <p role="status" className="text-muted-foreground text-sm">
+          Este rolo está arquivado e não aceita movimentar ou pesar enquanto arquivado. Reative-o na lista de rolos para
+          voltar a movimentar. O histórico abaixo permanece disponível para consulta.
         </p>
       ) : (
         <>
@@ -176,7 +190,7 @@ export function FilamentSpoolPanel({ spool, filamentTypeLabel, onSpoolChanged, o
         <FilamentMovementHistory movements={movements} isLoading={isLoading} error={loadError} onRetry={refetch} />
       </div>
 
-      {isDiscarded && (
+      {isReadOnly && (
         <div className="flex justify-end">
           <Button type="button" variant="outline" onClick={onClose} className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark">
             Fechar

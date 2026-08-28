@@ -23,22 +23,57 @@ function chainableResult(result: QueryResult) {
   return builder
 }
 
+// listFilamentSpools agora faz DUAS consultas em paralelo: filament_spools
+// (dados dos rolos) e filament_movements (só spool_id, para calcular
+// has_movement_history sem depender de texto de erro — ver comentário em
+// filamentSpools.ts). Este helper roteia fromMock conforme a tabela pedida.
+function mockTables(spoolsResult: QueryResult, movementsResult: QueryResult) {
+  fromMock.mockImplementation((table: string) => {
+    if (table === 'filament_spools') return chainableResult(spoolsResult)
+    if (table === 'filament_movements') return chainableResult(movementsResult)
+    throw new Error(`tabela inesperada: ${table}`)
+  })
+}
+
 describe('filamentSpools api', () => {
   beforeEach(() => {
     fromMock.mockReset()
     callEdgeFunctionMock.mockReset()
   })
 
-  it('listFilamentSpools reads directly from supabase-js, filtered by filament_type_id', async () => {
-    const builder = chainableResult({ data: [{ id: 's1', code: 'RL-26-001' }], error: null })
-    fromMock.mockReturnValue(builder)
+  it('listFilamentSpools consulta filament_spools filtrado por filament_type_id e filament_movements para o mesmo tipo', async () => {
+    mockTables(
+      { data: [{ id: 's1', code: 'RL-26-001' }, { id: 's2', code: 'RL-26-002' }], error: null },
+      { data: [{ spool_id: 's1' }], error: null },
+    )
 
     const result = await listFilamentSpools('t1')
 
     expect(fromMock).toHaveBeenCalledWith('filament_spools')
-    expect(builder.eq).toHaveBeenCalledWith('filament_type_id', 't1')
+    expect(fromMock).toHaveBeenCalledWith('filament_movements')
     expect(callEdgeFunctionMock).not.toHaveBeenCalled()
-    expect(result).toEqual([{ id: 's1', code: 'RL-26-001' }])
+    expect(result).toEqual([
+      { id: 's1', code: 'RL-26-001', has_movement_history: true },
+      { id: 's2', code: 'RL-26-002', has_movement_history: false },
+    ])
+  })
+
+  it('listFilamentSpools: rolo sem nenhuma movimentação tem has_movement_history=false, nunca undefined', async () => {
+    mockTables({ data: [{ id: 's1', code: 'RL-26-001' }], error: null }, { data: [], error: null })
+
+    const result = await listFilamentSpools('t1')
+
+    expect(result[0].has_movement_history).toBe(false)
+  })
+
+  it('listFilamentSpools propaga erro de qualquer uma das duas consultas', async () => {
+    const { ApiError } = await import('./errors')
+    fromMock.mockImplementation((table: string) => {
+      if (table === 'filament_spools') return chainableResult({ data: null, error: { message: 'falhou', code: '500' } })
+      return chainableResult({ data: [], error: null })
+    })
+
+    await expect(listFilamentSpools('t1')).rejects.toBeInstanceOf(ApiError)
   })
 
   it('createFilamentSpool writes through the filament-spools Edge Function, not a direct insert', async () => {
@@ -52,7 +87,10 @@ describe('filamentSpools api', () => {
       nominal_weight_grams: 1000,
     })
     expect(fromMock).not.toHaveBeenCalled()
+    // A resposta crua NUNCA inclui has_movement_history — quem preenche
+    // esse campo é o hook (useFilamentSpools.create), não a API layer.
     expect(result).toEqual(created)
+    expect(result).not.toHaveProperty('has_movement_history')
   })
 
   it('updateFilamentSpool writes through the filament-spools Edge Function with PATCH', async () => {
@@ -74,7 +112,7 @@ describe('filamentSpools api', () => {
     expect(result).toEqual({ success: true })
   })
 
-  it('deleteFilamentSpool propagates a standardized ApiError when blocked by movement history', async () => {
+  it('deleteFilamentSpool propagates a standardized ApiError when blocked by movement history (defesa em profundidade — a interface não deveria mais chamar isto para um rolo com histórico)', async () => {
     const { ApiError } = await import('./errors')
     callEdgeFunctionMock.mockRejectedValue(
       new ApiError('business_rule', 409, 'Este rolo possui movimentações registradas e não pode ser excluído.'),

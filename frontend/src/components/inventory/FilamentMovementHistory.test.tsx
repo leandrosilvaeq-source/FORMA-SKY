@@ -43,23 +43,41 @@ describe('FilamentMovementHistory', () => {
     expect(screen.getByText('falhou')).toBeInTheDocument()
   })
 
-  // Achado real da validação manual (2026-08-28): a coluna Data invadia
-  // visualmente a coluna Tipo — causa raiz confirmada em ui/table.tsx:
-  // TableCell herda `whitespace-nowrap` por padrão, e sem `truncate`
-  // (overflow-hidden + text-overflow) na própria célula de Data, um texto
-  // de data/hora mais largo que a coluna (table-fixed só reserva o espaço,
-  // não corta o conteúdo) desenhava por cima da célula seguinte. Este teste
-  // documenta a classe que efetivamente resolve o problema — nunca
-  // reaparece sem quebrar este teste.
-  it('a célula de Data tem a mesma proteção contra transbordo (truncate) já usada em Tipo/Motivo — nunca invade a coluna seguinte', () => {
+  // Achado real da validação manual (2026-08-28, primeira rodada): a coluna
+  // Data invadia visualmente a coluna Tipo — causa raiz confirmada em
+  // ui/table.tsx: TableCell herda `whitespace-nowrap` por padrão, e sem
+  // `truncate` na célula de Data, um texto de data/hora mais largo que a
+  // coluna (table-fixed só reserva o espaço, não corta o conteúdo)
+  // desenhava por cima da célula seguinte.
+  it('a célula de Data tem truncate — nunca invade a coluna Tipo', () => {
     render(<FilamentMovementHistory movements={[movementFixture()]} isLoading={false} error={null} onRetry={vi.fn()} />)
 
     const dateCell = screen.getByText(/27\/08\/2026/).closest('td')
-    const typeCell = screen.getByText('Compra').closest('td')
     expect(dateCell).not.toBeNull()
-    expect(typeCell).not.toBeNull()
     expect(dateCell?.className).toContain('truncate')
-    expect(typeCell?.className).toContain('truncate')
+  })
+
+  // Achado real da validação manual (2026-08-28, SEGUNDA rodada): o mesmo
+  // truncate aplicado à célula de Tipo (fix da rodada anterior) cortava
+  // rótulos mais longos do próprio Tipo (ex. "Ajuste por pesagem"), então o
+  // texto completo deixava de aparecer. Tipo precisa poder quebrar linha em
+  // vez de truncar — table-fixed já garante que isso nunca invade a coluna
+  // seguinte, então não há motivo para escondê-lo atrás de "...".
+  it('a célula de Tipo NUNCA usa truncate — permite quebra de linha para mostrar o rótulo completo', () => {
+    render(
+      <FilamentMovementHistory
+        movements={[movementFixture({ movement_type: 'WEIGHING_ADJUSTMENT' })]}
+        isLoading={false}
+        error={null}
+        onRetry={vi.fn()}
+      />,
+    )
+
+    const typeCell = screen.getByText('Ajuste por pesagem').closest('td')
+    expect(typeCell).not.toBeNull()
+    expect(typeCell?.className).not.toContain('truncate')
+    expect(typeCell?.className).toContain('whitespace-normal')
+    expect(typeCell?.className).toContain('break-words')
   })
 
   it('exibe tipo/quantidade/saldo/motivo formatados, com fallback legível para um movement_type desconhecido', () => {
@@ -99,6 +117,6 @@ describe('FilamentMovementHistory', () => {
   it('a tabela tem largura mínima e rolagem horizontal controlada (mesmo padrão das demais tabelas do projeto)', () => {
     render(<FilamentMovementHistory movements={[movementFixture()]} isLoading={false} error={null} onRetry={vi.fn()} />)
     const table = screen.getByRole('table')
-    expect(table.className).toContain('min-w-[720px]')
+    expect(table.className).toContain('min-w-[700px]')
   })
 })

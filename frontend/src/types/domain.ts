@@ -368,6 +368,19 @@ export interface FilamentSpool {
   is_active: boolean
   created_at: string
   updated_at: string
+  // Campo DERIVADO, não uma coluna de filament_spools — calculado por
+  // listFilamentSpools() a partir de uma segunda consulta de leitura
+  // (filament_movements.spool_id para o tipo). Único indicador confiável de
+  // "excluir vai falhar" (delete_filament_spool bloqueia exclusivamente por
+  // FILAMENT_SPOOL_HAS_MOVEMENTS: — nenhum outro vínculo impeditivo existe
+  // para rolos individuais nesta etapa) — usado para decidir Excluir vs.
+  // Arquivar ANTES de mostrar a confirmação, nunca a partir do texto de um
+  // erro. Respostas de create/update (Edge Function) não trazem este campo;
+  // os hooks (useFilamentSpools) o preenchem localmente: false para um rolo
+  // recém-criado (nunca teve movimentação), preservado do estado anterior
+  // em edições/ativação/descarte, e forçado para true assim que uma
+  // movimentação/pesagem é registrada.
+  has_movement_history: boolean
 }
 
 // supabase/migrations/20260827110000_create_filament_movements_table.sql —

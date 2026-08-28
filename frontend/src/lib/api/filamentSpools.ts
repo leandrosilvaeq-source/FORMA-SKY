@@ -9,17 +9,41 @@ import { supabase } from '@/lib/supabase'
 import { callEdgeFunction } from './edgeFunctionClient'
 import type { FilamentSpool, FilamentSpoolStatus } from '@/types/domain'
 
+// Resposta crua das duas rotas de escrita (Edge Function -> RPC): nunca
+// inclui `has_movement_history` (campo derivado, calculado só por
+// listFilamentSpools abaixo) — os hooks (useFilamentSpools) são
+// responsáveis por preencher esse campo ao mesclar no estado local (false
+// para um rolo recém-criado; preservado do valor anterior numa edição).
+export type FilamentSpoolWriteResponse = Omit<FilamentSpool, 'has_movement_history'>
+
 // Rolos de um tipo específico — mais recentes primeiro (mesma ordem que a
 // interface de drill-down por tipo espera exibir).
+//
+// Segunda consulta (spool_id de filament_movements para o mesmo tipo) só
+// para determinar, de forma confiável e não-textual, quais rolos têm
+// histórico — delete_filament_spool bloqueia exclusivamente por
+// FILAMENT_SPOOL_HAS_MOVEMENTS: (nenhum outro vínculo impede a exclusão de
+// um rolo individual nesta etapa), então "tem ao menos uma linha em
+// filament_movements" é uma predição exata de "excluir vai falhar" — usada
+// pela interface para decidir Excluir vs. Arquivar ANTES de mostrar a
+// confirmação (achado da validação manual, 2026-08-28: decidir só depois de
+// tentar e capturar o texto do erro não funcionou como esperado). Nenhuma
+// migration/RPC nova: as duas consultas usam SELECT já concedido a
+// authenticated (RLS is_active_user() nas duas tabelas).
 export async function listFilamentSpools(filamentTypeId: string): Promise<FilamentSpool[]> {
-  const { data, error } = await supabase
-    .from('filament_spools')
-    .select('*')
-    .eq('filament_type_id', filamentTypeId)
-    .order('created_at', { ascending: false })
+  const [spoolsResult, movementsResult] = await Promise.all([
+    supabase.from('filament_spools').select('*').eq('filament_type_id', filamentTypeId).order('created_at', { ascending: false }),
+    supabase.from('filament_movements').select('spool_id').eq('filament_type_id', filamentTypeId),
+  ])
 
-  if (error) throw mapSupabaseError(error)
-  return data as FilamentSpool[]
+  if (spoolsResult.error) throw mapSupabaseError(spoolsResult.error)
+  if (movementsResult.error) throw mapSupabaseError(movementsResult.error)
+
+  const spoolIdsWithHistory = new Set((movementsResult.data as Array<{ spool_id: string }>).map((row) => row.spool_id))
+  return (spoolsResult.data as FilamentSpoolWriteResponse[]).map((spool) => ({
+    ...spool,
+    has_movement_history: spoolIdsWithHistory.has(spool.id),
+  }))
 }
 
 export interface CreateFilamentSpoolInput {
@@ -43,19 +67,22 @@ export interface UpdateFilamentSpoolInput {
 }
 
 // POST /filament-spools -> create_filament_spool (code gerado no backend).
-export async function createFilamentSpool(input: CreateFilamentSpoolInput): Promise<FilamentSpool> {
-  return callEdgeFunction<FilamentSpool>('filament-spools', '', 'POST', input)
+export async function createFilamentSpool(input: CreateFilamentSpoolInput): Promise<FilamentSpoolWriteResponse> {
+  return callEdgeFunction<FilamentSpoolWriteResponse>('filament-spools', '', 'POST', input)
 }
 
 // PATCH /filament-spools/:id -> update_filament_spool (cadastro, status,
 // ativar/desativar — DESCARTADO é terminal, a RPC rejeita qualquer
 // transição de volta).
-export async function updateFilamentSpool(id: string, input: UpdateFilamentSpoolInput): Promise<FilamentSpool> {
-  return callEdgeFunction<FilamentSpool>('filament-spools', `/${id}`, 'PATCH', input)
+export async function updateFilamentSpool(id: string, input: UpdateFilamentSpoolInput): Promise<FilamentSpoolWriteResponse> {
+  return callEdgeFunction<FilamentSpoolWriteResponse>('filament-spools', `/${id}`, 'PATCH', input)
 }
 
 // DELETE /filament-spools/:id -> delete_filament_spool (exclusão protegida
-// — bloqueia quando há movimentação vinculada; nunca cascateia).
+// — bloqueia quando há movimentação vinculada; nunca cascateia). Continua
+// existindo como proteção de defesa em profundidade no backend — a
+// interface só chama esta rota quando já sabe (via has_movement_history)
+// que o rolo não tem histórico.
 export async function deleteFilamentSpool(id: string): Promise<{ success: true }> {
   return callEdgeFunction<{ success: true }>('filament-spools', `/${id}`, 'DELETE')
 }

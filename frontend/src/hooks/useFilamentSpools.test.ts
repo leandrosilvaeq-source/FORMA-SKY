@@ -32,9 +32,21 @@ const spool = {
   is_active: true,
   created_at: '',
   updated_at: '',
+  has_movement_history: false,
 }
 
 const otherSpool = { ...spool, id: 's2', code: 'RL-26-002' }
+
+// A resposta crua de createFilamentSpool/updateFilamentSpool (Edge
+// Function -> RPC) nunca inclui has_movement_history — só listFilamentSpools
+// o calcula. Os mocks abaixo devolvem exatamente essa forma (sem o campo),
+// mesma forma real (FilamentSpoolWriteResponse), para provar que o HOOK (não
+// a API) é quem preenche o campo ao mesclar no estado local.
+function rawWriteResponse<T extends { has_movement_history?: boolean }>(fixture: T) {
+  const clone: Partial<T> = { ...fixture }
+  delete clone.has_movement_history
+  return clone
+}
 
 describe('useFilamentSpools', () => {
   beforeEach(() => {
@@ -54,25 +66,28 @@ describe('useFilamentSpools', () => {
     expect(result.current.spools).toEqual([spool])
   })
 
-  it('create() injects filament_type_id and inserts the created spool at the top', async () => {
+  it('create() injects filament_type_id, inserts the created spool at the top with has_movement_history=false (never undefined)', async () => {
     listFilamentSpoolsMock.mockResolvedValue([otherSpool])
-    createFilamentSpoolMock.mockResolvedValue(spool)
+    createFilamentSpoolMock.mockResolvedValue(rawWriteResponse(spool))
 
     const { result } = renderHook(() => useFilamentSpools('t1'))
     await waitFor(() => expect(result.current.isLoading).toBe(false))
 
+    let created
     await act(async () => {
-      await result.current.create({ nominal_weight_grams: 1000 })
+      created = await result.current.create({ nominal_weight_grams: 1000 })
     })
 
     expect(createFilamentSpoolMock).toHaveBeenCalledWith({ nominal_weight_grams: 1000, filament_type_id: 't1' })
+    expect(created).toEqual(spool)
     expect(result.current.spools).toEqual([spool, otherSpool])
   })
 
-  it('update() replaces the spool in place', async () => {
-    listFilamentSpoolsMock.mockResolvedValue([spool])
-    const updated = { ...spool, status: 'DESCARTADO' as const }
-    updateFilamentSpoolMock.mockResolvedValue(updated)
+  it('update() replaces the spool in place and PRESERVES has_movement_history from the prior local value (the write response never carries it)', async () => {
+    const spoolWithHistory = { ...spool, has_movement_history: true }
+    listFilamentSpoolsMock.mockResolvedValue([spoolWithHistory])
+    const updatedRaw = rawWriteResponse({ ...spoolWithHistory, status: 'DESCARTADO' as const })
+    updateFilamentSpoolMock.mockResolvedValue(updatedRaw)
 
     const { result } = renderHook(() => useFilamentSpools('t1'))
     await waitFor(() => expect(result.current.isLoading).toBe(false))
@@ -81,7 +96,7 @@ describe('useFilamentSpools', () => {
       await result.current.update('s1', { status: 'DESCARTADO' })
     })
 
-    expect(result.current.spools).toEqual([updated])
+    expect(result.current.spools).toEqual([{ ...spoolWithHistory, status: 'DESCARTADO' }])
   })
 
   it('update() propagates an ApiError without changing the list (ex.: descarte é terminal)', async () => {
@@ -124,7 +139,7 @@ describe('useFilamentSpools', () => {
     expect(result.current.spools).toEqual([spool])
   })
 
-  it('setLocalSpoolState() updates current_net_weight_grams and status without calling the API', async () => {
+  it('setLocalSpoolState() updates current_net_weight_grams/status AND sets has_movement_history=true (uma movimentação acabou de ser registrada)', async () => {
     listFilamentSpoolsMock.mockResolvedValue([spool, otherSpool])
 
     const { result } = renderHook(() => useFilamentSpools('t1'))
@@ -137,6 +152,7 @@ describe('useFilamentSpools', () => {
     const updated = result.current.spools.find((s) => s.id === 's1')
     expect(updated?.current_net_weight_grams).toBe(0)
     expect(updated?.status).toBe('ESGOTADO')
+    expect(updated?.has_movement_history).toBe(true)
     expect(result.current.spools.find((s) => s.id === 's2')?.status).toBe('LACRADO')
     expect(createFilamentSpoolMock).not.toHaveBeenCalled()
   })
