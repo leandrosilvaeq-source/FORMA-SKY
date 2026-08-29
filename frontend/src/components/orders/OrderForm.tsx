@@ -923,6 +923,20 @@ export function OrderForm({
           </div>
         </SectionRow>
 
+        {/* Status inicial automático (2026-08-29, migration
+            20260829150000) — só informativo, nunca um controle: o status
+            inicial do pedido é decidido pelo backend (create_order, via
+            determine_order_initial_status()), nunca escolhido aqui nem
+            enviado no payload. Só em mode === 'create' — nunca aparece em
+            "Alterar pedido" (editar não deve sugerir que a edição também
+            decide o status inicial). */}
+        {mode === 'create' && (
+          <p className="text-muted-foreground text-sm">
+            Pedidos formados somente por itens de Catálogo e/ou Spot seguem diretamente para a Fila de
+            produção. Produtos de Catálogo precisam ter composição de filamentos cadastrada.
+          </p>
+        )}
+
         <div className="border-input rounded-lg border p-2">
           <div className="flex items-center justify-between px-1 pb-1.5">
             <span className="text-sm font-medium">{itemsSectionNumber}. Itens</span>

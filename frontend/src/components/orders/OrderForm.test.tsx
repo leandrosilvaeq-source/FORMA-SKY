@@ -524,6 +524,46 @@ describe('OrderForm', () => {
     expect(screen.getAllByText('Em breve')).toHaveLength(2)
   })
 
+  // ---------------------------------------------------------------------
+  // Status inicial automático (2026-08-29, migration 20260829150000) —
+  // mensagem só informativa, nunca um controle: o status inicial é sempre
+  // decidido pelo backend (create_order), nunca escolhido no formulário
+  // nem enviado no payload.
+  // ---------------------------------------------------------------------
+
+  it('mode create: mostra a mensagem informativa sobre Catálogo/Spot seguirem direto para a Fila de produção', () => {
+    renderForm()
+
+    expect(
+      screen.getByText(
+        'Pedidos formados somente por itens de Catálogo e/ou Spot seguem diretamente para a Fila de produção. Produtos de Catálogo precisam ter composição de filamentos cadastrada.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('mode edit: NUNCA mostra a mensagem sobre status inicial automático (edição não decide status inicial)', () => {
+    renderForm({
+      mode: 'edit',
+      initialValues: {
+        customerId: 'c1',
+        companyId: null,
+        leadSourceId: null,
+        paymentMethod: null,
+        deliveryMethod: null,
+        shippingCost: null,
+        expectedDeliveryDate: null,
+        notes: null,
+        items: [{ productId: 'p1', quantity: 1, unitPrice: 25, personalizationFee: 0 }],
+      },
+    })
+
+    expect(
+      screen.queryByText(
+        'Pedidos formados somente por itens de Catálogo e/ou Spot seguem diretamente para a Fila de produção. Produtos de Catálogo precisam ter composição de filamentos cadastrada.',
+      ),
+    ).not.toBeInTheDocument()
+  })
+
   it('não oferece um produto inativo como opção de item', async () => {
     const user = userEvent.setup()
     renderForm()

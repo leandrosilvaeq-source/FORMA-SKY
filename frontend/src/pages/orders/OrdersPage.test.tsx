@@ -709,6 +709,42 @@ describe('OrdersPage', () => {
     )
   })
 
+  it('status inicial automático (2026-08-29): erro real de composição incompleta (ORDER_CATALOG_MISSING_COMPOSITION:, mapeado como business_rule pelo backend) é mostrado via toast, e os campos preenchidos permanecem no formulário', async () => {
+    // create_order (RPC) bloqueia ANTES de qualquer escrita quando um item
+    // CATALOG do pedido não tem nenhuma linha em product_filaments — do
+    // ponto de vista do frontend, isso é só mais um erro real vindo do
+    // backend (mapPgError já despe o prefixo ORDER_CATALOG_MISSING_COMPOSITION:
+    // e devolve business_rule/409, mesmo tratamento de "conflito de negócio"
+    // já coberto acima) — nenhuma lógica nova no frontend, só a mensagem
+    // real do backend chegando à tela.
+    createWithPaymentMock.mockRejectedValue(
+      new ApiError(
+        'business_rule',
+        409,
+        'Não foi possível enviar o pedido para a Fila de produção. Cadastre a composição de filamentos dos produtos: Chaveiro.',
+      ),
+    )
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /novo pedido/i }))
+    await selectOption(user, 'Cliente/Contato', 'Ana Cliente')
+    await selectOption(user, 'Produto', 'Chaveiro')
+    await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith(
+        'Não foi possível enviar o pedido para a Fila de produção. Cadastre a composição de filamentos dos produtos: Chaveiro.',
+      ),
+    )
+    // Diálogo continua aberto e os campos preenchidos permanecem (nenhum
+    // reset em caso de erro) — mesma garantia já provada para o caso de
+    // pagamento recusado, abaixo.
+    expect(screen.getByRole('dialog', { name: /novo pedido/i })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Cliente/Contato' })).toHaveTextContent('Ana Cliente')
+    expect(refetchMock).not.toHaveBeenCalled()
+  })
+
   it('falha do pagamento (retornada pela RPC atômica): o pedido nunca fica criado — nenhuma chamada extra separada, erro mostrado inline', async () => {
     // create_order_with_payment (RPC) desfaz o INSERT do pedido inteiro
     // quando o pagamento falha — do ponto de vista do frontend, isso é

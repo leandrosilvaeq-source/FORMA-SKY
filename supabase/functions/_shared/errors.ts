@@ -334,6 +334,16 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
   ["create_order_with_payment: p_payment_method é obrigatório", (message) => new ValidationError(message)],
   ["create_order_with_payment: p_deposit_amount deve ser maior que zero", (message) => new ValidationError(message)],
   ["create_order_with_payment: p_deposit_amount (", (message) => new ValidationError(message)],
+  // determine_order_initial_status/validate_catalog_composition_for_creation
+  // (novas, chamadas de dentro de create_order — ambas sobrecargas de 10 e
+  // 11 parâmetros — 2026-08-29): pedido só-CATALOG/SPOT (sem nenhum CUSTOM)
+  // é bloqueado se algum item CATALOG referenciar um Produto sem nenhuma
+  // linha em product_filaments — a mensagem já lista os nomes reais dos
+  // produtos incompletos, sem detalhe interno do banco.
+  [
+    "ORDER_CATALOG_MISSING_COMPOSITION:",
+    (message) => new BusinessRuleError(message.replace(/^ORDER_CATALOG_MISSING_COMPOSITION:\s*/, "")),
+  ],
 ];
 
 export function mapPgError(err: PgErrorLike): AppError {
