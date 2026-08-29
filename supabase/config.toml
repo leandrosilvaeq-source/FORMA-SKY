@@ -430,6 +430,9 @@ verify_jwt = false
 [functions.filament-movements]
 verify_jwt = false
 
+[functions.inventory-purchases]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

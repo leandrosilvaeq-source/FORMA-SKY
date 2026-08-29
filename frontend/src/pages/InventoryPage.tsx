@@ -664,7 +664,12 @@ function AccessoriesInventoryPage() {
   }
 
   return (
-    <InventoryPageShell area="acessorios">
+    <InventoryPageShell
+      area="acessorios"
+      onPurchaseCompleted={(category) => {
+        if (category === 'ACCESSORY') refetch()
+      }}
+    >
       <InventoryAreaPanel
         items={accessories}
         isLoading={isLoading}
@@ -967,7 +972,12 @@ function PackagingInventoryPage() {
   }
 
   return (
-    <InventoryPageShell area="embalagens">
+    <InventoryPageShell
+      area="embalagens"
+      onPurchaseCompleted={(category) => {
+        if (category === 'PACKAGING') refetch()
+      }}
+    >
       <InventoryAreaPanel
         items={packaging}
         isLoading={isLoading}

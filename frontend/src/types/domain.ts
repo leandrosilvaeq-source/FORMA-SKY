@@ -368,6 +368,12 @@ export interface FilamentSpool {
   is_active: boolean
   created_at: string
   updated_at: string
+  // supabase/migrations/20260828121000_create_register_inventory_purchase_function.sql —
+  // preenchidos só quando o rolo nasce de uma compra (register_inventory_purchase);
+  // null para todo rolo criado manualmente ("Novo rolo" no drawer, fluxo
+  // inalterado por esse incremento).
+  initial_gross_weight_grams: number | null
+  purchase_id: string | null
   // Campo DERIVADO, não uma coluna de filament_spools — calculado por
   // listFilamentSpools() a partir de uma segunda consulta de leitura
   // (filament_movements.spool_id para o tipo). Único indicador confiável de
@@ -497,4 +503,28 @@ export interface PaymentStatusHistory {
   changed_at: string
   changed_by: string
   reason: string | null
+}
+
+// Módulo 3, Incremento 5 (Compras) —
+// supabase/migrations/20260828120000_create_inventory_purchases_table.sql.
+// category é o discriminador polimórfico de item_id (FILAMENT ->
+// filament_types.id; ACCESSORY -> accessories.id; PACKAGING -> packaging.id)
+// — mesmo padrão sem FK já usado por StockMovement.item_type/item_id.
+export type InventoryPurchaseCategory = 'FILAMENT' | 'ACCESSORY' | 'PACKAGING'
+
+// Ledger financeiro imutável — nunca editado nem excluído pelo frontend.
+// total_value é sempre item_value + freight_value (coluna gerada no banco).
+export interface InventoryPurchase {
+  id: string
+  category: InventoryPurchaseCategory
+  item_id: string
+  quantity: number
+  item_value: number
+  freight_value: number
+  total_value: number
+  occurred_at: string
+  notes: string | null
+  idempotency_key: string | null
+  created_by: string
+  created_at: string
 }

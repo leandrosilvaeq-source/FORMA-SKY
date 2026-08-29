@@ -1916,3 +1916,38 @@ describe('InventoryPage — painel "Movimentar estoque" (StockMovementPanel)', (
     expect(setLocalStock).not.toHaveBeenCalled()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Módulo 3, Incremento 5 (Compras) — botão "Compras" compartilhado pelo
+// InventoryPageShell, presente nas áreas Acessórios e Embalagens (a terceira
+// área, Filamentos, é coberta por FilamentsInventoryPage.test.tsx). O
+// diálogo em si (campos/validação/submissão por categoria) é coberto
+// integralmente por PurchaseDialog.test.tsx — aqui só confirmamos que o
+// botão aparece (nunca duplicado) em cada área e abre o mesmo diálogo.
+// ---------------------------------------------------------------------------
+
+describe('InventoryPage — botão "Compras" (Módulo 3, Incremento 5)', () => {
+  it('o botão "Compras" aparece na área Acessórios e abre "Registrar compra"', async () => {
+    mockAccessories([accessoryFixture()])
+    mockPackaging([packagingFixture()])
+    const user = userEvent.setup()
+    renderPage('acessorios')
+
+    const buttons = screen.getAllByRole('button', { name: 'Compras' })
+    expect(buttons).toHaveLength(1)
+    await user.click(buttons[0])
+    expect(screen.getByRole('dialog', { name: 'Registrar compra' })).toBeInTheDocument()
+  })
+
+  it('o botão "Compras" aparece na área Embalagens e abre "Registrar compra"', async () => {
+    mockAccessories([accessoryFixture()])
+    mockPackaging([packagingFixture()])
+    const user = userEvent.setup()
+    renderPage('embalagens')
+
+    const buttons = screen.getAllByRole('button', { name: 'Compras' })
+    expect(buttons).toHaveLength(1)
+    await user.click(buttons[0])
+    expect(screen.getByRole('dialog', { name: 'Registrar compra' })).toBeInTheDocument()
+  })
+})

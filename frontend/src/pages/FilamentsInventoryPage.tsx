@@ -174,7 +174,12 @@ export function FilamentsInventoryPage() {
   }
 
   return (
-    <InventoryPageShell area="filamentos">
+    <InventoryPageShell
+      area="filamentos"
+      onPurchaseCompleted={(category) => {
+        if (category === 'FILAMENT') refetch()
+      }}
+    >
       <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <input
           type="search"
@@ -340,7 +345,6 @@ export function FilamentsInventoryPage() {
                 manufacturer: editingType.manufacturer,
                 line: editingType.line,
                 commercial_color: editingType.commercial_color,
-                color_code: editingType.color_code,
                 minimum_stock_grams: editingType.minimum_stock_grams,
                 notes: null,
               }}

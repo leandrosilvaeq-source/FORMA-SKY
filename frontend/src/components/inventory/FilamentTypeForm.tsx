@@ -17,12 +17,23 @@ const MATERIAL_OPTIONS: FilamentMaterial[] = ['PLA', 'PETG', 'TPU']
 // usuário pode digitar qualquer outra linha livremente.
 const LINE_SUGGESTIONS = ['Sólida', 'Silk', 'Velvet', 'Translúcido', 'DuoColor']
 
+// color_code (código da cor do fabricante) foi removido da interface nesta
+// rodada (pedido explícito: "remover da interface a necessidade de
+// informar código da cor/filamento") — nunca exigido para cadastrar/editar
+// um tipo. A coluna continua existindo no banco (filament_types.color_code,
+// nullable, já era opcional antes desta decisão) para preservar
+// compatibilidade com registros antigos que já tenham um valor — este
+// formulário simplesmente nunca envia essa chave, então create/update
+// nunca a tocam (PATCH sem a chave preserva o valor atual; create sem a
+// chave grava null, mesmo comportamento de antes para um cadastro sem
+// código informado). O identificador interno automático do rolo
+// (filament_spools.code, formato RL-YY-NNN) é outra coisa — gerado pelo
+// backend, nunca digitado, e não é afetado por esta remoção.
 export interface FilamentTypeFormValues {
   material: FilamentMaterial
   manufacturer: string
   line: string
   commercial_color: string
-  color_code: string | null
   minimum_stock_grams: number | null
   notes: string | null
 }
@@ -32,7 +43,6 @@ export interface FilamentTypeFormInitialValues {
   manufacturer: string
   line: string
   commercial_color: string
-  color_code: string | null
   minimum_stock_grams: number | null
   notes: string | null
 }
@@ -60,7 +70,6 @@ export function FilamentTypeForm({
   const [manufacturer, setManufacturer] = useState(initialValues?.manufacturer ?? '')
   const [line, setLine] = useState(initialValues?.line ?? '')
   const [commercialColor, setCommercialColor] = useState(initialValues?.commercial_color ?? '')
-  const [colorCode, setColorCode] = useState(initialValues?.color_code ?? '')
   const [minimumStockGrams, setMinimumStockGrams] = useState(
     initialValues?.minimum_stock_grams != null ? String(initialValues.minimum_stock_grams) : '',
   )
@@ -97,7 +106,6 @@ export function FilamentTypeForm({
       manufacturer: trimmedManufacturer,
       line: trimmedLine,
       commercial_color: trimmedColor,
-      color_code: colorCode.trim() ? colorCode.trim() : null,
       minimum_stock_grams: minimumStockResult.value ?? null,
       notes: notes.trim() ? notes.trim() : null,
     })
@@ -195,17 +203,6 @@ export function FilamentTypeForm({
           className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
         />
         {fieldErrors.commercial_color && <p className="text-destructive text-sm">{fieldErrors.commercial_color}</p>}
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <Label htmlFor={`${idPrefix}-color-code`}>Código da cor (opcional)</Label>
-        <Input
-          id={`${idPrefix}-color-code`}
-          value={colorCode}
-          onChange={(event) => setColorCode(event.target.value)}
-          disabled={isSubmitting}
-          className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
-        />
       </div>
 
       <div className="flex flex-col gap-2">

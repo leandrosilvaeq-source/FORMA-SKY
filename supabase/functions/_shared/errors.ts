@@ -259,6 +259,26 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
     "FILAMENT_TARE_UNKNOWN:",
     (message) => new BusinessRuleError(message.replace(/^FILAMENT_TARE_UNKNOWN:\s*/, "")),
   ],
+  // Módulo 3, Incremento 5 (Compras) — migrations 20260828120000/121000.
+  // register_inventory_purchase: mesmo critério das entradas acima —
+  // mensagens de defesa em profundidade (a Edge Function `inventory-purchases`
+  // já valida tudo isso antes de chamar a RPC) mapeadas para 400, marcadores
+  // estáveis de regra de negócio mapeados para 409 com o prefixo removido.
+  ["inventory_purchases.category inválido", (message) => new ValidationError(message)],
+  ["register_inventory_purchase: p_quantity deve ser", (message) => new ValidationError(message)],
+  ["register_inventory_purchase: p_item_value não pode ser negativo", (message) => new ValidationError(message)],
+  ["register_inventory_purchase: p_freight_value não pode ser negativo", (message) => new ValidationError(message)],
+  ["register_inventory_purchase: p_item_id é obrigatório", (message) => new ValidationError(message)],
+  ["register_inventory_purchase: informe exatamente", (message) => new ValidationError(message)],
+  ["register_inventory_purchase: peso bruto do rolo", (message) => new ValidationError(message)],
+  [
+    "INVENTORY_PURCHASE_ITEM_INACTIVE:",
+    (message) => new BusinessRuleError(message.replace(/^INVENTORY_PURCHASE_ITEM_INACTIVE:\s*/, "")),
+  ],
+  [
+    "FILAMENT_TYPE_INACTIVE_MATCH:",
+    (message) => new BusinessRuleError(message.replace(/^FILAMENT_TYPE_INACTIVE_MATCH:\s*/, "")),
+  ],
 ];
 
 export function mapPgError(err: PgErrorLike): AppError {

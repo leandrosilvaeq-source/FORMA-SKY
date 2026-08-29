@@ -20,8 +20,9 @@ const PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 // e Embalagens, docs/05_ROADMAP_MODULOS.md §9) + `stock-movements` (Módulo
 // 3, Incremento 1 — register_stock_movement, docs/05_ROADMAP_MODULOS.md
 // §9b) + `filament-types`/`filament-spools`/`filament-movements` (Módulo 3,
-// Incremento 4 — MVP de filamentos, ainda NÃO publicadas — rodam só
-// localmente nesta rodada) (supabase/config.toml [functions.*]).
+// Incremento 4 — MVP de filamentos) + `inventory-purchases` (Módulo 3,
+// Incremento 5 — fluxo centralizado de Compras, ainda NÃO publicada — roda
+// só localmente nesta rodada) (supabase/config.toml [functions.*]).
 export type EdgeFunctionName =
   | 'products'
   | 'orders'
@@ -35,6 +36,7 @@ export type EdgeFunctionName =
   | 'filament-types'
   | 'filament-spools'
   | 'filament-movements'
+  | 'inventory-purchases'
 
 type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
 

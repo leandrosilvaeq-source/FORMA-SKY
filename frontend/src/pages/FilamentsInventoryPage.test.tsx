@@ -52,6 +52,8 @@ function spoolFixture(overrides: Partial<FilamentSpool> = {}): FilamentSpool {
     is_active: true,
     created_at: '',
     updated_at: '',
+    initial_gross_weight_grams: null,
+    purchase_id: null,
     has_movement_history: false,
     ...overrides,
   }
@@ -846,5 +848,65 @@ describe('FilamentsInventoryPage', () => {
 
     const cardHeading = within(dialog).getAllByText('RL-26-001')
     expect(cardHeading.length).toBeGreaterThanOrEqual(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Módulo 3, Incremento 5 (Compras) — botão "Compras" compartilhado pelo
+// InventoryPageShell, também presente na área Filamentos (Acessórios/
+// Embalagens são cobertos por InventoryPage.test.tsx). O diálogo em si é
+// coberto integralmente por PurchaseDialog.test.tsx.
+//
+// Requisito 2 desta rodada ("remover da interface a necessidade de
+// informar código da cor/filamento"): "Código da cor" não aparece mais nos
+// diálogos de Novo/Editar tipo de filamento — a coluna color_code continua
+// existindo no banco (compatibilidade com registros antigos), só a
+// interface deixou de exigi-la/exibi-la.
+// ---------------------------------------------------------------------------
+
+describe('FilamentsInventoryPage — botão "Compras" e remoção do código da cor (Módulo 3, Incremento 5)', () => {
+  it('o botão "Compras" aparece na área Filamentos e abre "Registrar compra"', async () => {
+    mockTypes([typeFixture()])
+    const user = userEvent.setup()
+    renderPage()
+
+    const buttons = screen.getAllByRole('button', { name: 'Compras' })
+    expect(buttons).toHaveLength(1)
+    await user.click(buttons[0])
+    expect(screen.getByRole('dialog', { name: 'Registrar compra' })).toBeInTheDocument()
+  })
+
+  it('"Novo tipo de filamento" nunca exibe um campo "Código da cor"', async () => {
+    mockTypes([])
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: 'Novo tipo de filamento' }))
+    const dialog = screen.getByRole('dialog', { name: 'Novo tipo de filamento' })
+    expect(within(dialog).queryByLabelText(/código da cor/i)).not.toBeInTheDocument()
+  })
+
+  it('"Editar tipo de filamento" nunca exibe um campo "Código da cor", mesmo para um tipo com color_code já preenchido', async () => {
+    mockTypes([typeFixture({ color_code: 'PLA-BLK-01' })])
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: 'Editar' }))
+    const dialog = screen.getByRole('dialog', { name: 'Editar tipo de filamento' })
+    expect(within(dialog).queryByLabelText(/código da cor/i)).not.toBeInTheDocument()
+  })
+
+  it('editar um tipo sem tocar em color_code não envia essa chave no payload (preserva o valor existente)', async () => {
+    const update = vi.fn().mockResolvedValue(typeFixture())
+    mockTypes([typeFixture({ color_code: 'PLA-BLK-01' })], { update })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: 'Editar' }))
+    const dialog = screen.getByRole('dialog', { name: 'Editar tipo de filamento' })
+    await user.click(within(dialog).getByRole('button', { name: /^salvar alterações$/i }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1))
+    expect(update.mock.calls[0][1]).not.toHaveProperty('color_code')
   })
 })

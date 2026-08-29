@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom'
 import { AppLayout } from '@/components/layout/AppLayout'
+import { PurchaseDialog } from '@/components/inventory/PurchaseDialog'
 import { cn } from '@/lib/utils'
+import type { InventoryPurchaseCategory } from '@/types/domain'
 
 // Extraído de InventoryPage.tsx nesta rodada (Módulo 3, Incremento 4 —
 // filamentos) especificamente para permitir uma TERCEIRA área (Filamentos)
@@ -45,11 +47,29 @@ export function InventoryAreaNav({ area }: { area: InventoryArea }) {
   )
 }
 
-export function InventoryPageShell({ area, children }: { area: InventoryArea; children: React.ReactNode }) {
+// Módulo 3, Incremento 5 (Compras) — pedido do usuário em 2026-08-28: um
+// botão "Compras" destacado, único, compartilhado pelas três áreas (nunca
+// duplicado por página) — reaproveita este shell, já usado pelas três, em
+// vez de cada página renderizar o próprio PurchaseDialog. onPurchaseCompleted
+// é opcional: FilamentsInventoryPage/AccessoriesInventoryPage/
+// PackagingInventoryPage passam a própria função de refetch (só chamada
+// quando a categoria comprada é a da área atual — comprar um acessório
+// enquanto a aba Filamentos está aberta não precisa refazer a busca de
+// filamentos, por exemplo).
+export function InventoryPageShell({
+  area,
+  onPurchaseCompleted,
+  children,
+}: {
+  area: InventoryArea
+  onPurchaseCompleted?: (category: InventoryPurchaseCategory) => void
+  children: React.ReactNode
+}) {
   return (
     <AppLayout>
       <div className="flex items-center justify-between">
         <h1 className="font-heading text-2xl font-medium">Estoque</h1>
+        <PurchaseDialog onPurchaseCompleted={onPurchaseCompleted ?? (() => {})} />
       </div>
       <p className="text-muted-foreground mt-1 text-sm">
         Consulte os cadastros mestre de acessórios, embalagens e filamentos usados na composição de produtos.
