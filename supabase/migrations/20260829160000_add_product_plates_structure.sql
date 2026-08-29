@@ -11,6 +11,28 @@
 -- remoto (só criada localmente, nesta rodada). Aplicar exige autorização
 -- explícita separada, fora do escopo desta entrada.
 --
+-- FONTE AUTORITATIVA (reafirmado pela auditoria da rodada corretiva de
+-- 2026-08-29, que bloqueou a rodada anterior por permitir duas fontes
+-- divergentes no FRONTEND): product_plates/product_plate_filaments é a
+-- ÚNICA estrutura autoritativa da composição de produção a partir desta
+-- migration. product_filaments (legado) é só uma PROJEÇÃO DE LEITURA de
+-- compatibilidade, nunca mais escrita de forma independente por nenhuma
+-- tela — o antigo diálogo "Composição de filamentos" (escrita direta e
+-- isolada em product_filaments) foi removido do frontend nessa mesma
+-- rodada corretiva. Nenhum trigger sincroniza as duas tabelas — não é
+-- necessário, porque não existe mais nenhum caminho de escrita
+-- independente em product_filaments capaz de divergir de product_plates:
+-- toda escrita de composição de produção passa por set_product_production
+-- (só chamada de dentro de create_product_with_plates/update_product_full),
+-- que nunca toca product_filaments. product_filaments continua existindo
+-- só para representar, sem perda, a composição de Produtos que ainda não
+-- passaram pelo backfill desta migration (Seção 5 abaixo) — será seguro
+-- remover essa dependência legada (a tabela, a RPC set_product_filaments e
+-- a leitura de fallback no frontend) quando o backfill tiver rodado no
+-- remoto E toda leitura (ProductDetailPage.tsx, ProductForm.tsx via
+-- ProductsPage.tsx) tiver confirmado 100% dos Produtos ativos com ao menos
+-- 1 linha em product_plates — não antes disso.
+--
 -- NOMENCLATURA — ATENÇÃO: "plate" aqui é um conceito NOVO ("um dos N
 -- trabalhos de impressão separados que compõem uma unidade do Produto",
 -- cada um com sua própria composição/peso/tempo) e é INTEIRAMENTE

@@ -11,6 +11,7 @@ const {
   usePackagingMock,
   useFilamentTypesMock,
   useProductFilamentsMock,
+  useProductPlatesMock,
   useAuthMock,
 } = vi.hoisted(() => ({
   useProductMock: vi.fn(),
@@ -19,6 +20,7 @@ const {
   usePackagingMock: vi.fn(),
   useFilamentTypesMock: vi.fn(),
   useProductFilamentsMock: vi.fn(),
+  useProductPlatesMock: vi.fn(),
   useAuthMock: vi.fn(),
 }))
 
@@ -28,6 +30,7 @@ vi.mock('@/hooks/useAccessories', () => ({ useAccessories: useAccessoriesMock })
 vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
 vi.mock('@/hooks/useFilamentTypes', () => ({ useFilamentTypes: useFilamentTypesMock }))
 vi.mock('@/hooks/useProductFilaments', () => ({ useProductFilaments: useProductFilamentsMock }))
+vi.mock('@/hooks/useProductPlates', () => ({ useProductPlates: useProductPlatesMock }))
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
 
 import { ProductDetailPage } from './ProductDetailPage'
@@ -164,6 +167,22 @@ describe('ProductDetailPage', () => {
       error: null,
       retry: vi.fn(),
       save: vi.fn(),
+    })
+    // Estrutura produtiva por plates (2026-08-29; rodada corretiva) — fonte
+    // autoritativa de Filamentos nesta Ficha. Padrão: plates: [] (Produto
+    // ainda sem backfill, mesmo estado real de hoje com a migration não
+    // aplicada) — ativa o fallback de compatibilidade para
+    // useProductFilamentsMock (legado), preservando integralmente o
+    // comportamento dos testes de Filamentos já existentes abaixo. Testes
+    // que exercitam a fonte autoritativa (product_plates com dado real)
+    // sobrescrevem este mock explicitamente.
+    useProductPlatesMock.mockReturnValue({
+      status: 'success',
+      plates: [],
+      filamentsByPlateId: new Map(),
+      isLoading: false,
+      error: null,
+      retry: vi.fn(),
     })
   })
 
@@ -780,6 +799,69 @@ describe('ProductDetailPage', () => {
 
       await userEvent.setup().click(screen.getByRole('button', { name: /tentar novamente/i }))
       expect(filamentsRetryMock).toHaveBeenCalled()
+    })
+
+    it('quando o Produto já tem plates (fonte autoritativa), mostra um card "Filamentos — Plate N" por plate, ignorando product_filaments legado', () => {
+      useProductPlatesMock.mockReturnValue({
+        status: 'success',
+        plates: [
+          { id: 'pp1', product_id: 'p1', plate_number: 1, production_time_seconds: 3600, created_at: '', updated_at: '' },
+          { id: 'pp2', product_id: 'p1', plate_number: 2, production_time_seconds: 1800, created_at: '', updated_at: '' },
+        ],
+        filamentsByPlateId: new Map([
+          ['pp1', [{ id: 'ppf1', plate_id: 'pp1', filament_type_id: 'ft1', weight_grams: 40, created_at: '' }]],
+          ['pp2', [{ id: 'ppf2', plate_id: 'pp2', filament_type_id: 'ft1', weight_grams: 10, created_at: '' }]],
+        ]),
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+      })
+      useFilamentTypesMock.mockReturnValue({
+        types: [filamentType],
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+        create: vi.fn(),
+        update: vi.fn(),
+        delete: vi.fn(),
+      })
+      // product_filaments (legado) deliberadamente com um valor DIFERENTE —
+      // prova que a Ficha usa product_plates, nunca o legado, quando plates
+      // já existem (o achado de divergência entre telas desta auditoria).
+      useProductFilamentsMock.mockReturnValue({
+        status: 'success',
+        filaments: [{ ...productFilamentRow, theoretical_weight_grams: 999 }],
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+        save: vi.fn(),
+      })
+      renderPage()
+
+      expect(screen.getByText('Filamentos — Plate 1')).toBeInTheDocument()
+      expect(screen.getByText('Filamentos — Plate 2')).toBeInTheDocument()
+      expect(screen.queryByText('999,00 g')).not.toBeInTheDocument()
+      expect(screen.getByText('40,00 g')).toBeInTheDocument()
+      expect(screen.getByText('10,00 g')).toBeInTheDocument()
+    })
+
+    it('erro ao carregar os plates fica restrito ao bloco de Filamentos, com retry próprio (nem consulta o legado)', async () => {
+      const platesRetryMock = vi.fn()
+      useProductPlatesMock.mockReturnValue({
+        status: 'error',
+        plates: [],
+        filamentsByPlateId: new Map(),
+        isLoading: false,
+        error: new ApiError('database', 500, 'Falha ao carregar plates.'),
+        retry: platesRetryMock,
+      })
+      renderPage()
+
+      expect(screen.getByText('Identificação')).toBeInTheDocument()
+      expect(screen.getByText('Falha ao carregar plates.')).toBeInTheDocument()
+
+      await userEvent.setup().click(screen.getByRole('button', { name: /tentar novamente/i }))
+      expect(platesRetryMock).toHaveBeenCalled()
     })
 
     it('não altera o Subtotal de componentes (continua só Acessórios/Embalagens)', () => {

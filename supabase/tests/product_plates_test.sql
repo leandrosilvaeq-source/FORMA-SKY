@@ -487,6 +487,103 @@ begin
   end;
 end $$;
 
+-- 2.3 — Falha parcial na EDIÇÃO (filamento inválido no 2º plate) desfaz
+-- TUDO — o Produto continua com a composição/nome ANTERIORES à tentativa,
+-- nenhum plate órfão do novo estado tentado sobra.
+do $$
+declare
+  v_user_id uuid;
+  v_type_a uuid;
+  v_product_id uuid;
+  v_row_before public.products;
+  v_row_after public.products;
+  v_plate_count_after integer;
+begin
+  select value::uuid into v_user_id from zz_pp_fixtures where key = 'user_id';
+  select value::uuid into v_type_a from zz_pp_fixtures where key = 'type_a';
+
+  v_product_id := public.create_product_with_plates(
+    'TESTE OPS Plates — Editar com falha no meio', 'CATALOG', 'teste', null,
+    10.00, null, true,
+    jsonb_build_array(jsonb_build_object(
+      'production_time_seconds', 60,
+      'filaments', jsonb_build_array(jsonb_build_object('filament_type_id', v_type_a, 'weight_grams', 10))
+    )),
+    null, null, '[]'::jsonb, '[]'::jsonb, v_user_id
+  );
+  select * into v_row_before from public.products where id = v_product_id;
+
+  begin
+    perform public.update_product_full(
+      v_product_id,
+      jsonb_build_object('name', 'TESTE OPS Plates — Nome que não deveria persistir'),
+      jsonb_build_array(jsonb_build_object(
+        'production_time_seconds', 120,
+        'filaments', jsonb_build_array(jsonb_build_object('filament_type_id', gen_random_uuid(), 'weight_grams', 5))
+      )),
+      null, null, '[]'::jsonb, '[]'::jsonb, v_user_id
+    );
+    insert into zz_pp_test_results(section, test_name, status, details)
+      values ('2', '2.3 falha parcial na edição desfaz TUDO (nome e composição revertem ao estado anterior)', 'FAIL', 'não levantou exceção');
+  exception when others then
+    select * into v_row_after from public.products where id = v_product_id;
+    select count(*) into v_plate_count_after from public.product_plates where product_id = v_product_id;
+    insert into zz_pp_test_results(section, test_name, status, details)
+      values ('2', '2.3 falha parcial na edição desfaz TUDO (nome e composição revertem ao estado anterior)',
+        case when v_row_after.name = v_row_before.name and v_row_after.default_weight_grams = v_row_before.default_weight_grams
+                and v_plate_count_after = 1
+             then 'PASS' else 'FAIL' end,
+        sqlerrm || ' name_after=' || v_row_after.name || ' weight_after=' || v_row_after.default_weight_grams ||
+        ' plate_count_after=' || v_plate_count_after);
+  end;
+end $$;
+
+-- 2.4 — Escrever/editar plates NUNCA toca product_filaments (legado) do
+-- mesmo Produto — confirma que não existe nenhuma sincronização/gravação
+-- cruzada entre as duas tabelas (a garantia central da fonte autoritativa
+-- única: product_filaments só muda se alguém a escrever DIRETAMENTE, o que
+-- nenhuma rota deste incremento faz).
+do $$
+declare
+  v_user_id uuid;
+  v_type_a uuid;
+  v_product_id uuid;
+  v_legacy_count_before integer;
+  v_legacy_count_after integer;
+begin
+  select value::uuid into v_user_id from zz_pp_fixtures where key = 'user_id';
+  select value::uuid into v_type_a from zz_pp_fixtures where key = 'type_a';
+
+  v_product_id := public.create_product_with_plates(
+    'TESTE OPS Plates — Nunca escreve em product_filaments', 'CATALOG', 'teste', null,
+    10.00, null, true,
+    jsonb_build_array(jsonb_build_object(
+      'production_time_seconds', 60,
+      'filaments', jsonb_build_array(jsonb_build_object('filament_type_id', v_type_a, 'weight_grams', 10))
+    )),
+    null, null, '[]'::jsonb, '[]'::jsonb, v_user_id
+  );
+  select count(*) into v_legacy_count_before from public.product_filaments where product_id = v_product_id;
+
+  perform public.update_product_full(
+    v_product_id, '{}'::jsonb,
+    jsonb_build_array(jsonb_build_object(
+      'production_time_seconds', 90,
+      'filaments', jsonb_build_array(jsonb_build_object('filament_type_id', v_type_a, 'weight_grams', 20))
+    )),
+    null, null, '[]'::jsonb, '[]'::jsonb, v_user_id
+  );
+  select count(*) into v_legacy_count_after from public.product_filaments where product_id = v_product_id;
+
+  insert into zz_pp_test_results(section, test_name, status, details)
+    values ('2', '2.4 criar/editar plates nunca grava em product_filaments (legado) — 0 antes e 0 depois',
+      case when v_legacy_count_before = 0 and v_legacy_count_after = 0 then 'PASS' else 'FAIL' end,
+      'before=' || v_legacy_count_before || ' after=' || v_legacy_count_after);
+exception when others then
+  insert into zz_pp_test_results(section, test_name, status, details)
+    values ('2', '2.4 criar/editar plates nunca grava em product_filaments', 'FAIL', sqlerrm);
+end $$;
+
 -- =============================================================================
 -- SEÇÃO 3 — compatibilidade com a validação de composição de Pedidos
 -- (validate_catalog_composition_for_creation aceita product_plates OU

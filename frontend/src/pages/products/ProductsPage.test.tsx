@@ -12,6 +12,7 @@ const {
   useProductCompositionMock,
   useFilamentTypesMock,
   useProductFilamentsMock,
+  useProductPlatesMock,
   useProductPriceHistoryMock,
   toastMock,
   useAuthMock,
@@ -22,6 +23,7 @@ const {
   useProductCompositionMock: vi.fn(),
   useFilamentTypesMock: vi.fn(),
   useProductFilamentsMock: vi.fn(),
+  useProductPlatesMock: vi.fn(),
   useProductPriceHistoryMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
   useAuthMock: vi.fn(),
@@ -33,6 +35,7 @@ vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
 vi.mock('@/hooks/useProductComposition', () => ({ useProductComposition: useProductCompositionMock }))
 vi.mock('@/hooks/useFilamentTypes', () => ({ useFilamentTypes: useFilamentTypesMock }))
 vi.mock('@/hooks/useProductFilaments', () => ({ useProductFilaments: useProductFilamentsMock }))
+vi.mock('@/hooks/useProductPlates', () => ({ useProductPlates: useProductPlatesMock }))
 vi.mock('@/hooks/useProductPriceHistory', () => ({ useProductPriceHistory: useProductPriceHistoryMock }))
 vi.mock('sonner', () => ({ toast: toastMock }))
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
@@ -110,6 +113,29 @@ const productFilamentRow = {
   created_at: '',
 }
 
+// Estrutura produtiva por plates (2026-08-29, rodada corretiva) — fixture
+// "já migrada": o Produto tem 1 plate real com 1 filamento — usada como
+// padrão em beforeEach para que a maioria dos testes de "Editar produto"
+// exercite o caminho autoritativo (product_plates), não o fallback legado.
+// Os testes de fallback legado abaixo sobrescrevem useProductPlatesMock
+// explicitamente para plates: [].
+const productPlateRow = {
+  id: 'pp1',
+  product_id: '1',
+  plate_number: 1,
+  production_time_seconds: 3600,
+  created_at: '',
+  updated_at: '',
+}
+
+const productPlateFilamentRow = {
+  id: 'ppf1',
+  plate_id: 'pp1',
+  filament_type_id: 'ft1',
+  weight_grams: 40,
+  created_at: '',
+}
+
 function renderPage() {
   return render(<ProductsPage />, { wrapper: MemoryRouter })
 }
@@ -134,6 +160,11 @@ function mockProducts(
     createWithPlates: createMock,
     changePrice: changePriceMock,
     update: updateMock,
+    // Edição completa por plates (rodada corretiva 2026-08-29) —
+    // update_product_full, substitui updateDetails. Um mock resolvido
+    // trivial basta aqui: nenhum destes testes (busca/ordenação) abre
+    // "Editar produto".
+    updateFull: vi.fn().mockResolvedValue(list[0]),
   })
 }
 
@@ -177,7 +208,7 @@ describe('ProductsPage', () => {
   let createMock: ReturnType<typeof vi.fn>
   let changePriceMock: ReturnType<typeof vi.fn>
   let updateMock: ReturnType<typeof vi.fn>
-  let updateDetailsMock: ReturnType<typeof vi.fn>
+  let updateFullMock: ReturnType<typeof vi.fn>
   let refetchMock: ReturnType<typeof vi.fn>
   let saveCompositionMock: ReturnType<typeof vi.fn>
   let saveFilamentsMock: ReturnType<typeof vi.fn>
@@ -186,7 +217,7 @@ describe('ProductsPage', () => {
     createMock = vi.fn().mockResolvedValue(undefined)
     changePriceMock = vi.fn().mockResolvedValue(undefined)
     updateMock = vi.fn().mockResolvedValue({ ...product, is_active: false })
-    updateDetailsMock = vi.fn().mockResolvedValue(product)
+    updateFullMock = vi.fn().mockResolvedValue(product)
     refetchMock = vi.fn()
     saveCompositionMock = vi.fn().mockResolvedValue(undefined)
     saveFilamentsMock = vi.fn().mockResolvedValue(undefined)
@@ -201,7 +232,7 @@ describe('ProductsPage', () => {
       createWithPlates: createMock,
       changePrice: changePriceMock,
       update: updateMock,
-      updateDetails: updateDetailsMock,
+      updateFull: updateFullMock,
     })
     useProductPriceHistoryMock.mockReturnValue({
       status: 'success',
@@ -237,6 +268,17 @@ describe('ProductsPage', () => {
       error: null,
       retry: vi.fn(),
       save: saveFilamentsMock,
+    })
+    // Padrão: o Produto já tem 1 plate real (product_plates é a fonte
+    // autoritativa) — os testes de fallback legado abaixo sobrescrevem para
+    // plates: [] explicitamente.
+    useProductPlatesMock.mockReturnValue({
+      status: 'success',
+      plates: [productPlateRow],
+      filamentsByPlateId: new Map([['pp1', [productPlateFilamentRow]]]),
+      isLoading: false,
+      error: null,
+      retry: vi.fn(),
     })
     toastMock.success.mockReset()
     toastMock.error.mockReset()
@@ -583,8 +625,8 @@ describe('ProductsPage', () => {
     await waitFor(() => expect(changePriceMock).toHaveBeenCalledWith('1', { new_price: 15.5, reason: null }))
   })
 
-  describe('Editar produto — seção "Dados do produto" (2026-08-29)', () => {
-    it('abre pré-preenchido com os dados atuais do produto', async () => {
+  describe('Editar produto — formulário completo por plates (rodada corretiva 2026-08-29)', () => {
+    it('abre pré-preenchido com os dados atuais do produto, plates/filamentos e acessórios/embalagens já carregados', async () => {
       const user = userEvent.setup()
       renderPage()
 
@@ -592,26 +634,206 @@ describe('ProductsPage', () => {
 
       expect(screen.getByLabelText('Nome')).toHaveValue('Chaveiro')
       expect(screen.getByRole('radio', { name: 'Decoração' })).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByText('Plate 1')).toBeInTheDocument()
+      expect(screen.getByRole('combobox', { name: 'Tipo de filamento' })).toHaveTextContent(
+        'PLA · Voolt3D · Sólida · Preto',
+      )
+      expect(screen.getAllByLabelText('Peso (g)')[0]).toHaveValue('40')
+      expect(screen.getByText(/Ímã 6x2 · Acessório · Qtd\. 2/)).toBeInTheDocument()
     })
 
-    it('edita os campos suportados e chama updateDetails, nunca alterando o preço por esta via', async () => {
+    it('não exibe mais o campo de Preço editável nesta seção — o preço continua só na seção "Preço"', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+
+      expect(screen.getByRole('button', { name: 'Salvar alterações' })).toBeInTheDocument()
+      expect(screen.getByLabelText(/novo preço/i)).toBeInTheDocument()
+      const dialog = screen.getByRole('dialog', { name: 'Editar produto' })
+      // Nenhum campo rotulado "Preço" (exatamente) dentro do formulário
+      // completo — só o de "Novo preço", da seção separada.
+      expect(within(dialog).queryByLabelText(/^preço$/i)).not.toBeInTheDocument()
+    })
+
+    it('edita os campos e a composição, salva tudo atomicamente via updateFull, nunca envia default_price nem product_type', async () => {
       const user = userEvent.setup()
       renderPage()
 
       await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
       await user.clear(screen.getByLabelText('Nome'))
       await user.type(screen.getByLabelText('Nome'), 'Chaveiro Grande')
-      await user.click(screen.getByRole('button', { name: /^salvar dados do produto$/i }))
+      await user.click(screen.getByRole('button', { name: /^salvar alterações$/i }))
 
       await waitFor(() =>
-        expect(updateDetailsMock).toHaveBeenCalledWith(
+        expect(updateFullMock).toHaveBeenCalledWith(
           '1',
-          expect.objectContaining({ name: 'Chaveiro Grande' }),
+          expect.objectContaining({
+            name: 'Chaveiro Grande',
+            plates: [{ production_time_seconds: 3600, filaments: [{ filament_type_id: 'ft1', weight_grams: 40 }] }],
+            accessories: [{ id: 'a1', quantity: 2 }],
+            packaging: [],
+          }),
         ),
       )
-      const payload = updateDetailsMock.mock.calls[0][1]
+      const payload = updateFullMock.mock.calls[0][1]
       expect('default_price' in payload).toBe(false)
-      expect(toastMock.success).toHaveBeenCalledWith('Dados do produto atualizados.')
+      expect('product_type' in payload).toBe(false)
+      expect(toastMock.success).toHaveBeenCalledWith('Produto atualizado.')
+    })
+
+    it('mostra um skeleton de carregamento enquanto os plates ainda não chegaram, sem abrir o formulário vazio', async () => {
+      useProductPlatesMock.mockReturnValue({
+        status: 'loading',
+        plates: [],
+        filamentsByPlateId: new Map(),
+        isLoading: true,
+        error: null,
+        retry: vi.fn(),
+      })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+
+      expect(screen.queryByLabelText('Nome')).not.toBeInTheDocument()
+      expect(screen.queryByText('Plate 1')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /^salvar alterações$/i })).not.toBeInTheDocument()
+    })
+
+    it('mostra o erro real e permite tentar novamente quando os plates falham ao carregar', async () => {
+      const retryMock = vi.fn()
+      useProductPlatesMock.mockReturnValue({
+        status: 'error',
+        plates: [],
+        filamentsByPlateId: new Map(),
+        isLoading: false,
+        error: new ApiError('database', 500, 'Falha ao carregar plates.'),
+        retry: retryMock,
+      })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+
+      expect(screen.getByText('Falha ao carregar plates.')).toBeInTheDocument()
+      expect(screen.queryByLabelText('Nome')).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: /tentar novamente/i }))
+      expect(retryMock).toHaveBeenCalled()
+    })
+
+    it('Produto sem nenhum plate ainda (backfill pendente): usa product_filaments legado como Plate 1, sem perder a composição existente', async () => {
+      useProductPlatesMock.mockReturnValue({
+        status: 'success',
+        plates: [],
+        filamentsByPlateId: new Map(),
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+      })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+
+      expect(screen.getByText('Plate 1')).toBeInTheDocument()
+      expect(screen.getByRole('combobox', { name: 'Tipo de filamento' })).toHaveTextContent(
+        'PLA · Voolt3D · Sólida · Preto',
+      )
+      expect(screen.getAllByLabelText('Peso (g)')[0]).toHaveValue('12.5')
+    })
+
+    it('Produto sem plates e sem nenhuma composição legada: nasce com 1 plate vazio, nunca some/erra', async () => {
+      useProductPlatesMock.mockReturnValue({
+        status: 'success',
+        plates: [],
+        filamentsByPlateId: new Map(),
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+      })
+      useProductFilamentsMock.mockReturnValue({
+        status: 'success',
+        filaments: [],
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+        save: saveFilamentsMock,
+      })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+
+      expect(screen.getByText('Plate 1')).toBeInTheDocument()
+      expect(screen.getByLabelText('Nome')).toHaveValue('Chaveiro')
+    })
+
+    it('carrega múltiplos plates, cada um com sua composição própria de filamentos', async () => {
+      useProductPlatesMock.mockReturnValue({
+        status: 'success',
+        plates: [productPlateRow, { ...productPlateRow, id: 'pp2', plate_number: 2, production_time_seconds: 1800 }],
+        filamentsByPlateId: new Map([
+          ['pp1', [productPlateFilamentRow]],
+          ['pp2', [{ ...productPlateFilamentRow, id: 'ppf2', plate_id: 'pp2', filament_type_id: 'ft1', weight_grams: 10 }]],
+        ]),
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+      })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+
+      expect(screen.getByText('Plate 1')).toBeInTheDocument()
+      expect(screen.getByText('Plate 2')).toBeInTheDocument()
+    })
+
+    it('carrega ajustes manuais pré-existentes do Produto (colunas de override)', async () => {
+      useProductsMock.mockReturnValue({
+        products: [{ ...product, production_weight_manual_override_grams: 55, production_time_manual_override_seconds: null }],
+        isLoading: false,
+        error: null,
+        refetch: refetchMock,
+        create: createMock,
+        createWithPlates: createMock,
+        changePrice: changePriceMock,
+        update: updateMock,
+        updateFull: updateFullMock,
+      })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+
+      expect(screen.getByText('55 g')).toBeInTheDocument()
+      expect(screen.getByText(/ajustado manualmente/i)).toBeInTheDocument()
+    })
+
+    it('um filamento inativo já vinculado ao plate permanece visível na edição e bloqueia o salvamento até ser removido', async () => {
+      useFilamentTypesMock.mockReturnValue({
+        types: [{ ...filamentType, is_active: false }],
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+        create: vi.fn(),
+        update: vi.fn(),
+        delete: vi.fn(),
+      })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+
+      expect(screen.getByRole('combobox', { name: 'Tipo de filamento' })).toHaveTextContent(
+        'PLA · Voolt3D · Sólida · Preto (inativo)',
+      )
+      await user.click(screen.getByRole('button', { name: /^salvar alterações$/i }))
+
+      expect(await screen.findByText(/remova os filamentos inativos/i)).toBeInTheDocument()
+      expect(updateFullMock).not.toHaveBeenCalled()
     })
   })
 
@@ -690,15 +912,22 @@ describe('ProductsPage', () => {
     })
   })
 
-  it('regressão: abrir "Editar produto" e salvar não afeta o diálogo/estado de Composição ou a Ficha Técnica', async () => {
+  it('regressão: abrir "Editar produto" e salvar não afeta o diálogo/estado de Acessórios e Embalagem (dialog rápido) nem a Ficha Técnica', async () => {
     const user = userEvent.setup()
     renderPage()
 
     await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
-    await user.click(screen.getByRole('button', { name: /^salvar dados do produto$/i }))
+    await user.click(screen.getByRole('button', { name: /^salvar alterações$/i }))
 
-    await waitFor(() => expect(updateDetailsMock).toHaveBeenCalled())
+    await waitFor(() => expect(updateFullMock).toHaveBeenCalled())
+    // O diálogo rápido "Acessórios e Embalagem" (ProductCompositionForm,
+    // save independente) nunca é acionado pela edição completa — são dois
+    // caminhos de escrita coerentes com a MESMA tabela/RPC
+    // (set_product_composition), nunca a mesma chamada.
     expect(saveCompositionMock).not.toHaveBeenCalled()
+    // product_filaments (legado) nunca é escrito por nenhum caminho desta
+    // página — a única leitura restante (useProductFilaments) é o fallback
+    // de compatibilidade para Produtos sem plates, nunca uma escrita.
     expect(saveFilamentsMock).not.toHaveBeenCalled()
     // O link para a Ficha Técnica continua intacto (mesmo href de sempre).
     expect(screen.getByRole('link', { name: 'Chaveiro' })).toHaveAttribute('href', '/produtos/1')
@@ -790,33 +1019,34 @@ describe('ProductsPage', () => {
   })
 
   // ---------------------------------------------------------------------------
-  // Filamentos (Módulo 3, Incremento 6A) — seção própria dentro do mesmo
-  // diálogo "Acessórios e Embalagem", com carregamento/erro/salvamento
-  // inteiramente independentes da seção acima (nunca a mesma chamada).
+  // Filamentos — rodada corretiva 2026-08-29: o antigo diálogo dedicado
+  // "Filamentos" (dentro de "Acessórios e Embalagem", escrevendo direto e de
+  // forma independente em product_filaments via set_product_filaments) foi
+  // REMOVIDO — mantê-lo seria exatamente a segunda fonte de verdade que esta
+  // rodada corrige (achado 3 da auditoria). A composição de filamentos por
+  // plate agora só é editável pelo formulário completo "Editar produto"
+  // (bloco acima). A cobertura de comportamento de formulário (múltiplos
+  // tipos/peso decimal, duplicidade, peso<=0, item inativo bloqueando
+  // salvar) já está coberta em ProductForm.test.tsx — replicada ali porque é
+  // o MESMO componente reaproveitado (ProductForm), não um formulário
+  // paralelo com regras próprias. Os testes abaixo cobrem só o que é
+  // responsabilidade desta página: nenhum caminho de escrita independente
+  // em product_filaments sobrevive na "Acessórios e Embalagem" (dialog
+  // rápido) e o link "Composição de filamentos" não existe mais ali.
   // ---------------------------------------------------------------------------
 
-  it('a seção Filamentos aparece pré-preenchida e salva de forma independente da seção de Acessórios/Embalagens', async () => {
+  it('o diálogo rápido "Acessórios e Embalagem" não tem mais nenhuma seção de Filamentos', async () => {
     const user = userEvent.setup()
     renderPage()
 
     await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
 
-    expect(screen.getByRole('combobox', { name: 'Tipo de filamento' })).toHaveTextContent('PLA · Voolt3D · Sólida · Preto')
-    expect(screen.getByRole('textbox', { name: 'Peso teórico por unidade (g)' })).toHaveValue('12.5')
-
-    await user.click(screen.getByRole('button', { name: /^salvar filamentos$/i }))
-
-    await waitFor(() =>
-      expect(saveFilamentsMock).toHaveBeenCalledWith({
-        filaments: [{ id: 'ft1', theoretical_weight_grams: 12.5 }],
-      }),
-    )
-    expect(toastMock.success).toHaveBeenCalledWith('Filamentos atualizados.')
-    // Salvar filamentos nunca aciona o salvamento de Acessórios/Embalagens.
-    expect(saveCompositionMock).not.toHaveBeenCalled()
+    expect(screen.queryByRole('combobox', { name: 'Tipo de filamento' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^salvar filamentos$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^adicionar filamento$/i })).not.toBeInTheDocument()
   })
 
-  it('salvar Acessórios/Embalagens nunca aciona o salvamento de Filamentos', async () => {
+  it('salvar Acessórios/Embalagens no diálogo rápido nunca chama nenhuma escrita em product_filaments (save legado nunca é montado)', async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -825,174 +1055,6 @@ describe('ProductsPage', () => {
 
     await waitFor(() => expect(saveCompositionMock).toHaveBeenCalled())
     expect(saveFilamentsMock).not.toHaveBeenCalled()
-  })
-
-  it('permite múltiplos tipos de filamento e peso decimal brasileiro (vírgula)', async () => {
-    useProductFilamentsMock.mockReturnValue({
-      status: 'success',
-      filaments: [],
-      isLoading: false,
-      error: null,
-      retry: vi.fn(),
-      save: saveFilamentsMock,
-    })
-    useFilamentTypesMock.mockReturnValue({
-      types: [filamentType, { ...filamentType, filament_type_id: 'ft2', commercial_color: 'Branco' }],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-      create: vi.fn(),
-      update: vi.fn(),
-      delete: vi.fn(),
-    })
-    const user = userEvent.setup()
-    renderPage()
-
-    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
-    await user.click(screen.getByRole('button', { name: /^adicionar filamento$/i }))
-    await user.click(screen.getByRole('button', { name: /^adicionar filamento$/i }))
-
-    const typeSelects = screen.getAllByRole('combobox', { name: 'Tipo de filamento' })
-    expect(typeSelects).toHaveLength(2)
-    await user.click(typeSelects[0])
-    await user.click(await screen.findByRole('option', { name: /PLA · Voolt3D · Sólida · Preto/ }))
-    await user.click(typeSelects[1])
-    await user.click(await screen.findByRole('option', { name: /PLA · Voolt3D · Sólida · Branco/ }))
-
-    const weightInputs = screen.getAllByRole('textbox', { name: 'Peso teórico por unidade (g)' })
-    await user.type(weightInputs[0], '12,5')
-    await user.type(weightInputs[1], '3,25')
-
-    await user.click(screen.getByRole('button', { name: /^salvar filamentos$/i }))
-
-    await waitFor(() =>
-      expect(saveFilamentsMock).toHaveBeenCalledWith({
-        filaments: [
-          { id: 'ft1', theoretical_weight_grams: 12.5 },
-          { id: 'ft2', theoretical_weight_grams: 3.25 },
-        ],
-      }),
-    )
-  })
-
-  it('impede selecionar o mesmo tipo de filamento em duas linhas (sem duplicidade)', async () => {
-    useProductFilamentsMock.mockReturnValue({
-      status: 'success',
-      filaments: [productFilamentRow],
-      isLoading: false,
-      error: null,
-      retry: vi.fn(),
-      save: saveFilamentsMock,
-    })
-    const user = userEvent.setup()
-    renderPage()
-
-    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
-    await user.click(screen.getByRole('button', { name: /^adicionar filamento$/i }))
-
-    const typeSelects = screen.getAllByRole('combobox', { name: 'Tipo de filamento' })
-    await user.click(typeSelects[1])
-
-    // O único tipo cadastrado (ft1) já está escolhido na primeira linha —
-    // não deve aparecer como opção disponível na segunda.
-    expect(screen.queryByRole('option', { name: /PLA · Voolt3D · Sólida · Preto/ })).not.toBeInTheDocument()
-  })
-
-  it('bloqueia salvar com peso zero ou negativo', async () => {
-    useProductFilamentsMock.mockReturnValue({
-      status: 'success',
-      filaments: [{ ...productFilamentRow, theoretical_weight_grams: 0 }],
-      isLoading: false,
-      error: null,
-      retry: vi.fn(),
-      save: saveFilamentsMock,
-    })
-    const user = userEvent.setup()
-    renderPage()
-
-    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
-    await user.click(screen.getByRole('button', { name: /^salvar filamentos$/i }))
-
-    expect(await screen.findByText(/deve ser maior ou igual a 0.01/i)).toBeInTheDocument()
-    expect(saveFilamentsMock).not.toHaveBeenCalled()
-  })
-
-  it('preserva um tipo de filamento inativo já vinculado (nunca some da tela) e bloqueia salvar até ser removido', async () => {
-    useFilamentTypesMock.mockReturnValue({
-      types: [{ ...filamentType, is_active: false }],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-      create: vi.fn(),
-      update: vi.fn(),
-      delete: vi.fn(),
-    })
-    const user = userEvent.setup()
-    renderPage()
-
-    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
-
-    expect(screen.getByRole('combobox', { name: 'Tipo de filamento' })).toHaveTextContent(
-      'PLA · Voolt3D · Sólida · Preto (inativo)',
-    )
-    expect(screen.getByText(/este tipo de filamento está inativo/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^salvar filamentos$/i })).toBeDisabled()
-  })
-
-  it('a seção Filamentos não aparece enquanto ainda está carregando', async () => {
-    useProductFilamentsMock.mockReturnValue({
-      status: 'loading',
-      filaments: [],
-      isLoading: true,
-      error: null,
-      retry: vi.fn(),
-      save: saveFilamentsMock,
-    })
-    const user = userEvent.setup()
-    renderPage()
-
-    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
-
-    expect(screen.queryByRole('button', { name: /^salvar filamentos$/i })).not.toBeInTheDocument()
-  })
-
-  it('mostra o erro real e permite tentar novamente quando a composição de filamentos falha ao carregar', async () => {
-    const retryMock = vi.fn()
-    useProductFilamentsMock.mockReturnValue({
-      status: 'error',
-      filaments: [],
-      isLoading: false,
-      error: new ApiError('database', 500, 'Falha ao carregar filamentos.'),
-      retry: retryMock,
-      save: saveFilamentsMock,
-    })
-    const user = userEvent.setup()
-    renderPage()
-
-    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
-
-    expect(screen.getByText('Falha ao carregar filamentos.')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^salvar filamentos$/i })).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: /tentar novamente/i }))
-    expect(retryMock).toHaveBeenCalled()
-  })
-
-  it('mostra "Nenhum filamento na composição." quando a composição de filamentos carrega genuinamente vazia', async () => {
-    useProductFilamentsMock.mockReturnValue({
-      status: 'success',
-      filaments: [],
-      isLoading: false,
-      error: null,
-      retry: vi.fn(),
-      save: saveFilamentsMock,
-    })
-    const user = userEvent.setup()
-    renderPage()
-
-    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
-
-    expect(screen.getByText('Nenhum filamento na composição.')).toBeInTheDocument()
   })
 
   it('shows an inline error with a retry action when the list fails to load', async () => {
