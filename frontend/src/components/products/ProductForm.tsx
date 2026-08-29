@@ -398,10 +398,17 @@ export function ProductForm({
       finalCategory = categorySelection
     }
 
-    if (!hasEditedPrice) {
-      errors.default_price = 'Informe o preço.'
-    } else if (priceCents > MAX_CENTS) {
-      errors.default_price = MAX_CENTS_MESSAGE
+    // Preço e Tipo do produto nunca são editáveis aqui em mode="edit" —
+    // permanecem exclusivos da ação "Preço" já aprovada (ProductPriceForm/
+    // update_product_price, com histórico) e nunca fizeram parte da edição
+    // (mesma restrição que ProductEditDetailsForm já tinha). Só validados/
+    // exigidos na criação.
+    if (mode === 'create') {
+      if (!hasEditedPrice) {
+        errors.default_price = 'Informe o preço.'
+      } else if (priceCents > MAX_CENTS) {
+        errors.default_price = MAX_CENTS_MESSAGE
+      }
     }
 
     if (hasInactiveFilamentType) {
@@ -493,28 +500,39 @@ export function ProductForm({
           {fieldErrors.name && <p className="text-destructive text-sm">{fieldErrors.name}</p>}
         </div>
 
-        <div className="flex flex-col gap-2">
-          <Label>Tipo do produto</Label>
-          <div role="radiogroup" aria-label="Tipo do produto" className="flex flex-wrap gap-2">
-            {PRODUCT_TYPE_ITEMS.map((item) => (
-              <button
-                key={item.value}
-                type="button"
-                role="radio"
-                aria-checked={productType === item.value}
-                onClick={() => setProductType(item.value)}
-                className={cn(
-                  'focus-visible:ring-brand-accent rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2',
-                  productType === item.value
-                    ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
-                    : 'border-input text-muted-foreground hover:bg-muted hover:text-foreground',
-                )}
-              >
-                {item.label}
-              </button>
-            ))}
+        {mode === 'create' ? (
+          <div className="flex flex-col gap-2">
+            <Label>Tipo do produto</Label>
+            <div role="radiogroup" aria-label="Tipo do produto" className="flex flex-wrap gap-2">
+              {PRODUCT_TYPE_ITEMS.map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={productType === item.value}
+                  onClick={() => setProductType(item.value)}
+                  className={cn(
+                    'focus-visible:ring-brand-accent rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2',
+                    productType === item.value
+                      ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
+                      : 'border-input text-muted-foreground hover:bg-muted hover:text-foreground',
+                  )}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        ) : (
+          // Tipo do produto nunca é editável na edição (mesma restrição que
+          // ProductEditDetailsForm já tinha) — exibido como texto fixo.
+          <div className="flex flex-col gap-1">
+            <Label>Tipo do produto</Label>
+            <p className="text-muted-foreground text-sm">
+              {PRODUCT_TYPE_ITEMS.find((item) => item.value === productType)?.label ?? productType}
+            </p>
+          </div>
+        )}
 
         <div className="flex flex-col gap-2">
           <Label>Categoria</Label>
@@ -563,25 +581,35 @@ export function ProductForm({
           />
         </div>
 
-        <div className="flex flex-col gap-2">
-          <Label htmlFor={PRICE_INPUT_ID}>Preço</Label>
-          <Input
-            id={PRICE_INPUT_ID}
-            inputMode="numeric"
-            value={formatCentsToBRL(priceCents)}
-            onChange={handlePriceChange}
-            onKeyDown={handlePriceKeyDown}
-            onPaste={handlePricePaste}
-            aria-invalid={priceError || fieldErrors.default_price ? true : undefined}
-            aria-describedby={priceError || fieldErrors.default_price ? PRICE_ERROR_ID : undefined}
-            className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
-          />
-          {(priceError || fieldErrors.default_price) && (
-            <p id={PRICE_ERROR_ID} className="text-destructive text-sm">
-              {priceError || fieldErrors.default_price}
-            </p>
-          )}
-        </div>
+        {mode === 'create' ? (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={PRICE_INPUT_ID}>Preço</Label>
+            <Input
+              id={PRICE_INPUT_ID}
+              inputMode="numeric"
+              value={formatCentsToBRL(priceCents)}
+              onChange={handlePriceChange}
+              onKeyDown={handlePriceKeyDown}
+              onPaste={handlePricePaste}
+              aria-invalid={priceError || fieldErrors.default_price ? true : undefined}
+              aria-describedby={priceError || fieldErrors.default_price ? PRICE_ERROR_ID : undefined}
+              className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
+            />
+            {(priceError || fieldErrors.default_price) && (
+              <p id={PRICE_ERROR_ID} className="text-destructive text-sm">
+                {priceError || fieldErrors.default_price}
+              </p>
+            )}
+          </div>
+        ) : (
+          // Preço nunca é editado aqui — permanece exclusivo da seção
+          // "Preço" já aprovada (com Motivo/histórico preservados), fora
+          // deste formulário. Nenhum valor de preço é enviado por
+          // update_product_full (fora do contrato de UpdateProductFullInput).
+          <p className="text-muted-foreground text-xs">
+            O preço é alterado só pela ação "Preço", abaixo, para preservar o histórico.
+          </p>
+        )}
       </div>
 
       {/* ------------------------------------------------------------- */}

@@ -6,9 +6,7 @@ import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeade
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { ProductCompositionForm } from '@/components/products/ProductCompositionForm'
-import { FilamentCompositionForm } from '@/components/products/FilamentCompositionForm'
-import { ProductForm, type ProductFormSubmitValues } from '@/components/products/ProductForm'
-import { ProductEditDetailsForm } from '@/components/products/ProductEditDetailsForm'
+import { ProductForm, type ProductFormInitialValues, type ProductFormSubmitValues } from '@/components/products/ProductForm'
 import { ProductPriceForm } from '@/components/products/ProductPriceForm'
 import { ProductPriceHistoryList } from '@/components/products/ProductPriceHistoryList'
 import { Button } from '@/components/ui/button'
@@ -21,14 +19,15 @@ import { useFilamentTypes } from '@/hooks/useFilamentTypes'
 import { usePackaging } from '@/hooks/usePackaging'
 import { useProductComposition } from '@/hooks/useProductComposition'
 import { useProductFilaments } from '@/hooks/useProductFilaments'
+import { useProductPlates } from '@/hooks/useProductPlates'
 import { useProductPriceHistory } from '@/hooks/useProductPriceHistory'
 import { useProducts } from '@/hooks/useProducts'
 import { ApiError } from '@/lib/api/errors'
 import { formatSecondsToHHMMSS } from '@/lib/forms/durationField'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
+import { plateRowsFrom, plateRowsFromLegacyFilaments } from '@/lib/forms/productPlates'
 import type { UpdateProductCompositionInput } from '@/lib/api/productComposition'
-import type { UpdateProductFilamentsInput } from '@/lib/api/productFilaments'
-import type { UpdateProductDetailsInput, UpdateProductPriceInput } from '@/lib/api/products'
+import type { UpdateProductPriceInput } from '@/lib/api/products'
 import type { Product, ProductType } from '@/types/domain'
 
 const PRODUCT_SEARCH_LISTBOX_ID = 'product-search-listbox'
@@ -89,9 +88,10 @@ function getProductSortValue(product: Product, column: ProductSortColumn): strin
 }
 
 export function ProductsPage() {
-  const { products, isLoading, error, refetch, createWithPlates, changePrice, update, updateDetails } = useProducts()
+  const { products, isLoading, error, refetch, createWithPlates, changePrice, update, updateFull } = useProducts()
   const { accessories } = useAccessories()
   const { packaging } = usePackaging()
+  const filamentTypesHook = useFilamentTypes()
 
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
@@ -100,34 +100,85 @@ export function ProductsPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [sort, setSort] = useState<SortState<ProductSortColumn> | null>(null)
 
-  // "Editar produto" (substitui o antigo botão "Alterar preço") — três
-  // seções independentes no mesmo diálogo: Dados do produto (update_product,
-  // NOVA), Preço (ProductPriceForm/update_product_price, inalterado) e
-  // Histórico de preços (somente leitura, useProductPriceHistory, NOVO).
-  // Cada seção tem seu próprio estado de submitting/erro — nunca a mesma
-  // chamada/transação entre elas, mesmo idioma já usado por Filamentos vs.
-  // Acessórios/Embalagens no diálogo de composição.
+  // "Editar produto" — três seções independentes no mesmo diálogo: o
+  // formulário completo por plates (ProductForm mode="edit" ->
+  // update_product_full, NOVO nesta rodada corretiva — substitui
+  // ProductEditDetailsForm), Preço (ProductPriceForm/update_product_price,
+  // inalterado — nunca enviado por update_product_full, ver comentário em
+  // ProductForm.tsx) e Histórico de preços (somente leitura,
+  // useProductPriceHistory). Cada seção tem seu próprio estado de
+  // submitting/erro — nunca a mesma chamada/transação entre elas.
+  //
+  // Fonte autoritativa da composição de produção (achado da auditoria desta
+  // rodada): product_plates/product_plate_filaments. product_filaments
+  // (legado) NUNCA é mais editado de forma independente por esta página —
+  // só lido (useProductFilaments abaixo) como fallback de compatibilidade
+  // para Produtos que ainda não têm nenhum plate (backfill pendente da
+  // migration, ainda não aplicada no remoto) — mesma função
+  // (plateRowsFromLegacyFilaments) usada por ProductDetailPage.tsx, para que
+  // as duas telas nunca mostrem uma composição diferente para o mesmo
+  // Produto. O antigo diálogo "Composição de filamentos"
+  // (FilamentCompositionForm, escrita direta e independente em
+  // product_filaments) foi removido: mantê-lo abriria exatamente o caminho
+  // de duas fontes divergentes que esta rodada corrige.
   const [editDialogProduct, setEditDialogProduct] = useState<Product | null>(null)
-  const [isSubmittingDetails, setIsSubmittingDetails] = useState(false)
-  const [detailsError, setDetailsError] = useState<string | null>(null)
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
+  const editPlates = useProductPlates(editDialogProduct?.id ?? null)
+  const editLegacyFilaments = useProductFilaments(editDialogProduct?.id ?? null)
+  const editComposition = useProductComposition(editDialogProduct?.id ?? null)
   const [isSubmittingPrice, setIsSubmittingPrice] = useState(false)
   const [priceError, setPriceError] = useState<string | null>(null)
   const priceHistory = useProductPriceHistory(editDialogProduct?.id ?? null)
+
+  const editUsingLegacyFallback = editPlates.status === 'success' && editPlates.plates.length === 0
+  const editDataLoading =
+    editPlates.isLoading ||
+    editComposition.isLoading ||
+    filamentTypesHook.isLoading ||
+    (editUsingLegacyFallback && editLegacyFilaments.isLoading)
+  const editDataError =
+    editPlates.status === 'error'
+      ? editPlates.error
+      : editComposition.status === 'error'
+        ? editComposition.error
+        : filamentTypesHook.error
+          ? filamentTypesHook.error
+          : editUsingLegacyFallback && editLegacyFilaments.status === 'error'
+            ? editLegacyFilaments.error
+            : null
+
+  function retryEditData() {
+    editPlates.retry()
+    editComposition.retry()
+    editLegacyFilaments.retry()
+    filamentTypesHook.refetch()
+  }
+
+  const editInitialValues: ProductFormInitialValues | null =
+    editDialogProduct && !editDataLoading && !editDataError && editPlates.status === 'success' && editComposition.status === 'success'
+      ? {
+          name: editDialogProduct.name,
+          category: editDialogProduct.category,
+          description: editDialogProduct.description,
+          defaultPrice: editDialogProduct.default_price,
+          allowsPersonalization: editDialogProduct.allows_personalization,
+          productType: editDialogProduct.product_type,
+          plates:
+            editPlates.plates.length > 0
+              ? plateRowsFrom(editPlates.plates, editPlates.filamentsByPlateId)
+              : plateRowsFromLegacyFilaments(editLegacyFilaments.filaments, editDialogProduct.default_print_time_seconds),
+          manualWeightOverrideGrams: editDialogProduct.production_weight_manual_override_grams,
+          manualTimeOverrideSeconds: editDialogProduct.production_time_manual_override_seconds,
+          accessories: editComposition.accessories.map((item) => ({ id: item.accessory_id, quantity: item.quantity })),
+          packaging: editComposition.packaging.map((item) => ({ id: item.packaging_id, quantity: item.quantity })),
+        }
+      : null
 
   const [compositionDialogProduct, setCompositionDialogProduct] = useState<Product | null>(null)
   const [isSubmittingComposition, setIsSubmittingComposition] = useState(false)
   const [compositionError, setCompositionError] = useState<string | null>(null)
   const composition = useProductComposition(compositionDialogProduct?.id ?? null)
-
-  // Filamentos (Módulo 3, Incremento 6A) — estado próprio, independente do
-  // de Acessórios/Embalagens acima: salvamento separado e atômico (nunca
-  // reaproveita isSubmittingComposition/compositionError). filamentTypesHook
-  // só é usado para preencher as opções do Select desta seção — nenhuma
-  // relação com useAccessories/usePackaging já existentes.
-  const [isSubmittingFilaments, setIsSubmittingFilaments] = useState(false)
-  const [filamentsError, setFilamentsError] = useState<string | null>(null)
-  const filamentComposition = useProductFilaments(compositionDialogProduct?.id ?? null)
-  const filamentTypesHook = useFilamentTypes()
 
   // Busca: só pelo nome (product.name), local sobre `products` já
   // carregados — nenhuma nova chamada a useProducts/API a cada tecla
@@ -178,14 +229,13 @@ export function ProductsPage() {
   }
 
   function openEditDialog(product: Product) {
-    setDetailsError(null)
+    setEditError(null)
     setPriceError(null)
     setEditDialogProduct(product)
   }
 
   function openCompositionDialog(product: Product) {
     setCompositionError(null)
-    setFilamentsError(null)
     setCompositionDialogProduct(product)
   }
 
@@ -244,27 +294,41 @@ export function ProductsPage() {
     }
   }
 
-  // Independente de handlePriceSubmit acima: chama updateDetails
-  // (Edge Function -> update_product, RPC própria) — nunca a mesma
+  // Independente de handlePriceSubmit acima: chama updateFull (Edge
+  // Function -> update_product_full, RPC atômica única para Dados
+  // Gerais+Composição por plates+Acessórios/Embalagens) — nunca a mesma
   // chamada/transação de Preço. Uma falha aqui nunca desfaz nem impede um
-  // salvamento de Preço já concluído (ou vice-versa).
-  async function handleDetailsSubmit(values: UpdateProductDetailsInput) {
+  // salvamento de Preço já concluído (ou vice-versa). default_price/
+  // product_type de values são deliberadamente omitidos do payload — não
+  // fazem parte do contrato de UpdateProductFullInput (preço continua só
+  // pela seção "Preço", tipo nunca é editável na edição).
+  async function handleEditSubmit(values: ProductFormSubmitValues) {
     if (!editDialogProduct) return
-    setIsSubmittingDetails(true)
-    setDetailsError(null)
+    setIsSubmittingEdit(true)
+    setEditError(null)
     try {
-      await updateDetails(editDialogProduct.id, values)
-      toast.success('Dados do produto atualizados.')
+      await updateFull(editDialogProduct.id, {
+        name: values.name,
+        category: values.category,
+        description: values.description,
+        allows_personalization: values.allows_personalization,
+        plates: values.plates,
+        manual_weight_override_grams: values.manual_weight_override_grams,
+        manual_time_override_seconds: values.manual_time_override_seconds,
+        accessories: values.accessories,
+        packaging: values.packaging,
+      })
+      toast.success('Produto atualizado.')
       setEditDialogProduct(null)
     } catch (err) {
       const message = toErrorMessage(err)
       if (err instanceof ApiError && err.type === 'validation') {
-        setDetailsError(message)
+        setEditError(message)
       } else {
         toast.error(message)
       }
     } finally {
-      setIsSubmittingDetails(false)
+      setIsSubmittingEdit(false)
     }
   }
 
@@ -284,31 +348,6 @@ export function ProductsPage() {
       }
     } finally {
       setIsSubmittingComposition(false)
-    }
-  }
-
-  // Independente de handleCompositionSubmit acima: chama
-  // filamentComposition.save (Edge Function -> set_product_filaments, RPC
-  // própria) — nunca a mesma chamada/transação de Acessórios/Embalagens.
-  // Uma falha aqui nunca desfaz nem impede um salvamento de
-  // Acessórios/Embalagens já concluído (ou vice-versa) — são duas operações
-  // atômicas independentes, cada uma numa única transação Postgres própria.
-  async function handleFilamentsSubmit(values: UpdateProductFilamentsInput) {
-    setIsSubmittingFilaments(true)
-    setFilamentsError(null)
-    try {
-      await filamentComposition.save(values)
-      toast.success('Filamentos atualizados.')
-      setCompositionDialogProduct(null)
-    } catch (err) {
-      const message = toErrorMessage(err)
-      if (err instanceof ApiError && err.type === 'validation') {
-        setFilamentsError(message)
-      } else {
-        toast.error(message)
-      }
-    } finally {
-      setIsSubmittingFilaments(false)
     }
   }
 
@@ -529,20 +568,48 @@ export function ProductsPage() {
             <DialogDescription>
               {editDialogProduct ? (
                 <>
-                  Dados, preço e histórico de <span className="text-foreground font-medium">"{editDialogProduct.name}"</span>.
+                  Dados, composição, preço e histórico de{' '}
+                  <span className="text-foreground font-medium">"{editDialogProduct.name}"</span>.
                 </>
               ) : (
                 ''
               )}
             </DialogDescription>
           </DialogHeader>
-          {editDialogProduct && (
-            <ProductEditDetailsForm
+
+          {/* Formulário completo (Dados Gerais + Composição por plates +
+              Acessórios/Embalagens) — carrega plates/filamentos/composição/
+              tipos de filamento antes de montar o formulário: nunca abre
+              vazio durante o carregamento (skeleton abaixo), nunca perde
+              dado real de um Produto legado sem plates (fallback para
+              product_filaments, plateRowsFromLegacyFilaments). */}
+          {editDialogProduct && editDataError && (
+            <div className="border-destructive/50 bg-destructive/10 flex items-center justify-between rounded-lg border p-3 text-sm">
+              <span>{toErrorMessage(editDataError)}</span>
+              <Button variant="outline" size="sm" onClick={retryEditData}>
+                Tentar novamente
+              </Button>
+            </div>
+          )}
+          {editDialogProduct && !editDataError && (editDataLoading || !editInitialValues) && (
+            <div className="flex flex-col gap-2">
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-24 w-full" />
+            </div>
+          )}
+          {editDialogProduct && !editDataError && editInitialValues && (
+            <ProductForm
               key={editDialogProduct.id}
-              product={editDialogProduct}
-              isSubmitting={isSubmittingDetails}
-              submitError={detailsError}
-              onSubmit={(values) => void handleDetailsSubmit(values)}
+              mode="edit"
+              initialValues={editInitialValues}
+              filamentTypes={filamentTypesHook.types}
+              accessoriesList={accessories}
+              packagingList={packaging}
+              isSubmitting={isSubmittingEdit}
+              submitError={editError}
+              onSubmit={(values) => void handleEditSubmit(values)}
+              onCancel={() => setEditDialogProduct(null)}
             />
           )}
 
@@ -617,56 +684,6 @@ export function ProductsPage() {
               onCancel={() => setCompositionDialogProduct(null)}
             />
           )}
-
-          {/* Filamentos (Módulo 3, Incremento 6A) — seção própria dentro do
-              mesmo diálogo "Composição do Produto", mas com carregamento,
-              erro e salvamento inteiramente independentes da seção de
-              Acessórios/Embalagens acima (nunca a mesma requisição, nunca o
-              mesmo estado de submitting/erro). */}
-          <div className="border-border mt-2 flex flex-col gap-3 border-t pt-4">
-            {compositionDialogProduct &&
-              (filamentComposition.status === 'idle' ||
-                filamentComposition.status === 'loading' ||
-                filamentTypesHook.isLoading) && (
-                <div className="flex flex-col gap-2">
-                  <Skeleton className="h-8 w-full" />
-                  <Skeleton className="h-8 w-full" />
-                </div>
-              )}
-            {compositionDialogProduct &&
-              !filamentTypesHook.isLoading &&
-              filamentComposition.status !== 'loading' &&
-              filamentComposition.status !== 'idle' &&
-              filamentTypesHook.error && (
-                <div className="border-destructive/50 bg-destructive/10 flex items-center justify-between rounded-lg border p-3 text-sm">
-                  <span>{toErrorMessage(filamentTypesHook.error)}</span>
-                  <Button variant="outline" size="sm" onClick={filamentTypesHook.refetch}>
-                    Tentar novamente
-                  </Button>
-                </div>
-              )}
-            {compositionDialogProduct && filamentComposition.status === 'error' && (
-              <div className="border-destructive/50 bg-destructive/10 flex items-center justify-between rounded-lg border p-3 text-sm">
-                <span>{toErrorMessage(filamentComposition.error)}</span>
-                <Button variant="outline" size="sm" onClick={filamentComposition.retry}>
-                  Tentar novamente
-                </Button>
-              </div>
-            )}
-            {compositionDialogProduct &&
-              !filamentTypesHook.isLoading &&
-              !filamentTypesHook.error &&
-              filamentComposition.status === 'success' && (
-                <FilamentCompositionForm
-                  key={compositionDialogProduct.id}
-                  filamentTypes={filamentTypesHook.types}
-                  initialFilaments={filamentComposition.filaments}
-                  isSubmitting={isSubmittingFilaments}
-                  submitError={filamentsError}
-                  onSubmit={(values) => void handleFilamentsSubmit(values)}
-                />
-              )}
-          </div>
         </DialogContent>
       </Dialog>
     </AppLayout>

@@ -10,6 +10,7 @@ import { usePackaging } from '@/hooks/usePackaging'
 import { useProduct } from '@/hooks/useProduct'
 import { useProductComposition } from '@/hooks/useProductComposition'
 import { useProductFilaments } from '@/hooks/useProductFilaments'
+import { useProductPlates } from '@/hooks/useProductPlates'
 import { ApiError } from '@/lib/api/errors'
 import { formatSecondsToHHMMSS } from '@/lib/forms/durationField'
 import {
@@ -145,11 +146,11 @@ function ComponentsTable({
 // não tem unit_cost cadastrado — fora do "Subtotal de componentes"
 // existente, que continua considerando só Acessórios/Embalagens; nenhuma
 // alteração nele por esta seção).
-function FilamentComponentsTable({ lines }: { lines: ResolvedFilamentLine[] }) {
+function FilamentComponentsTable({ title, lines }: { title: string; lines: ResolvedFilamentLine[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Filamentos</CardTitle>
+        <CardTitle>{title}</CardTitle>
       </CardHeader>
       <CardContent>
         {lines.length === 0 ? (
@@ -248,24 +249,71 @@ function ProductDetailContent({ product }: { product: Product }) {
     : []
   const subtotal = calculateComponentsSubtotal(accessoryLines, packagingLines)
 
-  // Filamentos (Módulo 3, Incremento 6A) — bloco de leitura totalmente
-  // independente do de Acessórios/Embalagens acima (própria fonte,
-  // carregamento, erro e retry) — nenhuma variável de componentsLoading/
-  // componentsErrorInfo/componentsReady é reaproveitada ou alterada.
-  const filamentComposition = useProductFilaments(product.id)
+  // Filamentos (Módulo 3, Incremento 6A; estrutura por plates, 2026-08-29)
+  // — bloco de leitura totalmente independente do de Acessórios/Embalagens
+  // acima (própria fonte, carregamento, erro e retry) — nenhuma variável de
+  // componentsLoading/componentsErrorInfo/componentsReady é reaproveitada
+  // ou alterada.
+  //
+  // Fonte autoritativa: product_plates/product_plate_filaments — a MESMA
+  // que ProductForm.tsx usa para editar. Mostrar esta Ficha com uma fonte
+  // diferente da usada na edição já causou o achado de auditoria desta
+  // rodada (composição divergente entre telas); useProductFilaments
+  // (legado) só é lido aqui como projeção de compatibilidade — exatamente
+  // igual a plateRowsFromLegacyFilaments em ProductForm.tsx — quando o
+  // Produto ainda não tem nenhum plate (backfill não rodou no remoto
+  // ainda). Nunca escrito por esta página (somente leitura).
+  const productPlates = useProductPlates(product.id)
+  const legacyFilaments = useProductFilaments(product.id)
   const filamentTypesHook = useFilamentTypes()
 
-  const filamentsLoading = filamentComposition.status === 'loading' || filamentTypesHook.isLoading
+  const platesResolved = productPlates.status === 'success'
+  const usingLegacyFilamentsFallback = platesResolved && productPlates.plates.length === 0
+
+  const filamentsLoading =
+    productPlates.isLoading ||
+    filamentTypesHook.isLoading ||
+    (usingLegacyFilamentsFallback && legacyFilaments.isLoading)
   const filamentsErrorInfo =
-    filamentComposition.status === 'error'
-      ? { message: toErrorMessage(filamentComposition.error), retry: filamentComposition.retry }
+    productPlates.status === 'error'
+      ? { message: toErrorMessage(productPlates.error), retry: productPlates.retry }
       : filamentTypesHook.error
         ? { message: toErrorMessage(filamentTypesHook.error), retry: filamentTypesHook.refetch }
-        : null
-  const filamentsReady = !filamentsLoading && !filamentsErrorInfo && filamentComposition.status === 'success'
-  const filamentLines = filamentsReady
-    ? resolveFilamentLines(filamentComposition.filaments, filamentTypesHook.types)
-    : []
+        : usingLegacyFilamentsFallback && legacyFilaments.status === 'error'
+          ? { message: toErrorMessage(legacyFilaments.error), retry: legacyFilaments.retry }
+          : null
+  const filamentsReady = !filamentsLoading && !filamentsErrorInfo && platesResolved
+
+  // Um grupo por plate (nunca uma tabela única com todos os plates
+  // misturados — o mesmo tipo de filamento pode aparecer em mais de um
+  // plate, então uma key só por filament_type_id colidiria).
+  const plateFilamentGroups: Array<{ key: string; title: string; lines: ResolvedFilamentLine[] }> = !filamentsReady
+    ? []
+    : usingLegacyFilamentsFallback
+      ? [
+          {
+            key: 'legacy-plate-1',
+            title: 'Filamentos — Plate 1',
+            lines: resolveFilamentLines(
+              legacyFilaments.filaments.map((filament) => ({
+                filament_type_id: filament.filament_type_id,
+                theoretical_weight_grams: filament.theoretical_weight_grams,
+              })),
+              filamentTypesHook.types,
+            ),
+          },
+        ]
+      : productPlates.plates.map((plate) => ({
+          key: plate.id,
+          title: `Filamentos — Plate ${plate.plate_number}`,
+          lines: resolveFilamentLines(
+            (productPlates.filamentsByPlateId.get(plate.id) ?? []).map((filament) => ({
+              filament_type_id: filament.filament_type_id,
+              theoretical_weight_grams: filament.weight_grams,
+            })),
+            filamentTypesHook.types,
+          ),
+        }))
 
   return (
     <div className="mt-4 flex flex-col gap-4">
@@ -326,7 +374,14 @@ function ProductDetailContent({ product }: { product: Product }) {
         </div>
       )}
 
-      {filamentsReady && <FilamentComponentsTable lines={filamentLines} />}
+      {filamentsReady && plateFilamentGroups.length === 0 && (
+        <FilamentComponentsTable title="Filamentos" lines={[]} />
+      )}
+
+      {filamentsReady &&
+        plateFilamentGroups.map((group) => (
+          <FilamentComponentsTable key={group.key} title={group.title} lines={group.lines} />
+        ))}
 
       {componentsLoading && (
         <Card>

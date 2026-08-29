@@ -20,7 +20,7 @@ import {
   findFilamentTypeById,
   isFilamentRowInactive as isFilamentTypeRowInactive,
 } from '@/lib/forms/productFilamentComposition'
-import type { FilamentTypeSummary, ProductPlate, ProductPlateFilament } from '@/types/domain'
+import type { FilamentTypeSummary, ProductFilament, ProductPlate, ProductPlateFilament } from '@/types/domain'
 
 export { filamentTypeLabel, filterSelectableFilamentTypes, findFilamentTypeById }
 
@@ -78,6 +78,45 @@ export function plateRowsFrom(
       weight: String(filament.weight_grams),
     })),
   }))
+}
+
+// Compatibilidade com Produtos legados (2026-08-29): product_plates é a
+// estrutura AUTORITATIVA de produção a partir desta migration; product_filaments
+// (tabela antiga, ainda não descontinuada) é só uma projeção de leitura,
+// mantida por compatibilidade até que o backfill da migration rode no
+// remoto. Enquanto isso não acontece, um Produto existente ainda não tem
+// nenhuma linha em product_plates — se ProductForm abrisse a edição desse
+// Produto com `plates: []`, o usuário veria uma composição vazia e, ao
+// salvar, apagaria silenciosamente o peso/tempo/filamentos que na verdade
+// só estavam guardados em product_filaments/default_weight_grams/
+// default_print_time_seconds. Esta função replica no cliente exatamente a
+// mesma regra do backfill da migration (`20260829160000...`, bloco "Plate
+// 1"): se não há nenhuma linha em product_plates mas o Produto tem peso,
+// tempo ou ao menos uma linha em product_filaments, sintetiza um único
+// PlateRow ("Plate 1") a partir desses dados legados — nunca perde
+// composição existente, nunca inventa um plate vazio quando havia dado
+// real. Só chamada pelo carregamento da edição (ProductsPage.tsx) quando
+// plates.length === 0; nunca durante a criação (initialValues não existe).
+export function plateRowsFromLegacyFilaments(
+  filaments: ProductFilament[],
+  defaultTimeSeconds: number | null,
+): PlateRow[] {
+  if (filaments.length === 0 && defaultTimeSeconds === null) return []
+
+  return [
+    {
+      key: nextPlateRowKey(),
+      timeInput: defaultTimeSeconds !== null ? formatSecondsToHHMM(defaultTimeSeconds) : '',
+      filaments:
+        filaments.length > 0
+          ? filaments.map((filament) => ({
+              key: nextPlateFilamentRowKey(),
+              filamentTypeId: filament.filament_type_id,
+              weight: String(filament.theoretical_weight_grams),
+            }))
+          : [emptyPlateFilamentRow()],
+    },
+  ]
 }
 
 // Filamentos já escolhidos NESTE MESMO plate (exclui a própria linha
