@@ -49,6 +49,8 @@ const product: Product = {
   default_print_time_seconds: null,
   default_weight_grams: null,
   units_per_plate: null,
+  production_weight_manual_override_grams: null,
+  production_time_manual_override_seconds: null,
   default_file_id: null,
   allows_personalization: false,
   is_active: true,
@@ -125,6 +127,11 @@ function mockProducts(
     error: overrides.error ?? null,
     refetch: overrides.refetch ?? vi.fn(),
     create: createMock,
+    // Estrutura produtiva por plates (2026-08-29): ProductsPage.tsx só
+    // chama createWithPlates (nunca mais create() "puro") — reaproveita o
+    // mesmo mock de createMock, já que os testes deste arquivo tratam as
+    // duas como "a ação de criar" indistintamente.
+    createWithPlates: createMock,
     changePrice: changePriceMock,
     update: updateMock,
   })
@@ -191,6 +198,7 @@ describe('ProductsPage', () => {
       error: null,
       refetch: refetchMock,
       create: createMock,
+      createWithPlates: createMock,
       changePrice: changePriceMock,
       update: updateMock,
       updateDetails: updateDetailsMock,
@@ -522,7 +530,7 @@ describe('ProductsPage', () => {
     expect(createMock).not.toHaveBeenCalled()
   })
 
-  it('criação envia default_print_time_seconds (não minutos) quando o tempo de impressão é preenchido', async () => {
+  it('criação envia o tempo do Plate 1 em segundos (não minutos) dentro de plates[0].production_time_seconds', async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -533,7 +541,11 @@ describe('ProductsPage', () => {
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
     await waitFor(() =>
-      expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ default_print_time_seconds: 5400 })),
+      expect(createMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          plates: [expect.objectContaining({ production_time_seconds: 5400 })],
+        }),
+      ),
     )
     const payload = createMock.mock.calls[0][0]
     expect('default_print_time_minutes' in payload).toBe(false)

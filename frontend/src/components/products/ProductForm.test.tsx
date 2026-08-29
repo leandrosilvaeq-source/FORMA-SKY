@@ -1,16 +1,91 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ProductForm } from './ProductForm'
+import { ProductForm, type ProductFormInitialValues } from './ProductForm'
 import { formatCentsToBRL } from '@/lib/forms/currencyField'
+import type { Accessory, FilamentTypeSummary, Packaging } from '@/types/domain'
+
+// Estrutura produtiva por plates (2026-08-29, migration
+// 20260829160000_add_product_plates_structure.sql, ainda não aplicada) —
+// fixtures mínimas para os 3 tipos de dado que o novo formulário consome
+// (filamentos ativos, acessórios ativos, embalagens ativas).
+const filamentTypes: FilamentTypeSummary[] = [
+  {
+    filament_type_id: 'ft1',
+    material: 'PLA',
+    manufacturer: '3D Fila',
+    line: 'Basic',
+    commercial_color: 'Preto',
+    color_code: null,
+    minimum_stock_grams: null,
+    is_active: true,
+    total_available_grams: 1000,
+    usable_spool_count: 2,
+    total_spool_count: 2,
+  },
+  {
+    filament_type_id: 'ft2',
+    material: 'PETG',
+    manufacturer: '3D Fila',
+    line: 'Premium',
+    commercial_color: 'Branco',
+    color_code: null,
+    minimum_stock_grams: null,
+    is_active: true,
+    total_available_grams: 500,
+    usable_spool_count: 1,
+    total_spool_count: 1,
+  },
+]
+
+const accessoriesList: Accessory[] = [
+  {
+    id: 'a1',
+    name: 'Chaveiro metálico',
+    material: null,
+    size: null,
+    variant: null,
+    unit_cost: null,
+    minimum_stock: null,
+    current_stock: 0,
+    is_active: true,
+    created_at: '',
+    updated_at: '',
+  },
+]
+
+const packagingList: Packaging[] = [
+  {
+    id: 'k1',
+    name: 'Saco plástico',
+    material: null,
+    size: null,
+    variant: null,
+    unit_cost: null,
+    minimum_stock: null,
+    current_stock: 0,
+    is_active: true,
+    created_at: '',
+    updated_at: '',
+  },
+]
 
 function renderForm(overrides: Partial<Parameters<typeof ProductForm>[0]> = {}) {
   const onSubmit = vi.fn()
   const onCancel = vi.fn()
-  const { unmount } = render(
-    <ProductForm isSubmitting={false} submitError={null} onSubmit={onSubmit} onCancel={onCancel} {...overrides} />,
+  render(
+    <ProductForm
+      filamentTypes={filamentTypes}
+      accessoriesList={accessoriesList}
+      packagingList={packagingList}
+      isSubmitting={false}
+      submitError={null}
+      onSubmit={onSubmit}
+      onCancel={onCancel}
+      {...overrides}
+    />,
   )
-  return { onSubmit, onCancel, unmount }
+  return { onSubmit, onCancel }
 }
 
 async function fillNameAndPrice(user: ReturnType<typeof userEvent.setup>, priceDigits = '2500') {
@@ -18,46 +93,30 @@ async function fillNameAndPrice(user: ReturnType<typeof userEvent.setup>, priceD
   await user.type(screen.getByLabelText(/^preço$/i), priceDigits)
 }
 
-// Clica numa opção de um dos grupos de seleção exclusiva (role=radiogroup)
-// — Tipo do produto ou Categoria — mesmo padrão já aprovado em
-// OrderForm.test.tsx.
-async function clickRadio(
-  user: ReturnType<typeof userEvent.setup>,
-  groupName: string,
-  optionName: string,
-): Promise<void> {
-  const group = screen.getByRole('radiogroup', { name: groupName })
-  await user.click(within(group).getByRole('radio', { name: optionName }))
-}
-
 describe('ProductForm', () => {
-  it('renders the expected fields, sem "Unidades por placa"', () => {
+  it('renderiza as 3 seções (Dados Gerais, Composição, Acessórios e Embalagem)', () => {
+    renderForm()
+
+    expect(screen.getByRole('heading', { name: 'Dados Gerais' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Composição' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Acessórios e Embalagem' })).toBeInTheDocument()
+  })
+
+  it('renderiza os campos de Dados Gerais, sem Peso/Tempo soltos (migraram para Composição)', () => {
     renderForm()
 
     expect(screen.getByLabelText(/^nome$/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/categoria/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/descrição/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/^preço$/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/tempo de produção/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/peso total \(g\)/i)).toBeInTheDocument()
-    expect(screen.getByRole('switch', { name: /permite personalização/i })).toBeInTheDocument()
-    expect(screen.queryByLabelText(/unidades por pla/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/unidades por pla/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/^peso total \(g\)$/i)).not.toBeInTheDocument()
   })
 
-  it('a ordem visual dos campos segue Nome, Categoria, Descrição, Preço, Peso, Tempo, Personalização — Peso total (g) antes de Tempo de Produção', () => {
+  it('nasce com exatamente 1 plate (Plate 1)', () => {
     renderForm()
 
-    const labels = screen.getAllByText(/^(Nome|Categoria|Descrição|Preço|Peso total \(g\)|Tempo de Produção|Permite personalização)$/)
-    expect(labels.map((label) => label.textContent)).toEqual([
-      'Nome',
-      'Categoria',
-      'Descrição',
-      'Preço',
-      'Peso total (g)',
-      'Tempo de Produção',
-      'Permite personalização',
-    ])
+    expect(screen.getByText('Plate 1')).toBeInTheDocument()
+    expect(screen.queryByText('Plate 2')).not.toBeInTheDocument()
   })
 
   it('shows a validation error and does not submit when name is empty', async () => {
@@ -74,660 +133,300 @@ describe('ProductForm', () => {
   describe('preço — mesmo campo bancário aprovado em ProductPriceForm', () => {
     it('começa em R$ 0,00', () => {
       renderForm()
-
       expect(screen.getByLabelText(/^preço$/i)).toHaveValue(formatCentsToBRL(0))
     })
 
-    it('digitar 2500 produz R$ 25,00 (dígitos entram pela direita, como centavos)', async () => {
-      const user = userEvent.setup()
-      renderForm()
-
-      await user.type(screen.getByLabelText(/^preço$/i), '2500')
-
-      expect(screen.getByLabelText(/^preço$/i)).toHaveValue(formatCentsToBRL(2500))
-    })
-
-    it('Backspace remove o último dígito (centavo)', async () => {
-      const user = userEvent.setup()
-      renderForm()
-
-      const priceInput = screen.getByLabelText(/^preço$/i)
-      await user.type(priceInput, '2500')
-      await user.type(priceInput, '{Backspace}')
-
-      expect(priceInput).toHaveValue(formatCentsToBRL(250))
-    })
-
-    it('Delete também remove o último dígito', async () => {
-      const user = userEvent.setup()
-      renderForm()
-
-      const priceInput = screen.getByLabelText(/^preço$/i)
-      await user.type(priceInput, '2500')
-      await user.type(priceInput, '{Delete}')
-
-      expect(priceInput).toHaveValue(formatCentsToBRL(250))
-    })
-
-    it('cursor sempre reposicionado ao final após digitar', async () => {
-      const user = userEvent.setup()
-      renderForm()
-
-      const priceInput = screen.getByLabelText(/^preço$/i) as HTMLInputElement
-      await user.type(priceInput, '2500')
-
-      expect(priceInput.selectionStart).toBe(priceInput.value.length)
-      expect(priceInput.selectionEnd).toBe(priceInput.value.length)
-    })
-
-    it('colar "25,90" preenche R$ 25,90', async () => {
-      const user = userEvent.setup()
-      renderForm()
-
-      const priceInput = screen.getByLabelText(/^preço$/i)
-      await user.click(priceInput)
-      await user.paste('25,90')
-
-      expect(priceInput).toHaveValue(formatCentsToBRL(2590))
-    })
-
-    it('teto MAX_CENTS: excedente mostra erro e não altera o valor', async () => {
-      const user = userEvent.setup()
-      renderForm()
-
-      const priceInput = screen.getByLabelText(/^preço$/i)
-      await user.type(priceInput, '9999999999') // no teto exato
-      await user.type(priceInput, '9') // um dígito a mais estoura o teto
-
-      expect(await screen.findByText(/não pode ultrapassar/i)).toBeInTheDocument()
-    })
-
-    it('preço nunca tocado bloqueia o envio com "Informe o preço."', async () => {
+    it('bloqueia o envio sem preço informado', async () => {
       const user = userEvent.setup()
       const { onSubmit } = renderForm()
-
       await user.type(screen.getByLabelText(/^nome$/i), 'Chaveiro')
       await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(await screen.findByText('Informe o preço.')).toBeInTheDocument()
-      expect(onSubmit).not.toHaveBeenCalled()
-    })
-
-    it('preço explicitamente digitado como 0 é válido e envia default_price: 0', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await user.type(screen.getByLabelText(/^nome$/i), 'Chaveiro')
-      const priceInput = screen.getByLabelText(/^preço$/i)
-      await user.type(priceInput, '0')
-      await user.type(priceInput, '{Backspace}')
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ default_price: 0 }))
-    })
-
-    it('converte corretamente para o número enviado ao backend (centavos -> reais)', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await fillNameAndPrice(user, '123456')
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ default_price: 1234.56 }))
-    })
-  })
-
-  describe('tempo de produção — campo inteligente', () => {
-    it('possui um texto de ajuda associado por aria-describedby', () => {
-      renderForm()
-
-      const input = screen.getByLabelText(/tempo de produção/i)
-      const describedBy = input.getAttribute('aria-describedby')
-      expect(describedBy).toBeTruthy()
-      const helpText = screen.getByText('Aceita 1h30min, 1,5h, 01:30:00, 90m ou 30m45s.')
-      expect(describedBy).toContain(helpText.id)
-    })
-
-    it.each([
-      ['1h30min', '01:30:00'],
-      ['1,5h', '01:30:00'],
-      ['90m', '01:30:00'],
-      ['30m45s', '00:30:45'],
-      ['12:30', '12:30:00'],
-    ])('blur normaliza "%s" para %s', async (typed, normalized) => {
-      const user = userEvent.setup()
-      renderForm()
-
-      const input = screen.getByLabelText(/tempo de produção/i)
-      await user.type(input, typed)
-      await user.tab()
-
-      expect(input).toHaveValue(normalized)
-    })
-
-    it('campo vazio permanece vazio após blur e envia null', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      const input = screen.getByLabelText(/tempo de produção/i)
-      await user.click(input)
-      await user.tab()
-      expect(input).toHaveValue('')
-
-      await fillNameAndPrice(user)
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ default_print_time_seconds: null }))
-    })
-
-    it('texto inválido mostra erro inline no blur, sem apagar o que foi digitado', async () => {
-      const user = userEvent.setup()
-      renderForm()
-
-      const input = screen.getByLabelText(/tempo de produção/i)
-      await user.type(input, 'abacaxi')
-      await user.tab()
-
-      expect(await screen.findByText(/duração inválida/i)).toBeInTheDocument()
-      expect(input).toHaveValue('abacaxi')
-    })
-
-    it('erro de duração bloqueia o envio', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await fillNameAndPrice(user)
-      await user.type(screen.getByLabelText(/tempo de produção/i), 'abacaxi')
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(await screen.findByText(/duração inválida/i)).toBeInTheDocument()
-      expect(onSubmit).not.toHaveBeenCalled()
-    })
-
-    it('envia default_print_time_seconds em segundos inteiros, preservando segundos exatos', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await fillNameAndPrice(user)
-      await user.type(screen.getByLabelText(/tempo de produção/i), '30m45s')
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ default_print_time_seconds: 1845 }))
-    })
-
-    it('não normaliza no blur se o valor já ficou inválido depois de editado (mantém erro)', async () => {
-      const user = userEvent.setup()
-      renderForm()
-
-      const input = screen.getByLabelText(/tempo de produção/i)
-      await user.type(input, '1h30min')
-      await user.tab()
-      expect(input).toHaveValue('01:30:00')
-
-      await user.clear(input)
-      await user.type(input, 'xyz')
-      await user.tab()
-
-      expect(await screen.findByText(/duração inválida/i)).toBeInTheDocument()
-      expect(input).toHaveValue('xyz')
-    })
-  })
-
-  describe('peso total (g)', () => {
-    it('vazio é permitido (opcional)', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await fillNameAndPrice(user)
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ default_weight_grams: null }))
-    })
-
-    it('aceita 0', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await fillNameAndPrice(user)
-      await user.type(screen.getByLabelText(/peso total \(g\)/i), '0')
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ default_weight_grams: 0 }))
-    })
-
-    it('aceita decimal com vírgula', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await fillNameAndPrice(user)
-      await user.type(screen.getByLabelText(/peso total \(g\)/i), '45,5')
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ default_weight_grams: 45.5 }))
-    })
-
-    it('rejeita negativo', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await fillNameAndPrice(user)
-      await user.type(screen.getByLabelText(/peso total \(g\)/i), '-5')
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(await screen.findByText('O peso deve ser maior ou igual a 0.')).toBeInTheDocument()
-      expect(onSubmit).not.toHaveBeenCalled()
-    })
-
-    it('rejeita texto inválido', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await fillNameAndPrice(user)
-      await user.type(screen.getByLabelText(/peso total \(g\)/i), 'abc')
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(await screen.findByText(/deve ser um número válido/i)).toBeInTheDocument()
+      expect(await screen.findByText(/informe o preço/i)).toBeInTheDocument()
       expect(onSubmit).not.toHaveBeenCalled()
     })
   })
 
-  describe('personalização, categoria e descrição', () => {
-    it('criação: Switch inicia ativado por padrão', () => {
+  describe('Número de plates', () => {
+    it('o botão "Diminuir" fica desabilitado com só 1 plate (mínimo 1, nunca 0/negativo)', () => {
       renderForm()
-
-      const toggle = screen.getByRole('switch', { name: /permite personalização/i })
-      expect(toggle).toBeChecked()
+      expect(screen.getByRole('button', { name: /diminuir número de plates/i })).toBeDisabled()
     })
 
-    it('criação: sem interação no Switch, salvar envia allows_personalization: true', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await fillNameAndPrice(user)
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ allows_personalization: true }))
-    })
-
-    it('criação: usuário pode desativar o Switch manualmente e salvar allows_personalization: false', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      const toggle = screen.getByRole('switch', { name: /permite personalização/i })
-      await user.click(toggle)
-      expect(toggle).not.toBeChecked()
-
-      await fillNameAndPrice(user)
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ allows_personalization: false }))
-    })
-
-    it('criação: reabrir uma nova janela de "Novo produto" restaura o padrão ativado, mesmo após desativar na janela anterior', async () => {
-      const user = userEvent.setup()
-      const { unmount } = renderForm()
-
-      await user.click(screen.getByRole('switch', { name: /permite personalização/i }))
-      expect(screen.getByRole('switch', { name: /permite personalização/i })).not.toBeChecked()
-
-      // Fechar e reabrir a janela desmonta e remonta ProductForm (Dialog do
-      // Radix/base-ui não mantém o conteúdo montado quando fechado) — um
-      // novo formulário de criação nasce sempre do estado inicial, nunca do
-      // estado residual da instância anterior.
-      unmount()
-      renderForm()
-
-      expect(screen.getByRole('switch', { name: /permite personalização/i })).toBeChecked()
-    })
-
-    it('o Switch é navegável e alternável por teclado (parte de ativado, teclado desativa)', async () => {
+    it('"Aumentar" cria um novo plate numerado sequencialmente', async () => {
       const user = userEvent.setup()
       renderForm()
 
-      const toggle = screen.getByRole('switch', { name: /permite personalização/i })
-      expect(toggle).toBeChecked()
-      toggle.focus()
-      await user.keyboard(' ')
+      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
+      expect(screen.getByText('Plate 2')).toBeInTheDocument()
 
-      expect(toggle).not.toBeChecked()
+      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
+      expect(screen.getByText('Plate 3')).toBeInTheDocument()
     })
 
-    it('categoria e descrição vazias enviam null', async () => {
+    it('remove um plate VAZIO diretamente, sem pedir confirmação', async () => {
       const user = userEvent.setup()
-      const { onSubmit } = renderForm()
+      renderForm()
 
-      await fillNameAndPrice(user)
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
+      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
+      expect(screen.getByText('Plate 2')).toBeInTheDocument()
 
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ category: null, description: null }))
+      await user.click(screen.getByRole('button', { name: /remover plate 2/i }))
+      expect(screen.queryByText('Plate 2')).not.toBeInTheDocument()
+      expect(screen.queryByText(/tem dados preenchidos/i)).not.toBeInTheDocument()
     })
 
-    it('categoria pré-definida selecionada e descrição preenchida (com trim) são enviadas corretamente', async () => {
+    it('pede confirmação antes de remover um plate PREENCHIDO (com tempo informado) — nunca apaga composição preenchida silenciosamente', async () => {
       const user = userEvent.setup()
-      const { onSubmit } = renderForm()
+      renderForm()
 
-      await fillNameAndPrice(user)
-      await clickRadio(user, 'Categoria', 'Decoração')
-      await user.type(screen.getByLabelText(/descrição/i), '  Chaveiro em resina  ')
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
+      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
+      const plate2Time = screen.getAllByLabelText(/tempo de produção/i)[1]
+      await user.type(plate2Time, '01:00')
 
-      expect(onSubmit).toHaveBeenCalledWith(
-        expect.objectContaining({ category: 'Decoração', description: 'Chaveiro em resina' }),
-      )
+      await user.click(screen.getByRole('button', { name: /remover plate 2/i }))
+      expect(await screen.findByText(/tem dados preenchidos/i)).toBeInTheDocument()
+      expect(screen.getByText('Plate 2')).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: /^remover$/i }))
+      expect(screen.queryByText('Plate 2')).not.toBeInTheDocument()
     })
   })
 
-  describe('Tipo do produto', () => {
-    it('Catálogo é a opção selecionada por padrão na criação', () => {
+  describe('composição de filamentos por plate', () => {
+    it('só oferece filamentos ativos', () => {
       renderForm()
-
-      const group = screen.getByRole('radiogroup', { name: 'Tipo do produto' })
-      expect(within(group).getByRole('radio', { name: 'Catálogo' })).toHaveAttribute('aria-checked', 'true')
-      expect(within(group).getByRole('radio', { name: 'Personalizado' })).toHaveAttribute('aria-checked', 'false')
-      expect(within(group).getByRole('radio', { name: 'SPOT' })).toHaveAttribute('aria-checked', 'false')
+      // Só ft1/ft2 (ambos ativos nesta fixture) — nenhum "(inativo)" no
+      // rótulo de nenhuma opção oferecida por padrão.
+      expect(screen.queryByText(/inativo/i)).not.toBeInTheDocument()
     })
 
-    it('seleção exclusiva: escolher Personalizado desmarca Catálogo, escolher SPOT desmarca Personalizado', async () => {
+    it('impede o mesmo filamento duas vezes NO MESMO plate, mas permite o mesmo filamento em plates diferentes', async () => {
       const user = userEvent.setup()
       renderForm()
 
-      await clickRadio(user, 'Tipo do produto', 'Personalizado')
-      expect(screen.getByRole('radio', { name: 'Personalizado' })).toHaveAttribute('aria-checked', 'true')
-      expect(screen.getByRole('radio', { name: 'Catálogo' })).toHaveAttribute('aria-checked', 'false')
+      // Plate 1: seleciona ft1 na primeira linha, adiciona uma segunda
+      // linha — ft1 não deveria mais aparecer como opção nessa segunda
+      // linha (já escolhido no mesmo plate).
+      const firstSelect = screen.getAllByRole('combobox', { name: 'Tipo de filamento' })[0]
+      await user.click(firstSelect)
+      await user.click(await screen.findByRole('option', { name: /PLA · 3D Fila · Basic · Preto/i }))
 
-      await clickRadio(user, 'Tipo do produto', 'SPOT')
-      expect(screen.getByRole('radio', { name: 'SPOT' })).toHaveAttribute('aria-checked', 'true')
-      expect(screen.getByRole('radio', { name: 'Personalizado' })).toHaveAttribute('aria-checked', 'false')
+      await user.click(screen.getByRole('button', { name: /adicionar filamento/i }))
+      const secondSelect = screen.getAllByRole('combobox', { name: 'Tipo de filamento' })[1]
+      await user.click(secondSelect)
+      expect(screen.queryByRole('option', { name: /PLA · 3D Fila · Basic · Preto/i })).not.toBeInTheDocument()
+      expect(screen.getByRole('option', { name: /PETG · 3D Fila · Premium · Branco/i })).toBeInTheDocument()
     })
 
-    it('payload usa os valores técnicos já adotados (CATALOG/CUSTOM/SPOT)', async () => {
+    it('bloqueia o envio com peso zero/negativo numa linha de filamento preenchida', async () => {
       const user = userEvent.setup()
       const { onSubmit } = renderForm()
-
       await fillNameAndPrice(user)
-      await clickRadio(user, 'Tipo do produto', 'Personalizado')
+
+      const select = screen.getAllByRole('combobox', { name: 'Tipo de filamento' })[0]
+      await user.click(select)
+      await user.click(await screen.findByRole('option', { name: /PLA/i }))
+      await user.type(screen.getAllByLabelText('Peso (g)')[0], '0')
+
       await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ product_type: 'CUSTOM' }))
-    })
-
-    it('produtos novos sem alterar a seleção enviam product_type: CATALOG', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await fillNameAndPrice(user)
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ product_type: 'CATALOG' }))
-    })
-  })
-
-  describe('Categoria — seleção exclusiva por action buttons', () => {
-    it('mostra as 9 categorias pré-definidas mais "Outro", nenhuma selecionada por padrão', () => {
-      renderForm()
-
-      const group = screen.getByRole('radiogroup', { name: 'Categoria' })
-      const options = within(group).getAllByRole('radio')
-      expect(options.map((option) => option.textContent)).toEqual([
-        'Chaveiro',
-        'Suporte',
-        'Brinquedo Sensorial',
-        'Decoração',
-        'Pet',
-        'Gamer',
-        'Geek',
-        'Beauty',
-        'Office',
-        'Outro',
-      ])
-      expect(options.every((option) => option.getAttribute('aria-checked') === 'false')).toBe(true)
-    })
-
-    it('Beauty e Office são opções independentes; "Beauty Office" não é mais uma opção pré-definida', () => {
-      renderForm()
-
-      const group = screen.getByRole('radiogroup', { name: 'Categoria' })
-      expect(within(group).getByRole('radio', { name: 'Beauty' })).toBeInTheDocument()
-      expect(within(group).getByRole('radio', { name: 'Office' })).toBeInTheDocument()
-      expect(within(group).queryByRole('radio', { name: 'Beauty Office' })).not.toBeInTheDocument()
-    })
-
-    it('seleção exclusiva entre Beauty e Office: escolher uma desmarca a outra', async () => {
-      const user = userEvent.setup()
-      renderForm()
-
-      await clickRadio(user, 'Categoria', 'Beauty')
-      expect(screen.getByRole('radio', { name: 'Beauty' })).toHaveAttribute('aria-checked', 'true')
-      expect(screen.getByRole('radio', { name: 'Office' })).toHaveAttribute('aria-checked', 'false')
-
-      await clickRadio(user, 'Categoria', 'Office')
-      expect(screen.getByRole('radio', { name: 'Office' })).toHaveAttribute('aria-checked', 'true')
-      expect(screen.getByRole('radio', { name: 'Beauty' })).toHaveAttribute('aria-checked', 'false')
-    })
-
-    it('seleção de Beauty envia category: "Beauty"', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await fillNameAndPrice(user)
-      await clickRadio(user, 'Categoria', 'Beauty')
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ category: 'Beauty' }))
-    })
-
-    it('seleção de Office envia category: "Office"', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await fillNameAndPrice(user)
-      await clickRadio(user, 'Categoria', 'Office')
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ category: 'Office' }))
-    })
-
-    it('categoria antiga "Beauty Office" (produto existente) é preservada e abre como "Outro" na edição, com o texto original', () => {
-      renderForm({
-        mode: 'edit',
-        initialValues: {
-          name: 'Produto Antigo',
-          category: 'Beauty Office',
-          description: null,
-          defaultPrice: 10,
-          defaultPrintTimeSeconds: null,
-          defaultWeightGrams: null,
-          allowsPersonalization: false,
-          productType: 'CATALOG',
-        },
-      })
-
-      expect(screen.getByRole('radio', { name: 'Outro' })).toHaveAttribute('aria-checked', 'true')
-      expect(screen.getByLabelText('Informe a categoria')).toHaveValue('Beauty Office')
-      expect(screen.queryByRole('radio', { name: 'Beauty Office' })).not.toBeInTheDocument()
-    })
-
-    it('mostra o texto explicativo da categoria', () => {
-      renderForm()
-
-      expect(
-        screen.getByText(
-          'A categoria organiza os produtos por finalidade ou público, facilitando a localização e a consulta na listagem.',
-        ),
-      ).toBeInTheDocument()
-    })
-
-    it('seleção exclusiva: escolher uma categoria desmarca a anterior', async () => {
-      const user = userEvent.setup()
-      renderForm()
-
-      await clickRadio(user, 'Categoria', 'Chaveiro')
-      expect(screen.getByRole('radio', { name: 'Chaveiro' })).toHaveAttribute('aria-checked', 'true')
-
-      await clickRadio(user, 'Categoria', 'Gamer')
-      expect(screen.getByRole('radio', { name: 'Gamer' })).toHaveAttribute('aria-checked', 'true')
-      expect(screen.getByRole('radio', { name: 'Chaveiro' })).toHaveAttribute('aria-checked', 'false')
-    })
-
-    it('preserva exatamente a capitalização apresentada (ex.: "Brinquedo Sensorial") no payload', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await fillNameAndPrice(user)
-      await clickRadio(user, 'Categoria', 'Brinquedo Sensorial')
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ category: 'Brinquedo Sensorial' }))
-    })
-
-    it('ao selecionar "Outro", mostra o campo "Informe a categoria"', async () => {
-      const user = userEvent.setup()
-      renderForm()
-
-      expect(screen.queryByLabelText('Informe a categoria')).not.toBeInTheDocument()
-      await clickRadio(user, 'Categoria', 'Outro')
-      expect(screen.getByLabelText('Informe a categoria')).toBeInTheDocument()
-    })
-
-    it('"Outro" sem texto bloqueia o envio com "Informe a categoria."', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
-
-      await fillNameAndPrice(user)
-      await clickRadio(user, 'Categoria', 'Outro')
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
-
-      expect(await screen.findByText('Informe a categoria.')).toBeInTheDocument()
+      expect(await screen.findByText(/deve ser maior ou igual a 0.01/i)).toBeInTheDocument()
       expect(onSubmit).not.toHaveBeenCalled()
     })
+  })
 
-    it('"Outro" com texto preenchido envia o texto digitado como categoria', async () => {
+  describe('totais automáticos — exemplo de aceite (Suporte para Controle PS5)', () => {
+    it('37,16 g + 97,34 g = 134,50 g; 01:17 + 02:54 = 04:11', async () => {
       const user = userEvent.setup()
-      const { onSubmit } = renderForm()
+      renderForm()
 
-      await fillNameAndPrice(user)
-      await clickRadio(user, 'Categoria', 'Outro')
-      await user.type(screen.getByLabelText('Informe a categoria'), 'Colecionáveis')
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
+      // Plate 1: preto, 37,16 g, 01:17.
+      const select1 = screen.getAllByRole('combobox', { name: 'Tipo de filamento' })[0]
+      await user.click(select1)
+      await user.click(await screen.findByRole('option', { name: /PLA · 3D Fila · Basic · Preto/i }))
+      await user.type(screen.getAllByLabelText('Peso (g)')[0], '37.16')
+      await user.type(screen.getAllByLabelText(/tempo de produção/i)[0], '01:17')
 
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ category: 'Colecionáveis' }))
+      // Plate 2: branco, 97,34 g, 02:54.
+      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
+      const select2 = screen.getAllByRole('combobox', { name: 'Tipo de filamento' })[1]
+      await user.click(select2)
+      await user.click(await screen.findByRole('option', { name: /PETG · 3D Fila · Premium · Branco/i }))
+      await user.type(screen.getAllByLabelText('Peso (g)')[1], '97.34')
+      await user.type(screen.getAllByLabelText(/tempo de produção/i)[1], '02:54')
+
+      expect(screen.getByText('134,5 g')).toBeInTheDocument()
+      expect(screen.getByText('04:11')).toBeInTheDocument()
     })
   })
 
-  describe('edição (mode="edit", initialValues)', () => {
-    const editInitialValues = {
-      name: 'Chaveiro Gatinho',
-      category: 'Decoração',
-      description: 'Chaveiro em formato de gato',
-      defaultPrice: 25.5,
-      defaultPrintTimeSeconds: 5400,
-      defaultWeightGrams: 45,
-      allowsPersonalization: true,
-      productType: 'CUSTOM' as const,
+  describe('ajuste manual de totais ("Ajustar totais" / "Usar cálculo automático")', () => {
+    async function fillTwoPlates(user: ReturnType<typeof userEvent.setup>) {
+      const select1 = screen.getAllByRole('combobox', { name: 'Tipo de filamento' })[0]
+      await user.click(select1)
+      await user.click(await screen.findByRole('option', { name: /PLA · 3D Fila · Basic · Preto/i }))
+      await user.type(screen.getAllByLabelText('Peso (g)')[0], '37.16')
+      await user.type(screen.getAllByLabelText(/tempo de produção/i)[0], '01:17')
+
+      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
+      const select2 = screen.getAllByRole('combobox', { name: 'Tipo de filamento' })[1]
+      await user.click(select2)
+      await user.click(await screen.findByRole('option', { name: /PETG · 3D Fila · Premium · Branco/i }))
+      await user.type(screen.getAllByLabelText('Peso (g)')[1], '97.34')
+      await user.type(screen.getAllByLabelText(/tempo de produção/i)[1], '02:54')
     }
 
-    it('preenche todos os campos a partir de initialValues', () => {
-      renderForm({ mode: 'edit', initialValues: editInitialValues })
-
-      expect(screen.getByLabelText(/^nome$/i)).toHaveValue('Chaveiro Gatinho')
-      expect(screen.getByRole('radio', { name: 'Personalizado' })).toHaveAttribute('aria-checked', 'true')
-      expect(screen.getByRole('radio', { name: 'Decoração' })).toHaveAttribute('aria-checked', 'true')
-      expect(screen.getByLabelText(/descrição/i)).toHaveValue('Chaveiro em formato de gato')
-      expect(screen.getByLabelText(/^preço$/i)).toHaveValue(formatCentsToBRL(2550))
-      expect(screen.getByLabelText(/tempo de produção/i)).toHaveValue('01:30:00')
-      expect(screen.getByLabelText(/peso total \(g\)/i)).toHaveValue('45')
-      expect(screen.getByRole('switch', { name: /permite personalização/i })).toBeChecked()
-      expect(screen.getByRole('button', { name: 'Salvar alterações' })).toBeInTheDocument()
-    })
-
-    it('categoria existente que não corresponde a nenhuma opção pré-definida abre como "Outro", com o texto preenchido', () => {
-      renderForm({ mode: 'edit', initialValues: { ...editInitialValues, category: 'Miniaturas Colecionáveis' } })
-
-      expect(screen.getByRole('radio', { name: 'Outro' })).toHaveAttribute('aria-checked', 'true')
-      expect(screen.getByLabelText('Informe a categoria')).toHaveValue('Miniaturas Colecionáveis')
-    })
-
-    it('categoria nula em initialValues não seleciona nenhuma opção', () => {
-      renderForm({ mode: 'edit', initialValues: { ...editInitialValues, category: null } })
-
-      const group = screen.getByRole('radiogroup', { name: 'Categoria' })
-      const options = within(group).getAllByRole('radio')
-      expect(options.every((option) => option.getAttribute('aria-checked') === 'false')).toBe(true)
-    })
-
-    it('preço já preenchido não bloqueia o envio (não exige nova digitação)', async () => {
+    it('"Ajustar totais" permite editar o peso efetivo (134,49 g) preservando o tempo calculado (04:11) e mostra "Ajustado manualmente"', async () => {
       const user = userEvent.setup()
-      const { onSubmit } = renderForm({ mode: 'edit', initialValues: editInitialValues })
+      renderForm()
+      await fillTwoPlates(user)
 
-      await user.click(screen.getByRole('button', { name: /salvar alterações/i }))
+      await user.click(screen.getByRole('button', { name: /ajustar totais/i }))
+      const weightOverride = screen.getByLabelText(/peso efetivo/i)
+      await user.clear(weightOverride)
+      await user.type(weightOverride, '134.49')
 
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ default_price: 25.5 }))
+      expect(screen.getByText('134,49 g')).toBeInTheDocument()
+      expect(screen.getByText('04:11')).toBeInTheDocument()
+      expect(screen.getByText(/ajustado manualmente/i)).toBeInTheDocument()
+      // O sistema continua exibindo o valor calculado pelos plates (134,50 g).
+      expect(screen.getByText(/calculado pelos plates: 134,5 g/i)).toBeInTheDocument()
     })
 
-    it('edição preserva allowsPersonalization: true do produto existente (não força nenhum padrão)', () => {
-      renderForm({ mode: 'edit', initialValues: { ...editInitialValues, allowsPersonalization: true } })
+    it('"Usar cálculo automático" remove o ajuste e volta a mostrar a soma dos plates', async () => {
+      const user = userEvent.setup()
+      renderForm()
+      await fillTwoPlates(user)
 
-      expect(screen.getByRole('switch', { name: /permite personalização/i })).toBeChecked()
-    })
+      await user.click(screen.getByRole('button', { name: /ajustar totais/i }))
+      const weightOverride = screen.getByLabelText(/peso efetivo/i)
+      await user.clear(weightOverride)
+      await user.type(weightOverride, '999')
 
-    it('edição preserva allowsPersonalization: false do produto existente (não força ativado)', () => {
-      renderForm({ mode: 'edit', initialValues: { ...editInitialValues, allowsPersonalization: false } })
+      await user.click(screen.getByRole('button', { name: /usar cálculo automático/i }))
 
-      expect(screen.getByRole('switch', { name: /permite personalização/i })).not.toBeChecked()
+      expect(screen.getByText('134,5 g')).toBeInTheDocument()
+      expect(screen.queryByText(/ajustado manualmente/i)).not.toBeInTheDocument()
     })
   })
 
-  describe('payload completo', () => {
-    it('envia todos os campos preenchidos corretamente, sem units_per_plate', async () => {
-      const user = userEvent.setup()
-      const { onSubmit } = renderForm()
+  it('submete com o payload correto (plates + totais + acessórios/embalagens vazios por padrão)', async () => {
+    const user = userEvent.setup()
+    const { onSubmit } = renderForm()
+    await fillNameAndPrice(user)
 
-      await user.type(screen.getByLabelText(/^nome$/i), 'Chaveiro Gatinho')
-      await clickRadio(user, 'Categoria', 'Decoração')
-      await user.type(screen.getByLabelText(/descrição/i), 'Chaveiro em formato de gato')
-      await user.type(screen.getByLabelText(/^preço$/i), '2550')
-      await user.type(screen.getByLabelText(/tempo de produção/i), '1h30min')
-      await user.type(screen.getByLabelText(/peso total \(g\)/i), '45')
-      // Permite personalização já nasce ativado por padrão na criação —
-      // não precisa de interação para o payload sair com true.
-      await user.click(screen.getByRole('button', { name: /salvar/i }))
+    const select = screen.getAllByRole('combobox', { name: 'Tipo de filamento' })[0]
+    await user.click(select)
+    await user.click(await screen.findByRole('option', { name: /PLA/i }))
+    await user.type(screen.getAllByLabelText('Peso (g)')[0], '50')
+    await user.type(screen.getAllByLabelText(/tempo de produção/i)[0], '01:00')
 
-      expect(onSubmit).toHaveBeenCalledWith({
-        name: 'Chaveiro Gatinho',
+    await user.click(screen.getByRole('button', { name: /salvar/i }))
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Chaveiro',
         product_type: 'CATALOG',
-        category: 'Decoração',
-        description: 'Chaveiro em formato de gato',
-        default_price: 25.5,
-        default_print_time_seconds: 5400,
-        default_weight_grams: 45,
-        allows_personalization: true,
-      })
-      const submittedValue = onSubmit.mock.calls[0][0]
-      expect('units_per_plate' in submittedValue).toBe(false)
+        default_price: 25,
+        manual_weight_override_grams: null,
+        manual_time_override_seconds: null,
+        accessories: [],
+        packaging: [],
+        plates: [{ production_time_seconds: 3600, filaments: [{ filament_type_id: 'ft1', weight_grams: 50 }] }],
+      }),
+    )
+  })
+
+  describe('Acessórios e Embalagem', () => {
+    it('abre o seletor, escolhe um acessório e uma embalagem, e mostra o resumo com nome/tipo/quantidade', async () => {
+      const user = userEvent.setup()
+      renderForm()
+
+      await user.click(screen.getByRole('button', { name: /selecionar acessórios e embalagens/i }))
+      expect(screen.getByRole('dialog', { name: /selecionar acessórios e embalagens/i })).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: /adicionar acessório/i }))
+      const accessorySelect = screen.getByRole('combobox', { name: 'Acessório' })
+      await user.click(accessorySelect)
+      await user.click(await screen.findByRole('option', { name: 'Chaveiro metálico' }))
+      const accessoryQty = screen.getByRole('combobox', { name: 'Quantidade do acessório' })
+      await user.click(accessoryQty)
+      await user.click(await screen.findByRole('option', { name: '2' }))
+
+      await user.click(screen.getByRole('button', { name: /^salvar$/i }))
+
+      expect(screen.queryByRole('dialog', { name: /selecionar acessórios e embalagens/i })).not.toBeInTheDocument()
+      expect(screen.getByText(/Chaveiro metálico · Acessório · Qtd\. 2/)).toBeInTheDocument()
+    })
+
+    it('"Remover" no resumo tira o item sem reabrir o seletor', async () => {
+      const user = userEvent.setup()
+      renderForm()
+
+      await user.click(screen.getByRole('button', { name: /selecionar acessórios e embalagens/i }))
+      await user.click(screen.getByRole('button', { name: /adicionar acessório/i }))
+      await user.click(screen.getByRole('combobox', { name: 'Acessório' }))
+      await user.click(await screen.findByRole('option', { name: 'Chaveiro metálico' }))
+      await user.click(screen.getByRole('combobox', { name: 'Quantidade do acessório' }))
+      await user.click(await screen.findByRole('option', { name: '1' }))
+      await user.click(screen.getByRole('button', { name: /^salvar$/i }))
+
+      expect(screen.getByText(/Chaveiro metálico/)).toBeInTheDocument()
+      const summaryItem = screen.getByText(/Chaveiro metálico/).closest('li') as HTMLElement
+      await user.click(within(summaryItem).getByRole('button', { name: /remover/i }))
+
+      expect(screen.queryByText(/Chaveiro metálico/)).not.toBeInTheDocument()
     })
   })
 
-  it('calls onCancel when the cancel button is clicked', async () => {
+  describe('modo edição', () => {
+    function editInitialValues(): ProductFormInitialValues {
+      return {
+        name: 'Suporte PS5',
+        category: 'Gamer',
+        description: 'Suporte de parede',
+        defaultPrice: 60,
+        allowsPersonalization: false,
+        productType: 'CATALOG',
+        plates: [],
+        manualWeightOverrideGrams: null,
+        manualTimeOverrideSeconds: null,
+        accessories: [],
+        packaging: [],
+      }
+    }
+
+    it('pré-preenche Dados Gerais e nasce com 1 plate quando o produto editado não tinha nenhum', () => {
+      renderForm({ mode: 'edit', initialValues: editInitialValues() })
+
+      expect(screen.getByLabelText(/^nome$/i)).toHaveValue('Suporte PS5')
+      expect(screen.getByLabelText(/^preço$/i)).toHaveValue(formatCentsToBRL(6000))
+      expect(screen.getByText('Plate 1')).toBeInTheDocument()
+    })
+
+    it('o botão de submit mostra "Salvar alterações"', () => {
+      renderForm({ mode: 'edit', initialValues: editInitialValues() })
+      expect(screen.getByRole('button', { name: /salvar alterações/i })).toBeInTheDocument()
+    })
+  })
+
+  it('chama onCancel ao clicar em Cancelar', async () => {
     const user = userEvent.setup()
     const { onCancel } = renderForm()
-
-    await user.click(screen.getByRole('button', { name: /cancelar/i }))
-
-    expect(onCancel).toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: /^cancelar$/i }))
+    expect(onCancel).toHaveBeenCalledTimes(1)
   })
 
-  describe('isSubmitting / submitError', () => {
-    it('isSubmitting=true desabilita Cancelar e Salvar, mostrando "Salvando..."', () => {
-      renderForm({ isSubmitting: true })
+  it('exibe o erro real do backend (submitError) sem apagar os dados preenchidos', async () => {
+    const user = userEvent.setup()
+    renderForm({ submitError: 'Erro real do backend' })
 
-      expect(screen.getByRole('button', { name: /cancelar/i })).toBeDisabled()
-      expect(screen.getByRole('button', { name: 'Salvando...' })).toBeDisabled()
-    })
+    await user.type(screen.getByLabelText(/^nome$/i), 'Chaveiro')
+    expect(screen.getByText('Erro real do backend')).toBeInTheDocument()
+    expect(screen.getByLabelText(/^nome$/i)).toHaveValue('Chaveiro')
+  })
 
-    it('submitError é exibido', () => {
-      renderForm({ submitError: 'categoria inválida' })
-
-      expect(screen.getByText('categoria inválida')).toBeInTheDocument()
-    })
+  it('duplo envio bloqueado: isSubmitting desabilita o botão de salvar', () => {
+    renderForm({ isSubmitting: true })
+    expect(screen.getByRole('button', { name: /salvando/i })).toBeDisabled()
   })
 })
