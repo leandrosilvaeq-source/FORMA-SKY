@@ -105,9 +105,22 @@ export interface Product {
   // Legado: coluna preservada no banco (não é mais exibida/editável em
   // nenhuma tela — removida de "Novo produto" e da Ficha Técnica), nunca
   // preenchida por produtos novos (sempre null a partir desta rodada).
+  // NUNCA confundir com o conceito novo de "plates" (ProductPlate,
+  // abaixo) — são coisas diferentes que só compartilham a palavra.
   units_per_plate: number | null
   default_file_id: string | null
   allows_personalization: boolean
+  // Estrutura produtiva por plates (migration 20260829160000, ainda não
+  // aplicada) — ajuste manual independente de peso/tempo total de
+  // produção. null = "sem ajuste, o efetivo é o cálculo automático (soma
+  // dos plates)" para aquele campo especificamente; default_weight_grams/
+  // default_print_time_seconds acima SEMPRE refletem o valor EFETIVO
+  // (ajuste manual, se houver, senão automático) — nunca o valor bruto
+  // calculado, que o frontend recalcula localmente a partir de
+  // ProductPlate[]/ProductPlateFilament[] quando precisa exibir os dois
+  // lado a lado.
+  production_weight_manual_override_grams: number | null
+  production_time_manual_override_seconds: number | null
   is_active: boolean
   created_at: string
   updated_at: string
@@ -479,6 +492,27 @@ export interface ProductFilament {
   product_id: string
   filament_type_id: string
   theoretical_weight_grams: number
+  created_at: string
+}
+
+// supabase/migrations/20260829160000_add_product_plates_structure.sql
+// (ainda não aplicada) — estrutura produtiva por plates. Peso do plate NÃO
+// é uma coluna própria — é sempre a soma de ProductPlateFilament[] daquele
+// plate_id, recalculada pelo frontend quando precisa exibi-la.
+export interface ProductPlate {
+  id: string
+  product_id: string
+  plate_number: number
+  production_time_seconds: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ProductPlateFilament {
+  id: string
+  plate_id: string
+  filament_type_id: string
+  weight_grams: number
   created_at: string
 }
 

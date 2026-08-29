@@ -10,6 +10,10 @@
 import { supabase } from '@/lib/supabase'
 import { mapSupabaseError } from './errors'
 import { callEdgeFunction } from './edgeFunctionClient'
+// Acessórios/Embalagens reaproveitam exatamente o mesmo formato já usado
+// por lib/api/productComposition.ts ({id, quantity}) — não redeclarado
+// aqui, só referenciado nos tipos abaixo para não duplicar a forma.
+import type { ProductCompositionItemInput } from './productComposition'
 import type { Product, ProductPriceHistory, ProductType } from '@/types/domain'
 
 // units_per_plate deliberadamente ausente deste contrato: removido da
@@ -58,6 +62,59 @@ export interface UpdateProductDetailsInput {
   default_weight_grams?: number | null
   default_file_id?: string | null
   allows_personalization?: boolean
+}
+
+// Estrutura produtiva por plates (migration 20260829160000, ainda não
+// aplicada) — payload de um plate + suas linhas de filamento. A posição no
+// array (índice) define o número do plate (Plate 1, Plate 2, ...), nunca um
+// campo separado aqui — mesmo contrato de PlateInput em
+// supabase/functions/products/handler.ts.
+export interface PlateFilamentItemInput {
+  filament_type_id: string
+  weight_grams: number
+}
+
+export interface PlateInput {
+  production_time_seconds: number
+  filaments: PlateFilamentItemInput[]
+}
+
+// POST /products/with-plates -> create_product_with_plates (NOVA,
+// 2026-08-29). manual_weight_override_grams/manual_time_override_seconds
+// são independentes um do outro — cada um pode estar ausente/null enquanto
+// o outro está presente (ver comentário da coluna na migration).
+export interface CreateProductWithPlatesInput {
+  name: string
+  product_type: ProductType
+  default_price: number
+  category?: string | null
+  description?: string | null
+  default_file_id?: string | null
+  allows_personalization?: boolean | null
+  plates: PlateInput[]
+  manual_weight_override_grams?: number | null
+  manual_time_override_seconds?: number | null
+  accessories: ProductCompositionItemInput[]
+  packaging: ProductCompositionItemInput[]
+}
+
+// PATCH /products/:id/full -> update_product_full (NOVA, 2026-08-29). Os
+// campos descritivos (name..allows_personalization) são opcionais como um
+// todo — omitir todos preserva os dados descritivos atuais do produto,
+// sem exigir reenviar o que não mudou; plates/accessories/packaging
+// continuam SEMPRE substituição completa (o formulário sempre envia o
+// estado inteiro atual dessas 3 seções a cada salvar).
+export interface UpdateProductFullInput {
+  name?: string
+  category?: string | null
+  description?: string | null
+  default_file_id?: string | null
+  allows_personalization?: boolean
+  plates: PlateInput[]
+  manual_weight_override_grams?: number | null
+  manual_time_override_seconds?: number | null
+  accessories: ProductCompositionItemInput[]
+  packaging: ProductCompositionItemInput[]
 }
 
 export async function listProducts(): Promise<Product[]> {
@@ -122,4 +179,19 @@ export async function listProductPriceHistory(productId: string): Promise<Produc
 
   if (error) throw mapSupabaseError(error)
   return data as ProductPriceHistory[]
+}
+
+// POST /products/with-plates -> create_product_with_plates (NOVA,
+// 2026-08-29, estrutura produtiva por plates). Cria o Produto e, na MESMA
+// transação no banco, seus plates/filamentos/totais e sua composição de
+// Acessórios/Embalagens — nunca chamadas HTTP separadas.
+export async function createProductWithPlates(input: CreateProductWithPlatesInput): Promise<{ id: string }> {
+  return callEdgeFunction<{ id: string }>('products', '/with-plates', 'POST', input)
+}
+
+// PATCH /products/:id/full -> update_product_full (NOVA, 2026-08-29).
+// Devolve a linha completa do produto (RPC retorna public.products via
+// RETURNING *), mesmo padrão de updateProductDetails.
+export async function updateProductFull(productId: string, input: UpdateProductFullInput): Promise<Product> {
+  return callEdgeFunction<Product>('products', `/${productId}/full`, 'PATCH', input)
 }

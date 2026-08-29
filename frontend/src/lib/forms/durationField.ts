@@ -135,3 +135,19 @@ export function formatSecondsToHHMMSS(totalSeconds: number): string {
   // truncado — padStart só acrescenta zeros quando faltam, nunca remove.
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`
 }
+
+// Variante hh:mm (sem segundos) — usada pelo campo "Tempo de produção" de
+// cada plate (estrutura produtiva por plates, ProductForm.tsx) e pelo
+// total geral de tempo de produção, ambos armazenados internamente em
+// segundos (mesma unidade de sempre) mas exibidos só em horas:minutos, sem
+// casas de segundo — soma de horas > 24 não é truncada (mesmo padStart sem
+// teto de formatSecondsToHHMMSS). Segundos restantes, se houver, são
+// truncados na EXIBIÇÃO apenas (nunca perdidos no valor armazenado — só
+// arredondados para baixo ao formatar, igual a Math.floor de qualquer
+// unidade menor que a exibida).
+export function formatSecondsToHHMM(totalSeconds: number): string {
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${pad(hours)}:${pad(minutes)}`
+}

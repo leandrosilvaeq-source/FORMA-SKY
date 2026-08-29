@@ -7,7 +7,7 @@ import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { ProductCompositionForm } from '@/components/products/ProductCompositionForm'
 import { FilamentCompositionForm } from '@/components/products/FilamentCompositionForm'
-import { ProductForm } from '@/components/products/ProductForm'
+import { ProductForm, type ProductFormSubmitValues } from '@/components/products/ProductForm'
 import { ProductEditDetailsForm } from '@/components/products/ProductEditDetailsForm'
 import { ProductPriceForm } from '@/components/products/ProductPriceForm'
 import { ProductPriceHistoryList } from '@/components/products/ProductPriceHistoryList'
@@ -28,11 +28,7 @@ import { formatSecondsToHHMMSS } from '@/lib/forms/durationField'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
 import type { UpdateProductCompositionInput } from '@/lib/api/productComposition'
 import type { UpdateProductFilamentsInput } from '@/lib/api/productFilaments'
-import type {
-  CreateProductInput,
-  UpdateProductDetailsInput,
-  UpdateProductPriceInput,
-} from '@/lib/api/products'
+import type { UpdateProductDetailsInput, UpdateProductPriceInput } from '@/lib/api/products'
 import type { Product, ProductType } from '@/types/domain'
 
 const PRODUCT_SEARCH_LISTBOX_ID = 'product-search-listbox'
@@ -93,7 +89,7 @@ function getProductSortValue(product: Product, column: ProductSortColumn): strin
 }
 
 export function ProductsPage() {
-  const { products, isLoading, error, refetch, create, changePrice, update, updateDetails } = useProducts()
+  const { products, isLoading, error, refetch, createWithPlates, changePrice, update, updateDetails } = useProducts()
   const { accessories } = useAccessories()
   const { packaging } = usePackaging()
 
@@ -193,11 +189,27 @@ export function ProductsPage() {
     setCompositionDialogProduct(product)
   }
 
-  async function handleCreateSubmit(values: CreateProductInput) {
+  // Estrutura produtiva por plates (2026-08-29): "Novo produto" passa a
+  // sempre enviar plates/ajuste manual/Acessórios/Embalagens junto do
+  // cadastro, numa única chamada atômica (create_product_with_plates) —
+  // createProduct() "puro" (sem plates) não é mais chamado por aqui.
+  async function handleCreateSubmit(values: ProductFormSubmitValues) {
     setIsSubmittingCreate(true)
     setCreateError(null)
     try {
-      await create(values)
+      await createWithPlates({
+        name: values.name,
+        product_type: values.product_type,
+        default_price: values.default_price,
+        category: values.category,
+        description: values.description,
+        allows_personalization: values.allows_personalization,
+        plates: values.plates,
+        manual_weight_override_grams: values.manual_weight_override_grams,
+        manual_time_override_seconds: values.manual_time_override_seconds,
+        accessories: values.accessories,
+        packaging: values.packaging,
+      })
       toast.success('Produto cadastrado.')
       setIsCreateDialogOpen(false)
     } catch (err) {
@@ -488,12 +500,15 @@ export function ProductsPage() {
       </div>
 
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Novo produto</DialogTitle>
             <DialogDescription>Preencha os dados para cadastrar um produto de Catálogo.</DialogDescription>
           </DialogHeader>
           <ProductForm
+            filamentTypes={filamentTypesHook.types}
+            accessoriesList={accessories}
+            packagingList={packaging}
             isSubmitting={isSubmittingCreate}
             submitError={createError}
             onSubmit={(values) => void handleCreateSubmit(values)}

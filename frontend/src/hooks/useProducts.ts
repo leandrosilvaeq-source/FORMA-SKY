@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   createProduct,
+  createProductWithPlates,
   listProducts,
   updateProduct,
   updateProductDetails,
+  updateProductFull,
   updateProductPrice,
   type CreateProductInput,
+  type CreateProductWithPlatesInput,
   type UpdateProductDetailsInput,
+  type UpdateProductFullInput,
   type UpdateProductInput,
   type UpdateProductPriceInput,
 } from '@/lib/api/products'
@@ -19,9 +23,18 @@ interface UseProductsResult {
   error: ApiError | null
   refetch: () => void
   create: (input: CreateProductInput) => Promise<void>
+  // Estrutura produtiva por plates (2026-08-29) — cria o Produto e, na
+  // mesma transação no banco, plates/filamentos/totais/Acessórios/
+  // Embalagens (create_product_with_plates). Único caminho usado pelo novo
+  // formulário "Novo Produto" — createProduct (acima) continua existindo
+  // para qualquer outro uso direto da rota antiga, sem alteração.
+  createWithPlates: (input: CreateProductWithPlatesInput) => Promise<void>
   changePrice: (productId: string, input: UpdateProductPriceInput) => Promise<void>
   update: (productId: string, input: UpdateProductInput) => Promise<Product>
   updateDetails: (productId: string, input: UpdateProductDetailsInput) => Promise<Product>
+  // Edição atômica completa (Dados Gerais + Composição por plates +
+  // Acessórios/Embalagens) — update_product_full.
+  updateFull: (productId: string, input: UpdateProductFullInput) => Promise<Product>
 }
 
 function toApiError(err: unknown): ApiError {
@@ -75,6 +88,14 @@ export function useProducts(): UseProductsResult {
     [refetch],
   )
 
+  const createWithPlates = useCallback(
+    async (input: CreateProductWithPlatesInput) => {
+      await createProductWithPlates(input)
+      refetch()
+    },
+    [refetch],
+  )
+
   const changePrice = useCallback(
     async (productId: string, input: UpdateProductPriceInput) => {
       await updateProductPrice(productId, input)
@@ -101,5 +122,22 @@ export function useProducts(): UseProductsResult {
     return updated
   }, [])
 
-  return { products, isLoading, error, refetch, create, changePrice, update, updateDetails }
+  const updateFull = useCallback(async (productId: string, input: UpdateProductFullInput) => {
+    const updated = await updateProductFull(productId, input)
+    setProducts((current) => current.map((product) => (product.id === productId ? updated : product)))
+    return updated
+  }, [])
+
+  return {
+    products,
+    isLoading,
+    error,
+    refetch,
+    create,
+    createWithPlates,
+    changePrice,
+    update,
+    updateDetails,
+    updateFull,
+  }
 }
