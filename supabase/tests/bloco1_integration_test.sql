@@ -743,46 +743,71 @@ begin
 end $$;
 
 -- =============================================================================
--- SEÇÃO 5 — SPOT / gate de fila de produção
+-- SEÇÃO 5 — SPOT / fila de produção (ATUALIZADA 2026-08-29: o gate de
+-- search_time_status=RECORDED foi REMOVIDO de change_order_status() por
+-- decisão do usuário — "o tempo de pesquisa/modelagem de itens SPOT não
+-- deverá ser considerado para entrada na Fila de produção". Os 3 testes
+-- originais desta seção (5.1 esperava bloqueio sem RECORDED, 5.2 ajustava
+-- RECORDED só para poder desbloquear, 5.3 confirmava que só com RECORDED a
+-- entrada era permitida) são SUBSTITUÍDOS abaixo pelos testes da nova
+-- decisão — não apagados silenciosamente, a intenção original de cada um
+-- está preservada em comentário. O estado final exigido por esta seção
+-- para as seções seguintes (order_spot_id termina em IN_PRODUCTION_QUEUE)
+-- é mantido idêntico ao comportamento anterior.
 -- =============================================================================
 
+-- 5.1 (era: "SPOT sem RECORDED bloqueia entrada") — AGORA: SPOT sem
+-- search_time_status=RECORDED (ainda NOT_INFORMED, valor padrão desde a
+-- criação em create_order()) tem a transição para IN_PRODUCTION_QUEUE
+-- PERMITIDA — nenhum erro de tempo é emitido. Confirma também que a
+-- transição não lê/escreve search_time_status (permanece NOT_INFORMED).
 do $$
 declare
   v_user_id uuid;
   v_order_id uuid;
+  v_item_id uuid;
+  v_status text;
+  v_search_time_status text;
 begin
   begin
     select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
     select value::uuid into v_order_id from zz_fixtures where key = 'order_spot_id';
     if v_user_id is null or v_order_id is null then raise exception 'fixture ausente'; end if;
 
-    begin
-      perform public.change_order_status(v_order_id, 'IN_PRODUCTION_QUEUE', v_user_id);
-      insert into zz_test_results(section, test_name, status, details)
-        values ('5', '5.1 SPOT sem search_time_status=RECORDED bloqueia entrada em IN_PRODUCTION_QUEUE', 'FAIL', 'nenhuma exceção foi lançada');
-    exception when others then
-      if sqlerrm ilike '%search_time_status%' then
-        insert into zz_test_results(section, test_name, status, details)
-          values ('5', '5.1 SPOT sem search_time_status=RECORDED bloqueia entrada em IN_PRODUCTION_QUEUE', 'PASS', sqlerrm);
-      else
-        insert into zz_test_results(section, test_name, status, details)
-          values ('5', '5.1 SPOT sem search_time_status=RECORDED bloqueia entrada em IN_PRODUCTION_QUEUE', 'FAIL', 'erro inesperado: ' || sqlerrm);
-      end if;
-    end;
+    select id into v_item_id from public.order_items where order_id = v_order_id;
+    select search_time_status into v_search_time_status from public.spot_item_details where order_item_id = v_item_id;
+    if v_search_time_status <> 'NOT_INFORMED' then
+      raise exception 'pré-condição do teste: search_time_status deveria ainda ser NOT_INFORMED, veio %', v_search_time_status;
+    end if;
+
+    perform public.change_order_status(v_order_id, 'IN_PRODUCTION_QUEUE', v_user_id);
+
+    select order_status into v_status from public.orders where id = v_order_id;
+    select search_time_status into v_search_time_status from public.spot_item_details where order_item_id = v_item_id;
+
+    if v_status <> 'IN_PRODUCTION_QUEUE' then
+      raise exception 'SPOT sem search_time_status=RECORDED deveria poder entrar em IN_PRODUCTION_QUEUE, ficou em %', v_status;
+    end if;
+    if v_search_time_status <> 'NOT_INFORMED' then
+      raise exception 'a transição não deveria alterar search_time_status, veio %', v_search_time_status;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('5', '5.1 SPOT sem search_time_status=RECORDED NÃO bloqueia mais entrada em IN_PRODUCTION_QUEUE (gate removido, 2026-08-29)', 'PASS', null);
   exception when others then
     insert into zz_test_results(section, test_name, status, details)
-      values ('5', '5.1 SPOT sem search_time_status=RECORDED bloqueia entrada em IN_PRODUCTION_QUEUE', 'FAIL', 'erro no bloco: ' || sqlerrm);
+      values ('5', '5.1 SPOT sem search_time_status=RECORDED NÃO bloqueia mais entrada em IN_PRODUCTION_QUEUE', 'FAIL', sqlerrm);
   end;
 end $$;
 
--- TEST FIXTURE ONLY
--- Não representa caminho permitido para frontend/Edge Function.
--- Em produção, spot_item_details não recebe escrita direta de authenticated
--- nem de service_role fora de uma função controlada — este UPDATE só é
--- possível aqui porque a sessão de teste roda como owner do banco
--- (postgres). Existe unicamente para simular administrativamente que o
--- tempo de pesquisa/preparação já foi registrado, já que o Bloco 1 não
--- criou uma RPC dedicada para isso.
+-- 5.2 (era: "[TEST FIXTURE ONLY] ajustar RECORDED para poder desbloquear")
+-- — AGORA: não existe mais nada para "desbloquear" (5.1 já concluiu a
+-- transição). Este passo continua só uma escrita administrativa direta
+-- (TEST FIXTURE ONLY, mesma ressalva de sempre: não representa caminho
+-- permitido para frontend/Edge Function — spot_item_details não recebe
+-- escrita direta de authenticated nem de service_role fora de uma função
+-- controlada), agora só para preparar o teste 5.3 (o tempo permanece
+-- armazenado/histórico mesmo já em IN_PRODUCTION_QUEUE).
 do $$
 declare
   v_order_id uuid;
@@ -799,36 +824,42 @@ begin
       where order_item_id = v_item_id;
 
     insert into zz_test_results(section, test_name, status, details)
-      values ('5', '5.2 [TEST FIXTURE ONLY] ajustar search_time_status=RECORDED diretamente', 'PASS', null);
+      values ('5', '5.2 [TEST FIXTURE ONLY] ajustar search_time_status=RECORDED diretamente (só para preparar 5.3, não para desbloquear nada)', 'PASS', null);
   exception when others then
     insert into zz_test_results(section, test_name, status, details)
       values ('5', '5.2 [TEST FIXTURE ONLY] ajustar search_time_status=RECORDED diretamente', 'FAIL', sqlerrm);
   end;
 end $$;
 
+-- 5.3 (era: "com RECORDED, entrada é permitida" — agora trivial, já que
+-- SEMPRE é permitida) — AGORA: confirma que um tempo já registrado
+-- (RECORDED/30, ajustado em 5.2) permanece armazenado tal como gravado,
+-- só relido, sem nenhuma escrita adicional — nenhum trigger/função apaga
+-- ou reseta esses campos.
 do $$
 declare
-  v_user_id uuid;
   v_order_id uuid;
-  v_status text;
+  v_item_id uuid;
+  v_search_time_status text;
+  v_search_minutes integer;
 begin
   begin
-    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
     select value::uuid into v_order_id from zz_fixtures where key = 'order_spot_id';
-    if v_user_id is null or v_order_id is null then raise exception 'fixture ausente'; end if;
+    if v_order_id is null then raise exception 'fixture ausente'; end if;
 
-    perform public.change_order_status(v_order_id, 'IN_PRODUCTION_QUEUE', v_user_id);
+    select id into v_item_id from public.order_items where order_id = v_order_id;
+    select search_time_status, search_minutes into v_search_time_status, v_search_minutes
+      from public.spot_item_details where order_item_id = v_item_id;
 
-    select order_status into v_status from public.orders where id = v_order_id;
-    if v_status <> 'IN_PRODUCTION_QUEUE' then
-      raise exception 'esperado IN_PRODUCTION_QUEUE após RECORDED, veio %', v_status;
+    if v_search_time_status <> 'RECORDED' or v_search_minutes <> 30 then
+      raise exception 'tempo previamente registrado deveria permanecer RECORDED/30, veio %/%', v_search_time_status, v_search_minutes;
     end if;
 
     insert into zz_test_results(section, test_name, status, details)
-      values ('5', '5.3 com search_time_status=RECORDED, entrada em IN_PRODUCTION_QUEUE é permitida', 'PASS', null);
+      values ('5', '5.3 tempo previamente registrado (RECORDED/30) permanece armazenado, nunca apagado/resetado', 'PASS', null);
   exception when others then
     insert into zz_test_results(section, test_name, status, details)
-      values ('5', '5.3 com search_time_status=RECORDED, entrada em IN_PRODUCTION_QUEUE é permitida', 'FAIL', sqlerrm);
+      values ('5', '5.3 tempo previamente registrado permanece armazenado', 'FAIL', sqlerrm);
   end;
 end $$;
 
@@ -1359,6 +1390,39 @@ begin
   exception when others then
     insert into zz_test_results(section, test_name, status, details)
       values ('8', '8.4a setup: avança pedido SPOT para IN_PRODUCTION', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 8.4a-bis (nova, 2026-08-29): prova que remover o gate de SPOT em
+-- change_order_status() não alterou NENHUMA outra transição real — a
+-- mesmíssima transição IN_PRODUCTION_QUEUE -> IN_PRODUCTION do teste 8.4a
+-- acima continua funcionando, e o tempo já registrado (RECORDED/30, desde
+-- a Seção 5) continua intacto depois dela — search_time_status nunca é
+-- lido nem escrito por nenhuma transição, em nenhum sentido.
+do $$
+declare
+  v_order_id uuid;
+  v_item_id uuid;
+  v_search_time_status text;
+  v_search_minutes integer;
+begin
+  begin
+    select value::uuid into v_order_id from zz_fixtures where key = 'order_spot_id';
+    if v_order_id is null then raise exception 'fixture ausente'; end if;
+
+    select id into v_item_id from public.order_items where order_id = v_order_id;
+    select search_time_status, search_minutes into v_search_time_status, v_search_minutes
+      from public.spot_item_details where order_item_id = v_item_id;
+
+    if v_search_time_status <> 'RECORDED' or v_search_minutes <> 30 then
+      raise exception 'tempo registrado deveria continuar RECORDED/30 após a transição p/ IN_PRODUCTION, veio %/%', v_search_time_status, v_search_minutes;
+    end if;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('8', '8.4a-bis tempo registrado (RECORDED/30) permanece intacto após transição real IN_PRODUCTION_QUEUE -> IN_PRODUCTION', 'PASS', null);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('8', '8.4a-bis tempo registrado permanece intacto após transição real', 'FAIL', sqlerrm);
   end;
 end $$;
 

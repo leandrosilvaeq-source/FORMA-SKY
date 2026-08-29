@@ -48,22 +48,38 @@
 -- mantêm exatamente as validações já existentes (custom_details
 -- obrigatório) — nenhuma delas é alterada.
 --
--- GAP AUDITADO E DELIBERADAMENTE NÃO FECHADO NESTA MIGRATION: o gate de
+-- CORREÇÃO INCLUÍDA NESTA MESMA MIGRATION (2026-08-29, rodada seguinte à
+-- criação original acima, decisão explícita do usuário): "o tempo de
+-- pesquisa/modelagem de itens SPOT não deverá ser considerado para entrada
+-- na Fila de produção". A rodada original desta migration tinha registrado
+-- (parágrafo abaixo, mantido como histórico da auditoria que motivou a
+-- correção) um GAP encontrado mas deliberadamente não fechado: o gate de
 -- SPOT em change_order_status() (Migration 15) — "nenhum item SPOT pode
--- entrar em IN_PRODUCTION_QUEUE sem search_time_status = RECORDED" — só é
--- checado na TRANSIÇÃO via change_order_status(); um Pedido SPOT-only (ou
--- CATALOG+SPOT) criado diretamente já EM IN_PRODUCTION_QUEUE por esta
--- migration NUNCA passa por essa função na criação, então nasce sem essa
--- checagem (spot_item_details.search_time_status nasce NOT_INFORMED por
--- padrão quando não informado, ver create_order()). O pedido do usuário
--- nesta rodada (regra 6: "Itens SPOT: não exigem product_id; não exigem
--- composição; podem entrar diretamente na Fila de produção") não pede essa
--- checagem para a criação — só para a transição já existente. Registrado
--- aqui como achado de auditoria explícito (não implementado por conta
--- própria, fora do pedido) — na prática, hoje, itens SPOT ainda não são
--- criáveis pelo frontend (OrderForm.tsx mantém "Personalizado"/"Spot"
--- desabilitados como "Em breve"), então este gap é estrutural mas
--- dormant/inalcançável pela interface atual.
+-- entrar em IN_PRODUCTION_QUEUE sem search_time_status = RECORDED" — só era
+-- checado na TRANSIÇÃO via change_order_status(), nunca na criação direta
+-- desta migration; isso deixava a regra de admissão à Fila INCONSISTENTE
+-- entre "pedido novo" (sem checagem) e "pedido existente avançando"
+-- (com checagem). O usuário decidiu que a checagem em si nunca deveria
+-- existir — não que a criação direta devesse passar a replicá-la. Por
+-- isso, nesta correção, o bloco inteiro que fazia essa checagem foi
+-- REMOVIDO de change_order_status() (Seção 5 abaixo) — nenhum código foi
+-- adicionado a create_order()/determine_order_initial_status() para
+-- replicá-la. Resultado: SPOT (novo ou existente avançando) nunca mais
+-- depende de search_time_status em nenhum ponto do sistema.
+-- spot_item_details.search_time_status/search_minutes CONTINUAM existindo,
+-- com o mesmo CHECK de consistência da própria tabela (RECORDED exige
+-- search_minutes preenchido — regra de integridade do dado, não um gate de
+-- produção) — passam a ser só informativos/históricos. Na prática, hoje,
+-- itens SPOT ainda não são criáveis pelo frontend (OrderForm.tsx mantém
+-- "Personalizado"/"Spot" desabilitados como "Em breve"), então esta
+-- correção é estrutural mas ainda não exercitável pela interface atual —
+-- fica pronta para quando SPOT for habilitado.
+--
+-- Registro histórico do achado original (motivo da correção acima, não
+-- mais um gap aberto): "um Pedido SPOT-only (ou CATALOG+SPOT) criado
+-- diretamente já em IN_PRODUCTION_QUEUE nunca passava por
+-- change_order_status() na criação, então nascia sem a checagem de tempo
+-- — só uma transição de um pedido já existente é que passava por ela."
 --
 -- IMPACTO CONFIRMADO NO FLUXO DE EDIÇÃO (auditado, não corrigido por não
 -- ter sido pedido): update_quote_order() (20260821031143) só edita pedidos
@@ -643,7 +659,163 @@ grant execute on function public.create_order(uuid, uuid, uuid, date, text, nume
   to service_role;
 
 -- =============================================================================
--- 5) Verificações — mesmo padrão de todas as migrations anteriores deste
+-- 5) change_order_status — CORREÇÃO ADICIONADA NESTA MESMA MIGRATION AINDA
+--    PENDENTE (decisão do usuário, 2026-08-29, rodada seguinte à criação
+--    original desta migration): "o tempo de pesquisa/modelagem de itens
+--    SPOT não deverá ser considerado para entrada na Fila de produção".
+--
+--    Corpo idêntico ao real hoje em vigor (Migration 15,
+--    20260814030351_create_order_business_functions.sql — conferido
+--    integralmente, nunca modificado por nenhuma migration desde então),
+--    EXCETO pela remoção completa do bloco:
+--        if p_to_status = 'IN_PRODUCTION_QUEUE' then
+--          if exists (... sid.search_time_status <> 'RECORDED' ...) then
+--            raise exception 'Existe item SPOT com tempo de pesquisa/...';
+--          end if;
+--        end if;
+--    Nenhuma outra linha do corpo é alterada: máquina de transições
+--    (sequência linear QUOTE->...->DELIVERED, um passo por vez),
+--    autenticação (assert_active_user), changed_by, histórico
+--    (order_status_history), cancelamento (CANCELLED só antes de
+--    IN_PRODUCTION), aprovações (bloco APPROVED via
+--    try_auto_approve_order(), inalterado), auto-aprovação após
+--    WAITING_APPROVAL (inalterada), mensagens de erro não relacionadas
+--    (inalteradas palavra por palavra) — tudo preservado byte a byte.
+--    Nenhuma regra de pagamento existe nesta função (nunca existiu:
+--    change_order_status "nunca altera payment_status", comentário já
+--    preservado). Nenhuma idempotência própria existe nesta função (ela
+--    nunca teve — idempotência é exclusiva de create_order_with_payment,
+--    intocada aqui).
+--
+--    spot_item_details.search_time_status/search_minutes CONTINUAM
+--    existindo, com o mesmo CHECK de consistência da tabela
+--    (spot_item_details_search_time_consistency, Migration 10, não tocada
+--    por esta migration: RECORDED ainda exige search_minutes preenchido —
+--    isso é uma regra de INTEGRIDADE DO PRÓPRIO DADO, não um gate de
+--    produção, e continua válida) — o campo passa a ser só informativo e
+--    histórico, nunca mais lido por change_order_status(). Nenhuma coluna,
+--    tabela, dado ou tempo já registrado é apagado por esta migration.
+-- =============================================================================
+create or replace function public.change_order_status(
+  p_order_id uuid,
+  p_to_status text,
+  p_changed_by uuid,
+  p_reason text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_current_status text;
+  v_sequence text[] := array[
+    'QUOTE', 'WAITING_APPROVAL', 'APPROVED', 'IN_PRODUCTION_QUEUE',
+    'IN_PRODUCTION', 'WAITING_DELIVERY', 'DELIVERED'
+  ];
+  v_current_pos integer;
+  v_target_pos integer;
+  v_status_after_approval_attempt text;
+begin
+  perform public.assert_active_user(p_changed_by);
+
+  select order_status into v_current_status
+    from public.orders
+    where id = p_order_id
+    for update;
+
+  if not found then
+    raise exception 'orders.id % não encontrado', p_order_id;
+  end if;
+
+  v_current_pos := array_position(v_sequence, v_current_status);
+
+  if p_to_status = 'CANCELLED' then
+    if v_current_pos is null or v_current_pos >= array_position(v_sequence, 'IN_PRODUCTION') then
+      raise exception 'Cancelamento só é permitido antes do início da produção (status atual: %)', v_current_status;
+    end if;
+
+    update public.orders set order_status = 'CANCELLED' where id = p_order_id;
+
+    insert into public.order_status_history (
+      order_id, from_status, to_status, changed_by, reason
+    ) values (
+      p_order_id, v_current_status, 'CANCELLED', p_changed_by,
+      coalesce(p_reason, 'Pedido cancelado')
+    );
+
+    return;
+  end if;
+
+  v_target_pos := array_position(v_sequence, p_to_status);
+
+  if v_target_pos is null then
+    raise exception 'order_status de destino inválido: %', p_to_status;
+  end if;
+
+  if v_current_pos is null then
+    raise exception 'Pedido está em % — nenhuma transição de status é permitida a partir daqui', v_current_status;
+  end if;
+
+  if v_target_pos <> v_current_pos + 1 then
+    raise exception 'Transição de status inválida: % -> % (não é possível pular estados)', v_current_status, p_to_status;
+  end if;
+
+  if p_to_status = 'APPROVED' then
+    -- Reutiliza try_auto_approve_order() (Migration 14): ela só aprova se
+    -- todos os itens CUSTOM/SPOT tiverem approval válida para a versão
+    -- atual. Se não aprovar, o pedido permanece em WAITING_APPROVAL e esta
+    -- função sinaliza o motivo.
+    perform public.try_auto_approve_order(p_order_id, p_changed_by, p_reason);
+
+    select order_status into v_status_after_approval_attempt
+      from public.orders
+      where id = p_order_id;
+
+    if v_status_after_approval_attempt <> 'APPROVED' then
+      raise exception 'Aprovações obrigatórias pendentes — pedido permanece em WAITING_APPROVAL';
+    end if;
+
+    -- approval_date e order_status_history já foram gravados por
+    -- try_auto_approve_order(); nada mais a fazer aqui.
+    return;
+  end if;
+
+  -- Gate de SPOT (search_time_status <> RECORDED) REMOVIDO nesta migration
+  -- (decisão do usuário, 2026-08-29): o tempo de pesquisa/modelagem de
+  -- itens SPOT não é mais considerado para entrada na Fila de produção, em
+  -- nenhuma transição. Nenhum outro gate de IN_PRODUCTION_QUEUE existia
+  -- aqui — a transição agora só passa pelas checagens genéricas já feitas
+  -- acima (sequência linear, um passo por vez).
+  update public.orders set order_status = p_to_status where id = p_order_id;
+
+  insert into public.order_status_history (
+    order_id, from_status, to_status, changed_by, reason
+  ) values (
+    p_order_id, v_current_status, p_to_status, p_changed_by,
+    coalesce(p_reason, 'Transição de status')
+  );
+
+  if p_to_status = 'WAITING_APPROVAL' then
+    -- Após QUOTE -> WAITING_APPROVAL, tenta aprovar automaticamente: se o
+    -- pedido só tiver itens CATALOG (nenhum exige aprovação) ou todos os
+    -- itens CUSTOM/SPOT já estiverem aprovados, avança direto para
+    -- APPROVED em vez de ficar parado indefinidamente em WAITING_APPROVAL.
+    -- Se houver qualquer CUSTOM/SPOT pendente, try_auto_approve_order()
+    -- não faz nada e o pedido permanece em WAITING_APPROVAL normalmente.
+    perform public.try_auto_approve_order(p_order_id, p_changed_by, p_reason);
+  end if;
+end;
+$$;
+
+comment on function public.change_order_status(uuid, text, uuid, text) is
+  'Máquina de estados de orders.order_status: só permite avançar uma posição por vez na sequência QUOTE->WAITING_APPROVAL->APPROVED->IN_PRODUCTION_QUEUE->IN_PRODUCTION->WAITING_DELIVERY->DELIVERED, ou CANCELLED antes de IN_PRODUCTION. A transição para APPROVED delega a validação de aprovações a try_auto_approve_order(). Após QUOTE->WAITING_APPROVAL, chama try_auto_approve_order() para não deixar pedidos só-CATALOG (ou já totalmente aprovados) parados indefinidamente. Nunca altera payment_status. A partir de 2026-08-29, a transição para IN_PRODUCTION_QUEUE NÃO valida mais search_time_status de itens SPOT (gate removido por decisão do usuário) — spot_item_details.search_time_status/search_minutes permanecem só informativos/históricos, nunca mais lidos por esta função.';
+
+revoke execute on function public.change_order_status(uuid, text, uuid, text) from public, anon, authenticated;
+grant execute on function public.change_order_status(uuid, text, uuid, text) to service_role;
+
+-- =============================================================================
+-- 6) Verificações — mesmo padrão de todas as migrations anteriores deste
 --    projeto: prova estruturalmente que nada além do pretendido mudou.
 -- =============================================================================
 do $$
@@ -723,5 +895,67 @@ begin
   select has_function_privilege('service_role', 'public.create_order(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid,text)', 'EXECUTE') into v_service_role_can_execute;
   if not v_service_role_can_execute then
     raise exception 'Abortando: service_role deveria ter EXECUTE em create_order(11).';
+  end if;
+
+  -- 6.4 change_order_status: continua exatamente 1 função (mesma
+  -- assinatura, nenhuma sobrecarga nova), SECURITY DEFINER, search_path
+  -- vazio, grants inalterados (só service_role).
+  if (select count(*) from pg_proc
+      where pronamespace = 'public'::regnamespace and proname = 'change_order_status') <> 1 then
+    raise exception 'Abortando: esperada exatamente 1 função change_order_status.';
+  end if;
+
+  select prosecdef into v_is_security_definer
+    from pg_proc where pronamespace = 'public'::regnamespace and proname = 'change_order_status';
+  if not v_is_security_definer then
+    raise exception 'Abortando: change_order_status não é SECURITY DEFINER.';
+  end if;
+
+  select setting into v_search_path_raw
+    from pg_proc, unnest(proconfig) as setting
+    where pronamespace = 'public'::regnamespace and proname = 'change_order_status'
+      and setting like 'search_path=%';
+  if v_search_path_raw is null or trim(both '"' from substring(v_search_path_raw from 13)) <> '' then
+    raise exception 'Abortando: search_path de change_order_status deveria ser vazio, veio: %.', v_search_path_raw;
+  end if;
+
+  select has_function_privilege('anon', 'public.change_order_status(uuid,text,uuid,text)', 'EXECUTE') into v_anon_can_execute;
+  select has_function_privilege('authenticated', 'public.change_order_status(uuid,text,uuid,text)', 'EXECUTE') into v_authenticated_can_execute;
+  select has_function_privilege('service_role', 'public.change_order_status(uuid,text,uuid,text)', 'EXECUTE') into v_service_role_can_execute;
+  if v_anon_can_execute or v_authenticated_can_execute then
+    raise exception 'Abortando: anon/authenticated têm EXECUTE em change_order_status (anon=%, authenticated=%) — não deveriam.', v_anon_can_execute, v_authenticated_can_execute;
+  end if;
+  if not v_service_role_can_execute then
+    raise exception 'Abortando: service_role deveria ter EXECUTE em change_order_status.';
+  end if;
+
+  -- 6.5 O gate de SPOT foi mesmo removido: nenhum JOIN/referência
+  -- qualificada a spot_item_details.search_time_status sobra no
+  -- código-fonte real da função (prova textual direta contra
+  -- pg_get_functiondef, não só uma suposição de que o CREATE OR REPLACE
+  -- acima "deveria" ter funcionado). Checa o padrão de código
+  -- efetivamente removido (`sid.search_time_status`, `join public.
+  -- spot_item_details`) — não uma busca genérica por "search_time_status"
+  -- sozinho, que também casaria com o comentário explicativo deixado de
+  -- propósito no corpo da função (ver acima), gerando falso positivo.
+  if pg_get_functiondef('public.change_order_status(uuid,text,uuid,text)'::regprocedure) ilike '%sid.search_time_status%'
+     or pg_get_functiondef('public.change_order_status(uuid,text,uuid,text)'::regprocedure) ilike '%join public.spot_item_details%'
+  then
+    raise exception 'Abortando: change_order_status ainda referencia spot_item_details.search_time_status — o gate de SPOT não foi removido corretamente.';
+  end if;
+
+  -- 6.6 spot_item_details.search_time_status/search_minutes continuam
+  -- existindo (nenhuma coluna/tabela apagada por esta migration).
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'spot_item_details' and column_name = 'search_time_status'
+  ) then
+    raise exception 'Abortando: spot_item_details.search_time_status não existe mais — nenhuma coluna deveria ser removida por esta migration.';
+  end if;
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'spot_item_details' and column_name = 'search_minutes'
+  ) then
+    raise exception 'Abortando: spot_item_details.search_minutes não existe mais — nenhuma coluna deveria ser removida por esta migration.';
   end if;
 end $$;

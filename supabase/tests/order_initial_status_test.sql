@@ -752,13 +752,273 @@ begin
     and has_function_privilege('service_role', 'public.create_order(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid)', 'EXECUTE')
     and not has_function_privilege('authenticated', 'public.create_order(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid,text)', 'EXECUTE')
     and has_function_privilege('service_role', 'public.create_order(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid,text)', 'EXECUTE')
+    and not has_function_privilege('authenticated', 'public.change_order_status(uuid,text,uuid,text)', 'EXECUTE')
+    and not has_function_privilege('anon', 'public.change_order_status(uuid,text,uuid,text)', 'EXECUTE')
+    and has_function_privilege('service_role', 'public.change_order_status(uuid,text,uuid,text)', 'EXECUTE')
   into v_ok;
   insert into zz_ois_test_results(section, test_name, status, details)
-    values ('5', '5.1 helpers internos sem NENHUM grant; as 2 sobrecargas de create_order continuam exclusivas de service_role',
+    values ('5', '5.1 helpers internos sem NENHUM grant; as 2 sobrecargas de create_order e change_order_status continuam exclusivas de service_role',
       case when v_ok then 'PASS' else 'FAIL' end, 'v_ok=' || v_ok);
 exception when others then
   insert into zz_ois_test_results(section, test_name, status, details)
     values ('5', '5.1 permissões/grants', 'FAIL', sqlerrm);
+end $$;
+
+-- =============================================================================
+-- SEÇÃO 6 — remoção do gate de tempo de pesquisa/modelagem do SPOT em
+-- change_order_status() (decisão do usuário, 2026-08-29, rodada seguinte à
+-- criação original deste arquivo).
+-- =============================================================================
+
+-- 6.1 — SPOT novo SEM search_time_status no payload (chave omitida) ->
+-- IN_PRODUCTION_QUEUE; valor armazenado é o default NOT_INFORMED
+-- (create_order já fazia isso — só confirma que nada bloqueia).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_order_id uuid;
+  v_item_id uuid;
+  v_order_status text;
+  v_search_time_status text;
+begin
+  select value::uuid into v_user_id from zz_ois_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ois_fixtures where key = 'customer_id';
+
+  begin
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'SPOT sem search_time_status no payload',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'SPOT', 'item_name', 'Item SPOT teste', 'quantity', 1, 'unit_price', 30,
+        'spot_details', jsonb_build_object('source_reference', 'teste')
+      )),
+      v_user_id, null
+    );
+    select order_status into v_order_status from public.orders where id = v_order_id;
+    select oi.id into v_item_id from public.order_items oi where oi.order_id = v_order_id;
+    select search_time_status into v_search_time_status from public.spot_item_details where order_item_id = v_item_id;
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('6', '6.1 SPOT novo sem search_time_status no payload -> IN_PRODUCTION_QUEUE (default NOT_INFORMED, sem bloqueio)',
+        case when v_order_status = 'IN_PRODUCTION_QUEUE' and v_search_time_status = 'NOT_INFORMED' then 'PASS' else 'FAIL' end,
+        'order_status=' || v_order_status || ' search_time_status=' || v_search_time_status);
+  exception when others then
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('6', '6.1 SPOT novo sem search_time_status no payload', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 6.2 — SPOT novo com search_time_status explicitamente 'NOT_INFORMED' ->
+-- IN_PRODUCTION_QUEUE (mesmo valor, agora informado explicitamente em vez
+-- de omitido — nenhuma diferença de comportamento).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_order_id uuid;
+  v_order_status text;
+begin
+  select value::uuid into v_user_id from zz_ois_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ois_fixtures where key = 'customer_id';
+
+  begin
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'SPOT com search_time_status NOT_INFORMED explícito',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'SPOT', 'item_name', 'Item SPOT teste', 'quantity', 1, 'unit_price', 30,
+        'spot_details', jsonb_build_object('source_reference', 'teste', 'search_time_status', 'NOT_INFORMED')
+      )),
+      v_user_id, null
+    );
+    select order_status into v_order_status from public.orders where id = v_order_id;
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('6', '6.2 SPOT novo com search_time_status=NOT_INFORMED explícito -> IN_PRODUCTION_QUEUE',
+        case when v_order_status = 'IN_PRODUCTION_QUEUE' then 'PASS' else 'FAIL' end,
+        'order_status=' || v_order_status);
+  exception when others then
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('6', '6.2 SPOT novo com search_time_status=NOT_INFORMED explícito', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 6.3 — CATALOG (com composição) + SPOT sem tempo do SPOT ->
+-- IN_PRODUCTION_QUEUE (mistura, mesma checagem da Seção 1.3, agora com
+-- asserção explícita do search_time_status).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_order_status text;
+begin
+  select value::uuid into v_user_id from zz_ois_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ois_fixtures where key = 'customer_id';
+  select value::uuid into v_product_id from zz_ois_fixtures where key = 'product_composed_1';
+
+  begin
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'CATALOG+SPOT sem tempo do SPOT',
+      jsonb_build_array(
+        jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id,
+          'item_name', 'Item teste', 'quantity', 1, 'unit_price', 50),
+        jsonb_build_object('item_type', 'SPOT', 'item_name', 'Item SPOT teste', 'quantity', 1, 'unit_price', 30,
+          'spot_details', jsonb_build_object('source_reference', 'teste'))
+      ),
+      v_user_id, null
+    );
+    select order_status into v_order_status from public.orders where id = v_order_id;
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('6', '6.3 CATALOG (com composição) + SPOT sem tempo -> IN_PRODUCTION_QUEUE',
+        case when v_order_status = 'IN_PRODUCTION_QUEUE' then 'PASS' else 'FAIL' end,
+        'order_status=' || v_order_status);
+  exception when others then
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('6', '6.3 CATALOG+SPOT sem tempo', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 6.4 — Pedido EXISTENTE (SPOT+CUSTOM, nascido em QUOTE por ter CUSTOM) faz
+-- uma transição REAL via change_order_status() até IN_PRODUCTION_QUEUE,
+-- passando pela aprovação dos dois itens, com o item SPOT NUNCA tendo
+-- search_time_status=RECORDED em nenhum momento — a transição final não
+-- pode ser bloqueada por isso (o gate real que foi removido).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_order_id uuid;
+  v_spot_item_id uuid;
+  v_custom_item_id uuid;
+  v_custom_version_id uuid;
+  v_status_after_wa text;
+  v_status_after_approvals text;
+  v_status_final text;
+  v_search_time_status text;
+begin
+  select value::uuid into v_user_id from zz_ois_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ois_fixtures where key = 'customer_id';
+
+  begin
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'SPOT+CUSTOM existente, transição real até a Fila',
+      jsonb_build_array(
+        jsonb_build_object('item_type', 'SPOT', 'item_name', 'Item SPOT teste', 'quantity', 1, 'unit_price', 30,
+          'spot_details', jsonb_build_object('source_reference', 'teste')),
+        jsonb_build_object('item_type', 'CUSTOM', 'item_name', 'Item CUSTOM teste', 'quantity', 1, 'unit_price', 200,
+          'custom_details', jsonb_build_object('current_version', 'v1.0'))
+      ),
+      v_user_id, null
+    );
+
+    select id into v_spot_item_id from public.order_items where order_id = v_order_id and item_type = 'SPOT';
+    select id into v_custom_item_id from public.order_items where order_id = v_order_id and item_type = 'CUSTOM';
+    select id into v_custom_version_id from public.custom_versions where order_item_id = v_custom_item_id and version_number = 'v1.0';
+
+    perform public.change_order_status(v_order_id, 'WAITING_APPROVAL', v_user_id);
+    select order_status into v_status_after_wa from public.orders where id = v_order_id;
+
+    perform public.register_approval(v_spot_item_id, 'WHATSAPP', now(), v_user_id);
+    perform public.register_approval(v_custom_item_id, 'FORMAL_DOCUMENT', now(), v_user_id, v_custom_version_id);
+    select order_status into v_status_after_approvals from public.orders where id = v_order_id;
+
+    -- Ponto central deste teste: a transição real para a Fila, com o item
+    -- SPOT ainda em search_time_status=NOT_INFORMED (nunca RECORDED).
+    perform public.change_order_status(v_order_id, 'IN_PRODUCTION_QUEUE', v_user_id);
+    select order_status into v_status_final from public.orders where id = v_order_id;
+    select search_time_status into v_search_time_status from public.spot_item_details where order_item_id = v_spot_item_id;
+
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('6', '6.4 pedido SPOT+CUSTOM existente: QUOTE->WAITING_APPROVAL->APPROVED->IN_PRODUCTION_QUEUE sem search_time_status=RECORDED, nenhum erro de tempo',
+        case when v_status_after_wa = 'WAITING_APPROVAL' and v_status_after_approvals = 'APPROVED'
+                and v_status_final = 'IN_PRODUCTION_QUEUE' and v_search_time_status = 'NOT_INFORMED'
+             then 'PASS' else 'FAIL' end,
+        'after_wa=' || v_status_after_wa || ' after_approvals=' || v_status_after_approvals ||
+        ' final=' || v_status_final || ' search_time_status=' || v_search_time_status);
+  exception when others then
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('6', '6.4 pedido SPOT+CUSTOM existente: transição real até a Fila sem tempo registrado', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 6.5 — Tempo já registrado (RECORDED) num item SPOT permanece armazenado
+-- depois de uma transição de status real (não é lido, não é apagado, não
+-- é resetado por change_order_status()).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_order_id uuid;
+  v_item_id uuid;
+  v_search_time_status text;
+  v_search_minutes integer;
+begin
+  select value::uuid into v_user_id from zz_ois_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ois_fixtures where key = 'customer_id';
+
+  begin
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'SPOT com tempo já registrado, sobrevive à transição',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'SPOT', 'item_name', 'Item SPOT teste', 'quantity', 1, 'unit_price', 30,
+        'spot_details', jsonb_build_object('source_reference', 'teste', 'search_time_status', 'RECORDED', 'search_minutes', 45)
+      )),
+      v_user_id, null
+    );
+    select id into v_item_id from public.order_items where order_id = v_order_id;
+
+    -- Pedido já nasce em IN_PRODUCTION_QUEUE (só SPOT) — avança mais um
+    -- passo real (IN_PRODUCTION) para provar que a transição não mexe no
+    -- tempo já registrado.
+    perform public.change_order_status(v_order_id, 'IN_PRODUCTION', v_user_id);
+    select search_time_status, search_minutes into v_search_time_status, v_search_minutes
+      from public.spot_item_details where order_item_id = v_item_id;
+
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('6', '6.5 tempo já registrado (RECORDED/45) permanece intacto após transição real IN_PRODUCTION_QUEUE -> IN_PRODUCTION',
+        case when v_search_time_status = 'RECORDED' and v_search_minutes = 45 then 'PASS' else 'FAIL' end,
+        'search_time_status=' || v_search_time_status || ' search_minutes=' || v_search_minutes);
+  exception when others then
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('6', '6.5 tempo já registrado permanece intacto após transição real', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 6.6 — Remover o gate de SPOT não altera NENHUMA outra transição:
+-- cancelamento continua bloqueado a partir de IN_PRODUCTION (regressão do
+-- gate de CANCELLED, código totalmente independente do que foi removido).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_order_id uuid;
+begin
+  select value::uuid into v_user_id from zz_ois_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ois_fixtures where key = 'customer_id';
+
+  begin
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'SPOT: cancelamento continua bloqueado após IN_PRODUCTION',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'SPOT', 'item_name', 'Item SPOT teste', 'quantity', 1, 'unit_price', 30,
+        'spot_details', jsonb_build_object('source_reference', 'teste')
+      )),
+      v_user_id, null
+    );
+    perform public.change_order_status(v_order_id, 'IN_PRODUCTION', v_user_id);
+
+    begin
+      perform public.change_order_status(v_order_id, 'CANCELLED', v_user_id);
+      insert into zz_ois_test_results(section, test_name, status, details)
+        values ('6', '6.6 cancelamento continua bloqueado após IN_PRODUCTION (gate independente, não afetado pela remoção do gate de SPOT)', 'FAIL', 'não levantou exceção');
+    exception when others then
+      insert into zz_ois_test_results(section, test_name, status, details)
+        values ('6', '6.6 cancelamento continua bloqueado após IN_PRODUCTION (gate independente, não afetado pela remoção do gate de SPOT)',
+          case when sqlerrm like '%Cancelamento só é permitido antes do início da produção%' then 'PASS' else 'FAIL' end, sqlerrm);
+    end;
+  exception when others then
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('6', '6.6 cancelamento continua bloqueado após IN_PRODUCTION', 'FAIL', sqlerrm);
+  end;
 end $$;
 
 -- =============================================================================

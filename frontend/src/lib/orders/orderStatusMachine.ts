@@ -1,14 +1,17 @@
 // Espelha exatamente a máquina de estados validada em
 // change_order_status() (supabase/migrations/20260814030351_
-// create_order_business_functions.sql) — nenhuma regra nova é inventada
-// aqui, só a mesma sequência linear e a mesma condição de cancelamento já
-// implementadas na RPC. Este módulo NUNCA decide se uma transição é
-// permitida do ponto de vista do backend (a RPC continua sendo a única
-// fonte de verdade e pode rejeitar por outros motivos — ex.: item SPOT sem
-// tempo de pesquisa registrado) — só decide quais BOTÕES faz sentido
-// oferecer na interface para não sugerir uma ação que a RPC certamente
-// rejeitaria (pular estado, avançar um pedido terminal, cancelar após o
-// início da produção).
+// create_order_business_functions.sql, com a correção de
+// 20260829150000_add_order_initial_status_classification.sql) — nenhuma
+// regra nova é inventada aqui, só a mesma sequência linear e a mesma
+// condição de cancelamento já implementadas na RPC. Este módulo NUNCA
+// decide se uma transição é permitida do ponto de vista do backend (a RPC
+// continua sendo a única fonte de verdade) — só decide quais BOTÕES faz
+// sentido oferecer na interface para não sugerir uma ação que a RPC
+// certamente rejeitaria (pular estado, avançar um pedido terminal,
+// cancelar após o início da produção). Item SPOT sem tempo de pesquisa/
+// modelagem registrado NÃO é mais um motivo de rejeição (decisão do
+// usuário, 2026-08-29) — search_time_status é só informativo/histórico,
+// nunca lido por change_order_status().
 
 import type { OrderStatus } from '@/types/domain'
 
