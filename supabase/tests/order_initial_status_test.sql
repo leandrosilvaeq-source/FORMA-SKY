@@ -408,6 +408,11 @@ end $$;
 -- 2.2 — CATALOG sem composição (produto existe, mas sem product_filaments)
 -- é REJEITADO com o marcador ORDER_CATALOG_MISSING_COMPOSITION:, nenhum
 -- pedido/item órfão.
+-- v_items_before/v_items_after comparam a CONTAGEM (nunca um valor
+-- absoluto): o produto_incomplete_1 já pode ter um order_item legítimo de
+-- um teste anterior desta mesma seção (1.6, CATALOG+CUSTOM, que não exige
+-- composição por decisão de escopo) — um valor absoluto de 0 seria um
+-- falso FAIL contra esse item legítimo e preexistente, não um órfão real.
 do $$
 declare
   v_user_id uuid;
@@ -415,12 +420,14 @@ declare
   v_product_id uuid;
   v_orders_before integer;
   v_orders_after integer;
+  v_items_before integer;
   v_items_after integer;
 begin
   select value::uuid into v_user_id from zz_ois_fixtures where key = 'user_id';
   select value::uuid into v_customer_id from zz_ois_fixtures where key = 'customer_id';
   select value::uuid into v_product_id from zz_ois_fixtures where key = 'product_incomplete_1';
   select count(*) into v_orders_before from public.orders where customer_id = v_customer_id;
+  select count(*) into v_items_before from public.order_items where product_id = v_product_id;
 
   begin
     perform public.create_order(
@@ -440,9 +447,10 @@ begin
       values ('2', '2.2 CATALOG sem composição é REJEITADO (ORDER_CATALOG_MISSING_COMPOSITION:), zero órfão',
         case when sqlerrm like 'ORDER_CATALOG_MISSING_COMPOSITION:%'
                 and sqlerrm like '%TESTE OPS — Produto SEM composição 1%'
-                and v_orders_after = v_orders_before and v_items_after = 0
+                and v_orders_after = v_orders_before and v_items_after = v_items_before
              then 'PASS' else 'FAIL' end,
-        sqlerrm || ' orders_before=' || v_orders_before || ' orders_after=' || v_orders_after || ' items_after=' || v_items_after);
+        sqlerrm || ' orders_before=' || v_orders_before || ' orders_after=' || v_orders_after ||
+        ' items_before=' || v_items_before || ' items_after=' || v_items_after);
   end;
 end $$;
 
