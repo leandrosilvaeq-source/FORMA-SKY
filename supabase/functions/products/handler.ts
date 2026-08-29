@@ -15,13 +15,29 @@
 //   PATCH  /products/:id/price         -> RPC update_product_price
 //   PATCH  /products/:id/composition   -> RPC set_product_composition
 //   PATCH  /products/:id/filaments     -> RPC set_product_filaments (Incremento 6A)
+//   POST   /products/with-plates       -> RPC create_product_with_plates (NOVA — estrutura por plates, 2026-08-29)
+//   PATCH  /products/:id/full          -> RPC update_product_full (NOVA — estrutura por plates, 2026-08-29)
 //
-// As cinco RPCs são security definer com EXECUTE concedido só a
+// As sete RPCs são security definer com EXECUTE concedido só a
 // service_role (supabase/migrations/20260814030351_create_order_business_functions.sql,
 // 20260816150500_create_product_composition_function.sql,
 // 20260827113000_create_product_filaments_table.sql,
-// 20260829143000_add_product_edit_function.sql) — só alcançáveis a partir
-// desta Edge Function, nunca diretamente do frontend.
+// 20260829143000_add_product_edit_function.sql,
+// 20260829160000_add_product_plates_structure.sql) — só alcançáveis a
+// partir desta Edge Function, nunca diretamente do frontend.
+//
+// POST /products/with-plates e PATCH /products/:id/full (NOVAS,
+// 2026-08-29 — estrutura produtiva por plates, ainda não aplicada ao
+// remoto): o novo formulário "Novo Produto"/"Editar produto" (3 seções —
+// Dados Gerais/Composição por plates/Acessórios e Embalagem) passa a usar
+// exclusivamente estas duas rotas para criar/editar um Produto — Produto +
+// plates + filamentos por plate + totais/ajuste manual + Acessórios +
+// Embalagens são salvos numa ÚNICA chamada atômica cada (create_product_with_plates/
+// update_product_full), nunca várias chamadas HTTP separadas. As rotas
+// antigas (POST /products, PATCH /:id, PATCH /:id/composition, PATCH
+// /:id/filaments) continuam existindo e funcionando exatamente como antes
+// — nenhuma removida, nenhuma alterada — preservando 100% de
+// compatibilidade para qualquer uso direto delas fora do novo formulário.
 //
 // PATCH /products/:id (NOVA, 2026-08-29): substitui o antigo botão "Alterar
 // preço" por "Editar produto" no frontend — edita campos descritivos/de
@@ -115,6 +131,14 @@ export async function handleRequest(req: Request): Promise<Response> {
 
     if (req.method === "PATCH" && route.length === 2 && route[1] === "filaments") {
       return await handleUpdateProductFilaments(req, route[0]);
+    }
+
+    if (req.method === "POST" && route.length === 1 && route[0] === "with-plates") {
+      return await handleCreateProductWithPlates(req);
+    }
+
+    if (req.method === "PATCH" && route.length === 2 && route[1] === "full") {
+      return await handleUpdateProductFull(req, route[0]);
     }
 
     throw new NotFoundError("Rota não encontrada.");
@@ -487,4 +511,252 @@ export function validateFilamentCompositionItems(
 
     return { id, theoretical_weight_grams: weight };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Validador local da estrutura de plates (estrutura produtiva por plates,
+// 2026-08-29) — array de:
+//   { production_time_seconds: inteiro >= 0, filaments: [{filament_type_id: uuid, weight_grams: número > 0}, ...] }
+// A posição no array define o número do plate (Plate 1, Plate 2, ...) —
+// nunca um campo separado no payload, para nunca haver buraco/duplicata.
+// filaments pode ser um array vazio (plate só com tempo definido ainda,
+// sem composição) — set_product_production() (RPC) não exige nenhuma
+// linha; a UI normal sempre sugere ao menos uma, mas não é imposto aqui.
+// Mesmo critério das demais validações locais deste arquivo: a RPC
+// continua sendo a autoridade final (revalida tipo ativo/peso positivo/
+// duplicidade em profundidade) — esta função só evita um round-trip ao
+// banco para os erros mais comuns.
+// ---------------------------------------------------------------------------
+export interface PlateFilamentInput {
+  filament_type_id: string;
+  weight_grams: number;
+}
+
+export interface PlateInput {
+  production_time_seconds: number;
+  filaments: PlateFilamentInput[];
+}
+
+export function validatePlates(raw: unknown, field: string): PlateInput[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw new ValidationError(`Campo inválido: ${field} deve ser um array.`);
+  }
+
+  return raw.map((entry, index) => {
+    const prefix = `${field}[${index}]`;
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new ValidationError(`Campo inválido: ${prefix} deve ser um objeto.`);
+    }
+    const record = entry as Record<string, unknown>;
+
+    const productionTimeSeconds = requireNumber(
+      record.production_time_seconds,
+      `${prefix}.production_time_seconds`,
+      { min: 0 },
+    );
+    if (!Number.isInteger(productionTimeSeconds)) {
+      throw new ValidationError(`Campo inválido: ${prefix}.production_time_seconds deve ser um número inteiro.`);
+    }
+
+    const rawFilaments = record.filaments;
+    if (rawFilaments !== undefined && rawFilaments !== null && !Array.isArray(rawFilaments)) {
+      throw new ValidationError(`Campo inválido: ${prefix}.filaments deve ser um array.`);
+    }
+
+    const seen = new Set<string>();
+    const filaments = ((rawFilaments as unknown[] | undefined) ?? []).map((filamentEntry, filamentIndex) => {
+      const filamentPrefix = `${prefix}.filaments[${filamentIndex}]`;
+      if (typeof filamentEntry !== "object" || filamentEntry === null || Array.isArray(filamentEntry)) {
+        throw new ValidationError(`Campo inválido: ${filamentPrefix} deve ser um objeto.`);
+      }
+      const filamentRecord = filamentEntry as Record<string, unknown>;
+
+      if (!isUuid(filamentRecord.filament_type_id)) {
+        throw new ValidationError(`Campo inválido: ${filamentPrefix}.filament_type_id deve ser um UUID.`);
+      }
+      const filamentTypeId = filamentRecord.filament_type_id as string;
+      if (seen.has(filamentTypeId)) {
+        throw new ValidationError(
+          `Campo inválido: ${prefix}.filaments não pode repetir o mesmo filament_type_id (${filamentTypeId}).`,
+        );
+      }
+      seen.add(filamentTypeId);
+
+      const weightGrams = requireNumber(filamentRecord.weight_grams, `${filamentPrefix}.weight_grams`, {
+        min: 0.01,
+      });
+
+      return { filament_type_id: filamentTypeId, weight_grams: weightGrams };
+    });
+
+    return { production_time_seconds: productionTimeSeconds, filaments };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// POST /products/with-plates -> create_product_with_plates(p_name,
+//   p_product_type, p_category, p_description, p_default_price,
+//   p_default_file_id, p_allows_personalization, p_plates,
+//   p_manual_weight_override_grams, p_manual_time_override_seconds,
+//   p_accessories, p_packaging, p_changed_by) — NOVA, 2026-08-29
+//
+// Mesma validação de campos descritivos de handleCreateProduct (nome/tipo/
+// categoria/descrição/preço/arquivo/personalização) — default_print_time_seconds/
+// default_weight_grams NÃO são lidos do corpo aqui (não fazem parte deste
+// contrato: o peso/tempo efetivos vêm de p_plates + o ajuste manual
+// opcional, nunca digitados soltos nesta rota). manual_weight_override_grams/
+// manual_time_override_seconds são independentes um do outro (qualquer um
+// pode estar ausente/null enquanto o outro está presente).
+// ---------------------------------------------------------------------------
+async function handleCreateProductWithPlates(req: Request): Promise<Response> {
+  const operator = await resolveOperator(req);
+
+  const rawBody = await req.text();
+  rejectIdentityFields(rawBody);
+  const body = parseJsonBody(rawBody);
+
+  const name = requireString(body.name, "name");
+  const productType = requireEnum(body.product_type, "product_type", PRODUCT_TYPES);
+  const defaultPrice = requireNumber(body.default_price, "default_price", { min: 0 });
+  const category = optionalString(body.category, "category");
+  const description = optionalString(body.description, "description");
+  const defaultFileId = optionalUuid(body.default_file_id, "default_file_id");
+  const allowsPersonalization = optionalBoolean(body.allows_personalization, "allows_personalization");
+
+  const plates = validatePlates(body.plates, "plates");
+  const manualWeightOverrideGrams = optionalNumber(
+    body.manual_weight_override_grams,
+    "manual_weight_override_grams",
+    { min: 0 },
+  );
+  const manualTimeOverrideSecondsRaw = optionalInteger(
+    body.manual_time_override_seconds,
+    "manual_time_override_seconds",
+    { min: 0 },
+  );
+  const accessories = validateCompositionItems(body.accessories, "accessories");
+  const packaging = validateCompositionItems(body.packaging, "packaging");
+
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("create_product_with_plates", {
+    p_name: name,
+    p_product_type: productType,
+    p_category: category,
+    p_description: description,
+    p_default_price: defaultPrice,
+    p_default_file_id: defaultFileId,
+    p_allows_personalization: allowsPersonalization,
+    p_plates: plates,
+    p_manual_weight_override_grams: manualWeightOverrideGrams,
+    p_manual_time_override_seconds: manualTimeOverrideSecondsRaw,
+    p_accessories: accessories,
+    p_packaging: packaging,
+    p_changed_by: operator.userId,
+  });
+
+  if (error) throw mapPgError(error);
+
+  return jsonResponse(req, { id: data }, 201);
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /products/:id/full -> update_product_full(p_product_id, p_patch,
+//   p_plates, p_manual_weight_override_grams, p_manual_time_override_seconds,
+//   p_accessories, p_packaging, p_changed_by) — NOVA, 2026-08-29
+//
+// p_patch: mesma whitelist/validação de handleUpdateProduct (PRODUCT_PATCH_KEYS)
+// — mas aqui é OPCIONAL como um todo: um corpo sem nenhuma das chaves de
+// PRODUCT_PATCH_KEYS é válido (a seção "Dados Gerais" pode não ter mudado
+// nesta edição), a RPC decide não chamar update_product() nesse caso.
+// Chaves DESCONHECIDAS (fora de PRODUCT_PATCH_KEYS ∪ {plates, manual_weight_override_grams,
+// manual_time_override_seconds, accessories, packaging}) continuam
+// rejeitadas, mesmo critério de handleUpdateProduct.
+// ---------------------------------------------------------------------------
+const PRODUCT_FULL_KEYS = [
+  ...PRODUCT_PATCH_KEYS,
+  "plates",
+  "manual_weight_override_grams",
+  "manual_time_override_seconds",
+  "accessories",
+  "packaging",
+] as const;
+
+async function handleUpdateProductFull(req: Request, productId: string): Promise<Response> {
+  const operator = await resolveOperator(req);
+
+  if (!isUuid(productId)) {
+    throw new ValidationError("Identificador de produto inválido na rota.");
+  }
+
+  const rawBody = await req.text();
+  rejectIdentityFields(rawBody);
+  const body = parseJsonBody(rawBody);
+
+  const unknownKeys = Object.keys(body).filter(
+    (key) => !(PRODUCT_FULL_KEYS as readonly string[]).includes(key),
+  );
+  if (unknownKeys.length > 0) {
+    throw new ValidationError(
+      `Campo(s) não suportado(s) no corpo da requisição: ${unknownKeys.join(", ")}.`,
+    );
+  }
+
+  const patch: Record<string, unknown> = {};
+  if ("name" in body) patch.name = requireString(body.name, "name");
+  if ("category" in body) patch.category = optionalString(body.category, "category");
+  if ("description" in body) patch.description = optionalString(body.description, "description");
+  if ("default_print_time_seconds" in body) {
+    patch.default_print_time_seconds = optionalInteger(
+      body.default_print_time_seconds,
+      "default_print_time_seconds",
+      { min: 0 },
+    );
+  }
+  if ("default_weight_grams" in body) {
+    patch.default_weight_grams = optionalNumber(
+      body.default_weight_grams,
+      "default_weight_grams",
+      { min: 0 },
+    );
+  }
+  if ("default_file_id" in body) {
+    patch.default_file_id = optionalUuid(body.default_file_id, "default_file_id");
+  }
+  if ("allows_personalization" in body) {
+    patch.allows_personalization = optionalBoolean(
+      body.allows_personalization,
+      "allows_personalization",
+    );
+  }
+
+  const plates = validatePlates(body.plates, "plates");
+  const manualWeightOverrideGrams = optionalNumber(
+    body.manual_weight_override_grams,
+    "manual_weight_override_grams",
+    { min: 0 },
+  );
+  const manualTimeOverrideSecondsRaw = optionalInteger(
+    body.manual_time_override_seconds,
+    "manual_time_override_seconds",
+    { min: 0 },
+  );
+  const accessories = validateCompositionItems(body.accessories, "accessories");
+  const packaging = validateCompositionItems(body.packaging, "packaging");
+
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("update_product_full", {
+    p_product_id: productId,
+    p_patch: patch,
+    p_plates: plates,
+    p_manual_weight_override_grams: manualWeightOverrideGrams,
+    p_manual_time_override_seconds: manualTimeOverrideSecondsRaw,
+    p_accessories: accessories,
+    p_packaging: packaging,
+    p_changed_by: operator.userId,
+  });
+
+  if (error) throw mapPgError(error);
+
+  return jsonResponse(req, data, 200);
 }

@@ -344,6 +344,15 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
     "ORDER_CATALOG_MISSING_COMPOSITION:",
     (message) => new BusinessRuleError(message.replace(/^ORDER_CATALOG_MISSING_COMPOSITION:\s*/, "")),
   ],
+  // set_product_production (20260829160000, estrutura produtiva por
+  // plates): erros de entrada inválida (a Edge Function `products` já
+  // valida tudo isso antes de chamar create_product_with_plates/
+  // update_product_full — só aparecem se a RPC for chamada diretamente).
+  // "Plate %: ..." cobre as 4 mensagens por-plate (tempo negativo,
+  // filamento sem id, peso inválido, filamento duplicado no mesmo plate)
+  // com um único padrão — todas começam com o mesmo prefixo.
+  ["set_product_production:", (message) => new ValidationError(message)],
+  ["Plate ", (message) => new ValidationError(message)],
 ];
 
 export function mapPgError(err: PgErrorLike): AppError {
