@@ -30,25 +30,14 @@ async function pickRadio(user: ReturnType<typeof userEvent.setup>, groupName: st
 const AMOUNT_LABEL = /^valor$/i
 
 describe('RegisterPaymentForm', () => {
-  it('renders the expected fields and groups', () => {
+  it('renders the expected fields and groups (campo "Tipo de pagamento" removido, 2026-08-29 — inferido automaticamente)', () => {
     renderForm()
 
-    expect(screen.getByRole('radiogroup', { name: 'Tipo de pagamento' })).toBeInTheDocument()
+    expect(screen.queryByRole('radiogroup', { name: 'Tipo de pagamento' })).not.toBeInTheDocument()
     expect(screen.getByRole('radiogroup', { name: 'Método de pagamento' })).toBeInTheDocument()
     expect(screen.getByLabelText(AMOUNT_LABEL)).toBeInTheDocument()
     expect(screen.getByLabelText(/data do pagamento/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/observações/i)).toBeInTheDocument()
-  })
-
-  it('mostra as 4 opções de Tipo de pagamento (Sinal/Final/Integral/Ajuste) como action buttons com ícone decorativo', () => {
-    renderForm()
-
-    const group = screen.getByRole('radiogroup', { name: 'Tipo de pagamento' })
-    const options = within(group).getAllByRole('radio')
-    expect(options.map((option) => option.textContent)).toEqual(['Sinal', 'Final', 'Integral', 'Ajuste'])
-    for (const option of options) {
-      expect(option.querySelector('svg[aria-hidden="true"]')).toBeInTheDocument()
-    }
   })
 
   it('mostra as 3 opções de Método de pagamento (Pix/Dinheiro/Cartão) reaproveitando os ícones de OrderForm, sem "Não informado"', () => {
@@ -61,18 +50,6 @@ describe('RegisterPaymentForm', () => {
     for (const option of options) {
       expect(option.querySelector('svg[aria-hidden="true"]')).toBeInTheDocument()
     }
-  })
-
-  it('seleção exclusiva: escolher uma opção de Tipo de pagamento desmarca a anterior', async () => {
-    const user = userEvent.setup()
-    renderForm()
-
-    await pickRadio(user, 'Tipo de pagamento', 'Sinal')
-    expect(screen.getByRole('radio', { name: 'Sinal' })).toHaveAttribute('aria-checked', 'true')
-
-    await pickRadio(user, 'Tipo de pagamento', 'Final')
-    expect(screen.getByRole('radio', { name: 'Final' })).toHaveAttribute('aria-checked', 'true')
-    expect(screen.getByRole('radio', { name: 'Sinal' })).toHaveAttribute('aria-checked', 'false')
   })
 
   it('seleção exclusiva: escolher uma opção de Método de pagamento desmarca a anterior', async () => {
@@ -124,8 +101,7 @@ describe('RegisterPaymentForm', () => {
 
     await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
 
-    expect(await screen.findByText('Selecione o tipo de pagamento.')).toBeInTheDocument()
-    expect(screen.getByText('Selecione o método de pagamento.')).toBeInTheDocument()
+    expect(await screen.findByText('Selecione o método de pagamento.')).toBeInTheDocument()
     expect(screen.getByText('O valor não pode ser zero.')).toBeInTheDocument()
     expect(onSubmit).not.toHaveBeenCalled()
   })
@@ -141,7 +117,7 @@ describe('RegisterPaymentForm', () => {
     expect(amountInput).toHaveValue(formatCentsToBRL(15050))
   })
 
-  it('submits a valid SINAL payment with amount converted to number (never a formatted string), com relógio fixo determinístico', async () => {
+  it('submits a valid payment with amount converted to number (never a formatted string) and infers SINAL, com relógio fixo determinístico', async () => {
     // Mesmo achado/correção da asserção "prefills the payment date with
     // today" acima: `paid_at` enviado pelo formulário vem de todayIsoDate()
     // (data LOCAL), e a asserção antiga comparava contra
@@ -154,12 +130,12 @@ describe('RegisterPaymentForm', () => {
       const user = userEvent.setup()
       const { onSubmit } = renderForm()
 
-      await pickRadio(user, 'Tipo de pagamento', 'Sinal')
       await pickRadio(user, 'Método de pagamento', 'Pix')
       await user.click(screen.getByLabelText(AMOUNT_LABEL))
       await user.keyboard('15050')
       await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
 
+      // orderTotal/balanceDue padrão = 500: 150,50 < 500 -> SINAL (inferido).
       expect(onSubmit).toHaveBeenCalledWith({
         payment_type: 'SINAL',
         payment_method: 'PIX',
@@ -173,11 +149,10 @@ describe('RegisterPaymentForm', () => {
     }
   })
 
-  it('rejects amount zero mesmo com tipo e método selecionados', async () => {
+  it('rejects amount zero mesmo com método selecionado', async () => {
     const user = userEvent.setup()
     const { onSubmit } = renderForm()
 
-    await pickRadio(user, 'Tipo de pagamento', 'Integral')
     await pickRadio(user, 'Método de pagamento', 'Dinheiro')
     await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
 
@@ -185,41 +160,108 @@ describe('RegisterPaymentForm', () => {
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
-  it('o interruptor "Ajuste negativo" só aparece quando o Tipo de pagamento é Ajuste', async () => {
-    const user = userEvent.setup()
+  it('o interruptor "Ajuste negativo" está sempre visível (não depende mais de nenhuma seleção prévia de tipo — campo removido)', () => {
     renderForm()
 
-    expect(screen.queryByRole('switch', { name: /ajuste negativo/i })).not.toBeInTheDocument()
-
-    await pickRadio(user, 'Tipo de pagamento', 'Sinal')
-    expect(screen.queryByRole('switch', { name: /ajuste negativo/i })).not.toBeInTheDocument()
-
-    await pickRadio(user, 'Tipo de pagamento', 'Ajuste')
     expect(screen.getByRole('switch', { name: /ajuste negativo/i })).toBeInTheDocument()
   })
 
-  it('trocar de Ajuste para outro tipo desliga automaticamente o ajuste negativo', async () => {
+  it('desligar o interruptor "Ajuste negativo" volta o valor a positivo', async () => {
     const user = userEvent.setup()
     const { onSubmit } = renderForm()
 
-    await pickRadio(user, 'Tipo de pagamento', 'Ajuste')
-    await user.click(screen.getByRole('switch', { name: /ajuste negativo/i }))
-    expect(screen.getByRole('switch', { name: /ajuste negativo/i })).toHaveAttribute('aria-checked', 'true')
-
-    await pickRadio(user, 'Tipo de pagamento', 'Sinal')
     await pickRadio(user, 'Método de pagamento', 'Pix')
+    await user.click(screen.getByRole('switch', { name: /ajuste negativo/i }))
+    await user.click(screen.getByRole('switch', { name: /ajuste negativo/i }))
     await user.click(screen.getByLabelText(AMOUNT_LABEL))
     await user.keyboard('5000')
     await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
 
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ amount: 50 }))
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ amount: 50, payment_type: 'SINAL' }))
+  })
+
+  describe('Inferência automática de payment_type (campo "Tipo de pagamento" removido, 2026-08-29)', () => {
+    it('valor positivo menor que o saldo -> SINAL', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm({ orderTotal: 100, currentTotalPaid: 0, balanceDue: 100 })
+
+      await pickRadio(user, 'Método de pagamento', 'Pix')
+      await user.click(screen.getByLabelText(AMOUNT_LABEL))
+      await user.keyboard('3000')
+      await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ payment_type: 'SINAL', amount: 30 }))
+    })
+
+    it('valor positivo igual ao saldo, sem pagamento anterior -> INTEGRAL', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm({ orderTotal: 100, currentTotalPaid: 0, balanceDue: 100 })
+
+      await pickRadio(user, 'Método de pagamento', 'Pix')
+      await user.click(screen.getByLabelText(AMOUNT_LABEL))
+      await user.keyboard('10000')
+      await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ payment_type: 'INTEGRAL', amount: 100 }))
+    })
+
+    it('valor positivo igual ao saldo, com pagamento anterior -> FINAL', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm({ orderTotal: 100, currentTotalPaid: 40, balanceDue: 60 })
+
+      await pickRadio(user, 'Método de pagamento', 'Pix')
+      await user.click(screen.getByLabelText(AMOUNT_LABEL))
+      await user.keyboard('6000')
+      await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ payment_type: 'FINAL', amount: 60 }))
+    })
+
+    it('valor negativo (ajuste, via o Switch já existente) -> AJUSTE', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm({ orderTotal: 100, currentTotalPaid: 40, balanceDue: 60 })
+
+      await pickRadio(user, 'Método de pagamento', 'Pix')
+      await user.click(screen.getByRole('switch', { name: /ajuste negativo/i }))
+      await user.click(screen.getByLabelText(AMOUNT_LABEL))
+      await user.keyboard('1000')
+      await user.type(screen.getByLabelText(/observações/i), 'Estorno')
+      await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ payment_type: 'AJUSTE', amount: -10 }))
+    })
+
+    it('zero continua bloqueado', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm({ orderTotal: 100, currentTotalPaid: 0, balanceDue: 100 })
+
+      await pickRadio(user, 'Método de pagamento', 'Pix')
+      await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
+
+      expect(await screen.findByText('O valor não pode ser zero.')).toBeInTheDocument()
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('acima do saldo continua bloqueado', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm({ orderTotal: 100, currentTotalPaid: 0, balanceDue: 100 })
+
+      await pickRadio(user, 'Método de pagamento', 'Pix')
+      await user.click(screen.getByLabelText(AMOUNT_LABEL))
+      await user.keyboard('10001')
+      await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
+
+      expect(
+        await screen.findByText('O valor não pode ultrapassar o saldo devedor. Valor máximo permitido: R$ 100,00.'),
+      ).toBeInTheDocument()
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
   })
 
   it('AJUSTE negativo exige observação', async () => {
     const user = userEvent.setup()
     const { onSubmit } = renderForm({ currentTotalPaid: 100 })
 
-    await pickRadio(user, 'Tipo de pagamento', 'Ajuste')
     await pickRadio(user, 'Método de pagamento', 'Pix')
     await user.click(screen.getByRole('switch', { name: /ajuste negativo/i }))
     await user.click(screen.getByLabelText(AMOUNT_LABEL))
@@ -234,7 +276,6 @@ describe('RegisterPaymentForm', () => {
     const user = userEvent.setup()
     const { onSubmit } = renderForm({ currentTotalPaid: 100 })
 
-    await pickRadio(user, 'Tipo de pagamento', 'Ajuste')
     await pickRadio(user, 'Método de pagamento', 'Pix')
     await user.click(screen.getByRole('switch', { name: /ajuste negativo/i }))
     await user.click(screen.getByLabelText(AMOUNT_LABEL))
@@ -251,7 +292,6 @@ describe('RegisterPaymentForm', () => {
     const user = userEvent.setup()
     const { onSubmit } = renderForm({ currentTotalPaid: 10 })
 
-    await pickRadio(user, 'Tipo de pagamento', 'Ajuste')
     await pickRadio(user, 'Método de pagamento', 'Pix')
     await user.click(screen.getByRole('switch', { name: /ajuste negativo/i }))
     await user.click(screen.getByLabelText(AMOUNT_LABEL))
@@ -282,7 +322,6 @@ describe('RegisterPaymentForm', () => {
     const user = userEvent.setup()
     const { onSubmit } = renderForm()
 
-    await pickRadio(user, 'Tipo de pagamento', 'Final')
     await pickRadio(user, 'Método de pagamento', 'Cartão')
     const amountInput = screen.getByLabelText(AMOUNT_LABEL)
     await user.click(amountInput)
@@ -326,7 +365,6 @@ describe('RegisterPaymentForm', () => {
       const user = userEvent.setup()
       const { onSubmit } = renderForm(scenario)
 
-      await pickRadio(user, 'Tipo de pagamento', 'Final')
       await pickRadio(user, 'Método de pagamento', 'Pix')
       await user.click(screen.getByLabelText(AMOUNT_LABEL))
       await user.keyboard('5000')
@@ -339,7 +377,6 @@ describe('RegisterPaymentForm', () => {
       const user = userEvent.setup()
       const { onSubmit } = renderForm(scenario)
 
-      await pickRadio(user, 'Tipo de pagamento', 'Final')
       await pickRadio(user, 'Método de pagamento', 'Pix')
       await user.click(screen.getByLabelText(AMOUNT_LABEL))
       await user.keyboard('6000')
@@ -352,7 +389,6 @@ describe('RegisterPaymentForm', () => {
       const user = userEvent.setup()
       const { onSubmit } = renderForm(scenario)
 
-      await pickRadio(user, 'Tipo de pagamento', 'Final')
       await pickRadio(user, 'Método de pagamento', 'Pix')
       await user.click(screen.getByLabelText(AMOUNT_LABEL))
       await user.keyboard('6001')
@@ -368,7 +404,6 @@ describe('RegisterPaymentForm', () => {
       const user = userEvent.setup()
       const { onSubmit } = renderForm(scenario)
 
-      await pickRadio(user, 'Tipo de pagamento', 'Integral')
       await pickRadio(user, 'Método de pagamento', 'Cartão')
       await user.click(screen.getByLabelText(AMOUNT_LABEL))
       await user.keyboard('20000')
@@ -387,20 +422,19 @@ describe('RegisterPaymentForm', () => {
       // mesma forma como a prop chegaria após refetch no app real).
       const { onSubmit } = renderForm({ orderTotal: 100, currentTotalPaid: 60, balanceDue: 40 })
 
-      await pickRadio(user, 'Tipo de pagamento', 'Final')
       await pickRadio(user, 'Método de pagamento', 'Pix')
       await user.click(screen.getByLabelText(AMOUNT_LABEL))
       await user.keyboard('4000')
       await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
 
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ amount: 40 }))
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ amount: 40, payment_type: 'FINAL' }))
     })
 
     it('pedido já totalmente pago (saldo devedor zero): o formulário de registro fica desabilitado', () => {
       renderForm({ orderTotal: 100, currentTotalPaid: 100, balanceDue: 0 })
 
       expect(screen.getByText(/já está totalmente pago/i)).toBeInTheDocument()
-      expect(screen.queryByRole('radiogroup', { name: 'Tipo de pagamento' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('radiogroup', { name: 'Método de pagamento' })).not.toBeInTheDocument()
       expect(screen.queryByLabelText(AMOUNT_LABEL)).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /registrar pagamento/i })).not.toBeInTheDocument()
       expect(screen.getByRole('button', { name: /^fechar$/i })).toBeInTheDocument()

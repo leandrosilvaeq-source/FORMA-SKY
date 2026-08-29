@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { createOrder, listOrderSummaries, type CreateOrderInput } from '@/lib/api/orders'
+import {
+  createOrder,
+  createOrderWithPayment,
+  deleteOrder,
+  listOrderSummaries,
+  type CreateOrderInput,
+  type CreateOrderWithPaymentInput,
+} from '@/lib/api/orders'
 import { ApiError } from '@/lib/api/errors'
 import type { OrderSummary } from '@/types/domain'
 
@@ -9,6 +16,8 @@ interface UseOrdersResult {
   error: ApiError | null
   refetch: () => void
   create: (input: CreateOrderInput) => Promise<{ id: string }>
+  createWithPayment: (input: CreateOrderWithPaymentInput) => Promise<{ id: string; payment_id: string | null }>
+  remove: (id: string) => Promise<void>
 }
 
 function toApiError(err: unknown): ApiError {
@@ -62,5 +71,27 @@ export function useOrders(): UseOrdersResult {
     [refetch],
   )
 
-  return { orders, isLoading, error, refetch, create }
+  // "Novo Pedido" com Forma de pagamento (2026-08-29) — rota/RPC distinta
+  // (create_order_with_payment), nunca chamada por edição de pedido
+  // existente. Mesma razão de refetch() que create acima: a resposta não
+  // traz um OrderSummary completo (financeiro/aprovação vêm de várias
+  // tabelas via vw_order_summary).
+  const createWithPayment = useCallback(
+    async (input: CreateOrderWithPaymentInput) => {
+      const created = await createOrderWithPayment(input)
+      refetch()
+      return created
+    },
+    [refetch],
+  )
+
+  // Exclusão física (2026-08-29) — remove do estado local em vez de refazer
+  // a listagem inteira (delete_order não devolve nenhuma linha; a ausência
+  // do id já é toda a informação necessária).
+  const remove = useCallback(async (id: string) => {
+    await deleteOrder(id)
+    setOrders((current) => current.filter((order) => order.order_id !== id))
+  }, [])
+
+  return { orders, isLoading, error, refetch, create, createWithPayment, remove }
 }

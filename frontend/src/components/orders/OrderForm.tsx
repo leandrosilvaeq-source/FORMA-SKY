@@ -1,8 +1,21 @@
-import { Fragment, useState, type ComponentType, type FormEvent, type ReactNode } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ClipboardEvent,
+  type ComponentType,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react'
 import {
   BanknoteIcon,
+  CalendarClockIcon,
   CircleDashedIcon,
   CreditCardIcon,
+  HandCoinsIcon,
   HandIcon,
   MinusIcon,
   PackageIcon,
@@ -10,6 +23,7 @@ import {
   QrCodeIcon,
   Trash2Icon,
   TruckIcon,
+  WalletIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DialogFooter } from '@/components/ui/dialog'
@@ -18,9 +32,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { LeadSourcePicker } from '@/components/leadSources/LeadSourcePicker'
 import { cn } from '@/lib/utils'
+import {
+  MAX_CENTS,
+  appendDigit,
+  centsToAmount,
+  formatCentsToBRL,
+  parsePastedTextToCents,
+  rawValueToCents,
+  removeLastDigit,
+} from '@/lib/forms/currencyField'
 import { parseNumberField } from '@/lib/forms/numberField'
 import type { CreateOrderInput, OrderItemInput } from '@/lib/api/orders'
-import type { Company, Customer, LeadSource, PaymentMethod, Product } from '@/types/domain'
+import type { Company, Customer, LeadSource, PaymentCondition, PaymentMethod, Product } from '@/types/domain'
 
 type SaleType = 'B2C' | 'B2B'
 type DeliveryMethod = 'Em mãos' | 'Correios' | 'Transportadora'
@@ -72,6 +95,40 @@ const DELIVERY_METHOD_ICONS: Record<DeliveryMethod, IconComponent> = {
   Correios: PackageIcon,
   Transportadora: TruckIcon,
 }
+
+// "Forma de pagamento" (2026-08-29) — pedido especificamente para "Novo
+// Pedido" (mode === 'create'; nunca renderizada/enviada em mode === 'edit',
+// ver comentário na seção abaixo). Valores internos = orders.payment_condition
+// (migration 20260829142000_add_order_payment_condition_and_atomic_creation.sql,
+// ainda não aplicada). Mesmo idioma visual de PAYMENT_METHOD_ITEMS (ícone
+// fixo, size-8, cor --brand-primary independente da seleção).
+const PAYMENT_CONDITION_ITEMS: Array<{ label: string; value: PaymentCondition; Icon: IconComponent }> = [
+  { label: 'Adiantado', value: 'ADVANCE', Icon: WalletIcon },
+  { label: 'Sinal', value: 'DEPOSIT', Icon: HandCoinsIcon },
+  { label: 'Na entrega', value: 'ON_DELIVERY', Icon: CalendarClockIcon },
+]
+
+const DEPOSIT_INPUT_ID = 'order-deposit-amount'
+const DEPOSIT_ERROR_ID = 'order-deposit-amount-error'
+const DEPOSIT_MAX_CENTS_MESSAGE = `O valor do sinal não pode ultrapassar ${formatCentsToBRL(MAX_CENTS)}.`
+
+// Mesmo conjunto de teclas de passagem já aprovado em ProductPriceForm.tsx/
+// ProductForm.tsx — nunca reinventado.
+const DEPOSIT_PASSTHROUGH_KEYS = new Set([
+  'Tab',
+  'Shift',
+  'Control',
+  'Meta',
+  'Alt',
+  'Escape',
+  'Enter',
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'Home',
+  'End',
+])
 
 function formatCurrency(value: number): string {
   return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -190,6 +247,21 @@ export interface OrderFormInitialValues {
   items: OrderFormInitialItem[]
 }
 
+// Valores emitidos por onSubmit — sempre CreateOrderInput (cabeçalho +
+// itens), mais payment_condition/deposit_amount SOMENTE em mode === 'create'
+// (nunca incluídos em mode === 'edit', ver handleSubmit abaixo — a seção
+// "Forma de pagamento" nem é renderizada nesse modo). OrderEditForm.tsx
+// repassa este mesmo onSubmit para o backend de edição
+// (update_quote_order, via updateQuoteOrder()) sem nunca conhecer os dois
+// campos extras — sua própria assinatura de prop continua tipada só como
+// CreateOrderInput, compatível por contravariância de parâmetro (um
+// handler que só lê os campos de CreateOrderInput funciona normalmente
+// recebendo um objeto com campos extras opcionais).
+export interface OrderFormSubmitValues extends CreateOrderInput {
+  payment_condition?: PaymentCondition
+  deposit_amount?: number | null
+}
+
 interface OrderFormProps {
   mode?: 'create' | 'edit'
   // Só usados/mostrados quando mode === 'edit' — informação somente
@@ -210,7 +282,7 @@ interface OrderFormProps {
   products: Product[]
   isSubmitting: boolean
   submitError: string | null
-  onSubmit: (values: CreateOrderInput) => void
+  onSubmit: (values: OrderFormSubmitValues) => void
   onCancel: () => void
 }
 
@@ -243,6 +315,16 @@ export function OrderForm({
   )
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState(initialValues?.expectedDeliveryDate ?? '')
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(initialValues?.paymentMethod ?? null)
+  // Forma de pagamento (2026-08-29) — só existe em mode === 'create'
+  // (initialValues nunca a traz; edição nunca recria/altera o pagamento
+  // inicial). "Na entrega" pré-selecionada por padrão: é a opção que não
+  // cria nenhum pagamento automaticamente, a mais conservadora — nunca
+  // exige uma escolha ativa do usuário para poder salvar o pedido.
+  const [paymentCondition, setPaymentCondition] = useState<PaymentCondition>('ON_DELIVERY')
+  const [depositCents, setDepositCents] = useState(0)
+  const [hasEditedDeposit, setHasEditedDeposit] = useState(false)
+  const [depositError, setDepositError] = useState<string | null>(null)
+  const depositInputRef = useRef<HTMLInputElement>(null)
   const [notes, setNotes] = useState(initialValues?.notes ?? '')
   const [items, setItems] = useState<ItemRow[]>(() =>
     initialValues && initialValues.items.length > 0
@@ -350,8 +432,11 @@ export function OrderForm({
   let section2Number = 1
   const itemTypeSectionNumber = section2Number++
   const itemsSectionNumber = section2Number++
-  // Último número da seção 2 — nenhum incremento necessário depois deste.
-  const paymentMethodSectionNumber = section2Number
+  const paymentMethodSectionNumber = section2Number++
+  // Forma de pagamento: só em mode === 'create' (nunca renderizada em
+  // edição — regra técnica explícita, edição de pedido existente nunca
+  // recria o pagamento inicial). Último número da seção 2 quando presente.
+  const paymentConditionSectionNumber = mode === 'create' ? section2Number : null
 
   let section3Number = 1
   const deliverySectionNumber = section3Number++
@@ -433,6 +518,80 @@ export function OrderForm({
     })
   }
 
+  // Máscara R$ brasileira do "Valor do sinal" — mesmas funções puras de
+  // lib/forms/currencyField.ts já usadas por ProductPriceForm.tsx/
+  // ProductForm.tsx (appendDigit/removeLastDigit/centsToAmount/
+  // formatCentsToBRL/parsePastedTextToCents/rawValueToCents), nunca uma
+  // reimplementação própria. Cursor sempre reposicionado ao final após
+  // qualquer edição — mesmo motivo já documentado nos dois componentes
+  // irmãos (campo editado da direita para a esquerda, estilo maquininha).
+  useEffect(() => {
+    const el = depositInputRef.current
+    if (el) {
+      const end = el.value.length
+      el.setSelectionRange(end, end)
+    }
+  }, [depositCents])
+
+  function applyDepositCents(next: number) {
+    setDepositCents(next)
+    setHasEditedDeposit(true)
+    setDepositError(null)
+  }
+
+  function handleDepositKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (readOnly) return
+    const { key, currentTarget } = event
+    const isFullSelection =
+      currentTarget.value.length > 0 &&
+      currentTarget.selectionStart === 0 &&
+      currentTarget.selectionEnd === currentTarget.value.length
+
+    if (/^[0-9]$/.test(key)) {
+      event.preventDefault()
+      const base = isFullSelection ? 0 : depositCents
+      const next = appendDigit(base, key)
+      if (next === null) {
+        setDepositError(DEPOSIT_MAX_CENTS_MESSAGE)
+        return
+      }
+      applyDepositCents(next)
+      return
+    }
+
+    if (key === 'Backspace' || key === 'Delete') {
+      event.preventDefault()
+      applyDepositCents(isFullSelection ? 0 : removeLastDigit(depositCents))
+      return
+    }
+
+    if (DEPOSIT_PASSTHROUGH_KEYS.has(key) || event.ctrlKey || event.metaKey) return
+
+    event.preventDefault()
+  }
+
+  function handleDepositChange(event: ChangeEvent<HTMLInputElement>) {
+    if (readOnly) return
+    const next = rawValueToCents(event.target.value)
+    if (next > MAX_CENTS) {
+      setDepositError(DEPOSIT_MAX_CENTS_MESSAGE)
+      return
+    }
+    applyDepositCents(next)
+  }
+
+  function handleDepositPaste(event: ClipboardEvent<HTMLInputElement>) {
+    if (readOnly) return
+    event.preventDefault()
+    const text = event.clipboardData.getData('text')
+    const parsed = parsePastedTextToCents(text)
+    if (parsed === null) {
+      setDepositError(DEPOSIT_MAX_CENTS_MESSAGE)
+      return
+    }
+    applyDepositCents(parsed)
+  }
+
   function validateItems(): { items: OrderItemInput[]; errors: Record<string, string> } {
     const errors: Record<string, string> = {}
     const validated: OrderItemInput[] = []
@@ -501,13 +660,35 @@ export function OrderForm({
 
     const { items: validatedItems, errors: newItemErrors } = validateItems()
 
-    if (Object.keys(newHeaderErrors).length > 0 || Object.keys(newItemErrors).length > 0) {
+    // Forma de pagamento (só mode === 'create'): Sinal exige valor > 0 e <
+    // total do pedido — mesma fórmula de orderTotal usada no preview do
+    // rodapé (itemsTotal + shippingPreview), que é exatamente
+    // total_receivable no banco (total_value + shipping_cost). Adiantado/Na
+    // entrega não têm campo próprio para validar.
+    let newDepositError: string | null = null
+    if (mode === 'create' && paymentCondition === 'DEPOSIT') {
+      if (!hasEditedDeposit || depositCents <= 0) {
+        newDepositError = 'Informe o valor do sinal.'
+      } else if (depositCents > MAX_CENTS) {
+        newDepositError = DEPOSIT_MAX_CENTS_MESSAGE
+      } else if (centsToAmount(depositCents) >= orderTotal) {
+        newDepositError = 'O valor do sinal deve ser menor que o total do pedido.'
+      }
+    }
+
+    if (
+      Object.keys(newHeaderErrors).length > 0 ||
+      Object.keys(newItemErrors).length > 0 ||
+      newDepositError !== null
+    ) {
       setHeaderErrors(newHeaderErrors)
       setItemErrors(newItemErrors)
+      setDepositError(newDepositError)
       return
     }
     setHeaderErrors({})
     setItemErrors({})
+    setDepositError(null)
 
     onSubmit({
       customer_id: customerId as string,
@@ -542,6 +723,19 @@ export function OrderForm({
       discount_value: null,
       notes: notes.trim() ? notes.trim() : null,
       items: validatedItems,
+      // payment_condition/deposit_amount SÓ em mode === 'create' — em
+      // mode === 'edit' esta seção nem é renderizada (paymentCondition
+      // nunca é tocado pelo usuário), então nunca incluídos no objeto
+      // emitido: garantia estrutural de que editar um pedido nunca recria
+      // o pagamento inicial, sem depender de nenhuma checagem no backend
+      // para isso (a rota de edição — PUT /orders/:id ou /:id/full — nem
+      // aceita esses campos).
+      ...(mode === 'create'
+        ? {
+            payment_condition: paymentCondition,
+            ...(paymentCondition === 'DEPOSIT' ? { deposit_amount: centsToAmount(depositCents) } : {}),
+          }
+        : {}),
     })
   }
 
@@ -847,6 +1041,61 @@ export function OrderForm({
             ))}
           </div>
         </SectionRow>
+
+        {/* Forma de pagamento (2026-08-29) — só em "Novo Pedido"
+            (mode === 'create'); nunca aparece em "Alterar pedido"
+            (OrderEditForm usa mode="edit"), por exigência explícita: edição
+            de pedido existente nunca recria o pagamento inicial. */}
+        {mode === 'create' && (
+          <SectionRow number={paymentConditionSectionNumber as number} label="Forma de pagamento">
+            <div className="flex flex-col gap-2">
+              <div role="radiogroup" aria-label="Forma de pagamento" className="flex flex-wrap gap-2">
+                {PAYMENT_CONDITION_ITEMS.map((item) => (
+                  <button
+                    key={item.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={paymentCondition === item.value}
+                    onClick={() => setPaymentCondition(item.value)}
+                    className={cn(
+                      'focus-visible:ring-brand-accent inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2',
+                      paymentCondition === item.value
+                        ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
+                        : 'border-input text-muted-foreground hover:bg-muted hover:text-foreground',
+                    )}
+                  >
+                    <item.Icon className="text-brand-primary size-8 shrink-0" />
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              {paymentCondition === 'DEPOSIT' && (
+                <div className="flex flex-col gap-1">
+                  <label htmlFor={DEPOSIT_INPUT_ID} className="text-sm font-medium">
+                    Valor do sinal
+                  </label>
+                  <Input
+                    id={DEPOSIT_INPUT_ID}
+                    ref={depositInputRef}
+                    inputMode="numeric"
+                    value={formatCentsToBRL(depositCents)}
+                    onChange={handleDepositChange}
+                    onKeyDown={handleDepositKeyDown}
+                    onPaste={handleDepositPaste}
+                    aria-invalid={depositError ? true : undefined}
+                    aria-describedby={depositError ? DEPOSIT_ERROR_ID : undefined}
+                    className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-40"
+                  />
+                  {depositError && (
+                    <p id={DEPOSIT_ERROR_ID} className="text-destructive text-xs">
+                      {depositError}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </SectionRow>
+        )}
       </FormSection>
 
       <FormSection title="Entrega">

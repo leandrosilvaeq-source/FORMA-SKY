@@ -25,9 +25,14 @@ const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   CANCELLED: 'Cancelado',
 }
 
+// Unificado (2026-08-29): "Aguardando pagamento"/"Sinal recebido" viram
+// "Ag. Pagamento" na apresentação — mesmo texto, informação atual (não é
+// histórico), mesma decisão de OrderManagementPanel.tsx/
+// OrderPaymentStatusControl.tsx. Valores internos de PaymentStatus nunca
+// mudam.
 const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = {
-  WAITING_PAYMENT: 'Aguardando pagamento',
-  DEPOSIT_RECEIVED: 'Sinal recebido',
+  WAITING_PAYMENT: 'Ag. Pagamento',
+  DEPOSIT_RECEIVED: 'Ag. Pagamento',
   PAID: 'Pago',
 }
 

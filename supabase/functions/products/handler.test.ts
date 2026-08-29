@@ -218,6 +218,31 @@ Deno.test("handleRequest devolve 404 para GET /products (nenhuma rota de listage
   assertEquals(res.status, 404);
 });
 
+// ---------------------------------------------------------------------------
+// PATCH /products/:id -> update_product (NOVA, 2026-08-29 — edição
+// controlada de Produto, whitelist de campos, nunca default_price).
+// ---------------------------------------------------------------------------
+
+Deno.test("handleRequest rejeita PATCH /products/:id sem Authorization com 401 (rota resolvida, sem tocar rede)", async () => {
+  const res = await handleRequest(makeRequest("PATCH", `/${VALID_UUID_1}`, { name: "Novo nome" }));
+  assertEquals(res.status, 401);
+});
+
+Deno.test("handleRequest PATCH /products/:id não é confundido com /:id/price nem /:id/composition nem /:id/filaments (rotas distintas, todas exigem auth 401)", async () => {
+  const resPlain = await handleRequest(makeRequest("PATCH", `/${VALID_UUID_1}`, { name: "x" }));
+  const resPrice = await handleRequest(makeRequest("PATCH", `/${VALID_UUID_1}/price`, { new_price: 10 }));
+  const resComposition = await handleRequest(
+    makeRequest("PATCH", `/${VALID_UUID_1}/composition`, { accessories: [], packaging: [] }),
+  );
+  const resFilaments = await handleRequest(makeRequest("PATCH", `/${VALID_UUID_1}/filaments`, { filaments: [] }));
+  // Todas as 4 rotas existem e exigem autenticação (401) — nenhuma cai em
+  // 404 (o que indicaria roteamento ambíguo/quebrado entre elas).
+  assertEquals(resPlain.status, 401);
+  assertEquals(resPrice.status, 401);
+  assertEquals(resComposition.status, 401);
+  assertEquals(resFilaments.status, 401);
+});
+
 Deno.test("respostas de erro não expõem detalhes internos (mensagem genérica e segura)", async () => {
   const res = await handleRequest(makeRequest("PATCH", `/${VALID_UUID_1}/filaments`, { filaments: [] }));
   const envelope = (await res.json()) as { error?: { type?: string; message?: string } };

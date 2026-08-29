@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Trash2Icon } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
@@ -6,7 +7,7 @@ import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { CustomerForm, type CustomerFormValues } from '@/components/customers/CustomerForm'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -107,7 +108,7 @@ function getSortValue(row: CustomerRow, column: SortColumn): string | boolean | 
 }
 
 export function CustomersPage() {
-  const { customers, isLoading, error, refetch, create, update } = useCustomers()
+  const { customers, isLoading, error, refetch, create, update, remove } = useCustomers()
   const { companies } = useCompanies()
   const { leadSources } = useLeadSources()
 
@@ -118,6 +119,18 @@ export function CustomersPage() {
   const [pendingToggleId, setPendingToggleId] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [sort, setSort] = useState<SortState<SortColumn> | null>(null)
+
+  // Exclusão física protegida (2026-08-29) — mesmo padrão de InventoryPage.tsx
+  // (Acessórios/Embalagens): deleteError fica dentro do próprio diálogo de
+  // confirmação (nunca vira toast) porque delete_customer devolve uma
+  // mensagem de negócio (409, "cliente vinculado a pedido/empresa") que o
+  // usuário precisa ver ali mesmo, com o diálogo continuando aberto para
+  // decidir o próximo passo. O cliente só sai da lista local depois do
+  // await resolver com sucesso.
+  const [deletingCustomer, setDeletingCustomer] = useState<Customer | null>(null)
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   // Nomes de empresa/origem resolvidos a partir dos dados já carregados por
   // useCompanies/useLeadSources — nenhuma consulta nova, nunca exibe UUID.
@@ -219,6 +232,33 @@ export function CustomersPage() {
       toast.error(toErrorMessage(err))
     } finally {
       setPendingToggleId(null)
+    }
+  }
+
+  function openDeleteDialog(customer: Customer) {
+    setDeletingCustomer(customer)
+    setDeleteError(null)
+    setIsDeleteDialogOpen(true)
+  }
+
+  // delete_customer (Edge Function -> RPC) já bloqueia com 409 quando o
+  // cliente tem pedido (CUSTOMER_HAS_ORDERS:) ou empresa (CUSTOMER_HAS_COMPANY:)
+  // vinculados, com uma mensagem que já orienta desativar em vez de excluir
+  // — exibida aqui tal qual, sem reescrever. Em bloqueio/erro, o cliente
+  // permanece exatamente como estava (nenhum vínculo é removido, nenhuma
+  // cascata) e o diálogo continua aberto e funcional.
+  async function handleConfirmDelete() {
+    if (!deletingCustomer) return
+    setIsDeleting(true)
+    setDeleteError(null)
+    try {
+      await remove(deletingCustomer.id)
+      toast.success('Cliente excluído.')
+      setIsDeleteDialogOpen(false)
+    } catch (err) {
+      setDeleteError(toErrorMessage(err))
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -390,14 +430,30 @@ export function CustomersPage() {
                       />
                     </TableCell>
                     <TableCell>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => openEditDialog(customer)}
-                        className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-                      >
-                        Editar
-                      </Button>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openEditDialog(customer)}
+                          className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                        >
+                          Editar
+                        </Button>
+                        {/* Ícone de lixeira (não texto): variant="destructive"
+                            já é intencionalmente sutil (bg-destructive/10),
+                            mesmo padrão de InventoryPage.tsx. aria-label e
+                            title (tooltip nativo) carregam o nome completo do
+                            cliente — o botão em si não tem texto visível. */}
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => openDeleteDialog(customer)}
+                          aria-label={`Excluir cliente ${customer.name}`}
+                          title={`Excluir cliente ${customer.name}`}
+                        >
+                          <Trash2Icon className="size-4" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -430,6 +486,37 @@ export function CustomersPage() {
             onSubmit={(values) => void handleSubmit(values)}
             onCancel={() => setIsDialogOpen(false)}
           />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Excluir cliente</DialogTitle>
+            <DialogDescription>
+              {deletingCustomer &&
+                `Tem certeza que deseja excluir "${deletingCustomer.name}"? Esta ação é permanente e não pode ser desfeita.`}
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && (
+            <p role="alert" className="text-destructive text-sm">
+              {deleteError}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsDeleteDialogOpen(false)}
+              disabled={isDeleting}
+              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+            >
+              Cancelar
+            </Button>
+            <Button type="button" variant="destructive" onClick={() => void handleConfirmDelete()} disabled={isDeleting}>
+              {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </AppLayout>

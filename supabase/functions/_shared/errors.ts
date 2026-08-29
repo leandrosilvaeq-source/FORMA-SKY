@@ -279,6 +279,52 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
     "FILAMENT_TYPE_INACTIVE_MATCH:",
     (message) => new BusinessRuleError(message.replace(/^FILAMENT_TYPE_INACTIVE_MATCH:\s*/, "")),
   ],
+  // Ajustes de Produtos/Clientes/Pedidos (2026-08-29) — migrations
+  // 20260829140000/141000/142000/143000.
+  //
+  // update_product (20260829143000): mesmas invariantes de defesa em
+  // profundidade de update_accessory/update_packaging/update_filament_type —
+  // erros de entrada inválida (400), não de conflito de estado.
+  ["update_product: chave(s) não suportada(s)", (message) => new ValidationError(message)],
+  ["update_product: p_patch vazio", (message) => new ValidationError(message)],
+  ["products.name não pode ser vazio", (message) => new ValidationError(message)],
+  // delete_customer (20260829140000): bloqueio de exclusão física quando há
+  // pedido ou empresa vinculados — orienta desativação, nunca remove o
+  // vínculo nem executa cascata.
+  [
+    "CUSTOMER_HAS_ORDERS:",
+    (message) => new BusinessRuleError(message.replace(/^CUSTOMER_HAS_ORDERS:\s*/, "")),
+  ],
+  [
+    "CUSTOMER_HAS_COMPANY:",
+    (message) => new BusinessRuleError(message.replace(/^CUSTOMER_HAS_COMPANY:\s*/, "")),
+  ],
+  // delete_order (20260829141000): bloqueio de exclusão física por status,
+  // pagamento, aprovação ou versão de item Personalizado vinculados.
+  [
+    "ORDER_DELETE_INVALID_STATUS:",
+    (message) => new BusinessRuleError(message.replace(/^ORDER_DELETE_INVALID_STATUS:\s*/, "")),
+  ],
+  [
+    "ORDER_DELETE_HAS_PAYMENTS:",
+    (message) => new BusinessRuleError(message.replace(/^ORDER_DELETE_HAS_PAYMENTS:\s*/, "")),
+  ],
+  [
+    "ORDER_DELETE_HAS_APPROVALS:",
+    (message) => new BusinessRuleError(message.replace(/^ORDER_DELETE_HAS_APPROVALS:\s*/, "")),
+  ],
+  [
+    "ORDER_DELETE_HAS_VERSIONS:",
+    (message) => new BusinessRuleError(message.replace(/^ORDER_DELETE_HAS_VERSIONS:\s*/, "")),
+  ],
+  // create_order_with_payment (20260829142000): erros de entrada inválida
+  // (a Edge Function `orders` já valida tudo isso antes de chamar a RPC —
+  // só aparecem se a RPC for chamada diretamente), mapeadas para 400 como
+  // as demais mensagens "deve ser"/"inválido" já catalogadas acima.
+  ["create_order_with_payment: p_payment_condition inválido", (message) => new ValidationError(message)],
+  ["create_order_with_payment: p_payment_method é obrigatório", (message) => new ValidationError(message)],
+  ["create_order_with_payment: p_deposit_amount deve ser maior que zero", (message) => new ValidationError(message)],
+  ["create_order_with_payment: p_deposit_amount (", (message) => new ValidationError(message)],
 ];
 
 export function mapPgError(err: PgErrorLike): AppError {

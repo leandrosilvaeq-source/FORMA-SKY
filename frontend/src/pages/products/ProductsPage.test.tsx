@@ -12,6 +12,7 @@ const {
   useProductCompositionMock,
   useFilamentTypesMock,
   useProductFilamentsMock,
+  useProductPriceHistoryMock,
   toastMock,
   useAuthMock,
 } = vi.hoisted(() => ({
@@ -21,6 +22,7 @@ const {
   useProductCompositionMock: vi.fn(),
   useFilamentTypesMock: vi.fn(),
   useProductFilamentsMock: vi.fn(),
+  useProductPriceHistoryMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
   useAuthMock: vi.fn(),
 }))
@@ -31,6 +33,7 @@ vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
 vi.mock('@/hooks/useProductComposition', () => ({ useProductComposition: useProductCompositionMock }))
 vi.mock('@/hooks/useFilamentTypes', () => ({ useFilamentTypes: useFilamentTypesMock }))
 vi.mock('@/hooks/useProductFilaments', () => ({ useProductFilaments: useProductFilamentsMock }))
+vi.mock('@/hooks/useProductPriceHistory', () => ({ useProductPriceHistory: useProductPriceHistoryMock }))
 vi.mock('sonner', () => ({ toast: toastMock }))
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
 
@@ -167,6 +170,7 @@ describe('ProductsPage', () => {
   let createMock: ReturnType<typeof vi.fn>
   let changePriceMock: ReturnType<typeof vi.fn>
   let updateMock: ReturnType<typeof vi.fn>
+  let updateDetailsMock: ReturnType<typeof vi.fn>
   let refetchMock: ReturnType<typeof vi.fn>
   let saveCompositionMock: ReturnType<typeof vi.fn>
   let saveFilamentsMock: ReturnType<typeof vi.fn>
@@ -175,6 +179,7 @@ describe('ProductsPage', () => {
     createMock = vi.fn().mockResolvedValue(undefined)
     changePriceMock = vi.fn().mockResolvedValue(undefined)
     updateMock = vi.fn().mockResolvedValue({ ...product, is_active: false })
+    updateDetailsMock = vi.fn().mockResolvedValue(product)
     refetchMock = vi.fn()
     saveCompositionMock = vi.fn().mockResolvedValue(undefined)
     saveFilamentsMock = vi.fn().mockResolvedValue(undefined)
@@ -188,6 +193,14 @@ describe('ProductsPage', () => {
       create: createMock,
       changePrice: changePriceMock,
       update: updateMock,
+      updateDetails: updateDetailsMock,
+    })
+    useProductPriceHistoryMock.mockReturnValue({
+      status: 'success',
+      history: [],
+      isLoading: false,
+      error: null,
+      retry: vi.fn(),
     })
     useAccessoriesMock.mockReturnValue({ accessories: [accessory], isLoading: false, error: null, refetch: vi.fn() })
     usePackagingMock.mockReturnValue({ packaging: [packagingItem], isLoading: false, error: null, refetch: vi.fn() })
@@ -330,13 +343,13 @@ describe('ProductsPage', () => {
       expect(nameLink).toHaveAttribute('href', '/produtos/1')
     })
 
-    it('preserva Switch, "Alterar preço" e "Acessórios e Embalagem" na mesma linha do link', () => {
+    it('preserva Switch, "Editar produto" e "Acessórios e Embalagem" na mesma linha do link', () => {
       renderPage()
 
       const row = screen.getByRole('row', { name: /chaveiro/i })
       expect(within(row).getByRole('link', { name: 'Chaveiro' })).toBeInTheDocument()
       expect(within(row).getByRole('switch', { name: 'Desativar Chaveiro' })).toBeInTheDocument()
-      expect(within(row).getByRole('button', { name: /alterar preço/i })).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: /^editar produto$/i })).toBeInTheDocument()
       expect(within(row).getByRole('button', { name: /^acessórios e embalagem$/i })).toBeInTheDocument()
     })
 
@@ -435,12 +448,12 @@ describe('ProductsPage', () => {
       expect(toggle).not.toHaveAttribute('aria-disabled', 'true')
     })
 
-    it('preserva as ações "Alterar preço" e "Acessórios e Embalagem" na mesma linha do Switch', () => {
+    it('preserva as ações "Editar produto" e "Acessórios e Embalagem" na mesma linha do Switch', () => {
       renderPage()
 
       const row = screen.getByRole('row', { name: /chaveiro/i })
       expect(within(row).getByRole('switch', { name: 'Desativar Chaveiro' })).toBeInTheDocument()
-      expect(within(row).getByRole('button', { name: /alterar preço/i })).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: /^editar produto$/i })).toBeInTheDocument()
       expect(within(row).getByRole('button', { name: /^acessórios e embalagem$/i })).toBeInTheDocument()
     })
   })
@@ -534,7 +547,7 @@ describe('ProductsPage', () => {
     // preenchem da direita para a esquerda, os dois últimos são centavos —
     // "1500" -> R$ 15,00 (ver ProductPriceForm.test.tsx para a cobertura
     // completa do comportamento de digitação/Backspace/colagem).
-    await user.click(screen.getByRole('button', { name: /alterar preço/i }))
+    await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
     await user.type(screen.getByLabelText(/novo preço/i), '1500')
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
@@ -546,7 +559,7 @@ describe('ProductsPage', () => {
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(screen.getByRole('button', { name: /alterar preço/i }))
+    await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
 
     expect(screen.getByText('"Chaveiro"')).toBeInTheDocument()
 
@@ -556,6 +569,127 @@ describe('ProductsPage', () => {
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
     await waitFor(() => expect(changePriceMock).toHaveBeenCalledWith('1', { new_price: 15.5, reason: null }))
+  })
+
+  describe('Editar produto — seção "Dados do produto" (2026-08-29)', () => {
+    it('abre pré-preenchido com os dados atuais do produto', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+
+      expect(screen.getByLabelText('Nome')).toHaveValue('Chaveiro')
+      expect(screen.getByRole('radio', { name: 'Decoração' })).toHaveAttribute('aria-checked', 'true')
+    })
+
+    it('edita os campos suportados e chama updateDetails, nunca alterando o preço por esta via', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+      await user.clear(screen.getByLabelText('Nome'))
+      await user.type(screen.getByLabelText('Nome'), 'Chaveiro Grande')
+      await user.click(screen.getByRole('button', { name: /^salvar dados do produto$/i }))
+
+      await waitFor(() =>
+        expect(updateDetailsMock).toHaveBeenCalledWith(
+          '1',
+          expect.objectContaining({ name: 'Chaveiro Grande' }),
+        ),
+      )
+      const payload = updateDetailsMock.mock.calls[0][1]
+      expect('default_price' in payload).toBe(false)
+      expect(toastMock.success).toHaveBeenCalledWith('Dados do produto atualizados.')
+    })
+  })
+
+  describe('Editar produto — seção "Histórico de preços" (2026-08-29)', () => {
+    const historyEntry = {
+      id: 'h1',
+      product_id: '1',
+      price: 10,
+      effective_from: '2026-08-20T12:00:00.000Z',
+      effective_to: null,
+      reason: 'Reajuste',
+      created_by: 'u1',
+      created_at: '2026-08-20T12:00:00.000Z',
+    }
+
+    it('exibe o histórico, mais recente primeiro (ordem já vem do hook)', async () => {
+      useProductPriceHistoryMock.mockReturnValue({
+        status: 'success',
+        history: [historyEntry, { ...historyEntry, id: 'h0', price: 8, effective_to: historyEntry.effective_from }],
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+      })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+
+      const rows = screen.getAllByRole('row').filter((row) => within(row).queryAllByRole('cell').length > 0)
+      // A primeira linha de dados do histórico é a mais recente (vigente).
+      expect(within(rows[0]).getByText('Vigente')).toBeInTheDocument()
+      expect(within(rows[1]).getByText('Anterior')).toBeInTheDocument()
+    })
+
+    it('estado vazio: nenhum histórico registrado', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+
+      expect(screen.getByText('Nenhum histórico de preço registrado.')).toBeInTheDocument()
+    })
+
+    it('estado de carregamento', async () => {
+      useProductPriceHistoryMock.mockReturnValue({
+        status: 'loading',
+        history: [],
+        isLoading: true,
+        error: null,
+        retry: vi.fn(),
+      })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+
+      expect(screen.queryByText('Nenhum histórico de preço registrado.')).not.toBeInTheDocument()
+    })
+
+    it('estado de erro mostra a mensagem real e permite tentar novamente', async () => {
+      const retryMock = vi.fn()
+      useProductPriceHistoryMock.mockReturnValue({
+        status: 'error',
+        history: [],
+        error: new ApiError('database', 500, 'Falha ao carregar histórico.'),
+        retry: retryMock,
+      })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+
+      expect(screen.getByText('Falha ao carregar histórico.')).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: /tentar novamente/i }))
+      expect(retryMock).toHaveBeenCalled()
+    })
+  })
+
+  it('regressão: abrir "Editar produto" e salvar não afeta o diálogo/estado de Composição ou a Ficha Técnica', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+    await user.click(screen.getByRole('button', { name: /^salvar dados do produto$/i }))
+
+    await waitFor(() => expect(updateDetailsMock).toHaveBeenCalled())
+    expect(saveCompositionMock).not.toHaveBeenCalled()
+    expect(saveFilamentsMock).not.toHaveBeenCalled()
+    // O link para a Ficha Técnica continua intacto (mesmo href de sempre).
+    expect(screen.getByRole('link', { name: 'Chaveiro' })).toHaveAttribute('href', '/produtos/1')
   })
 
   it('opens the composition dialog pré-preenchido and saves the replaced composition', async () => {

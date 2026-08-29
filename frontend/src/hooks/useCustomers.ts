@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   createCustomer,
+  deleteCustomer,
   listCustomers,
   updateCustomer,
   type CreateCustomerInput,
@@ -16,6 +17,7 @@ interface UseCustomersResult {
   refetch: () => void
   create: (input: CreateCustomerInput) => Promise<Customer>
   update: (id: string, input: UpdateCustomerInput) => Promise<Customer>
+  remove: (id: string) => Promise<void>
 }
 
 function toApiError(err: unknown): ApiError {
@@ -73,5 +75,13 @@ export function useCustomers(): UseCustomersResult {
     return updated
   }, [])
 
-  return { customers, isLoading, error, refetch, create, update }
+  // Exclusão física (2026-08-29) — remove do estado local em vez de refazer
+  // a listagem inteira (delete_customer não devolve nenhuma linha; a
+  // ausência do id já é toda a informação necessária).
+  const remove = useCallback(async (id: string) => {
+    await deleteCustomer(id)
+    setCustomers((current) => current.filter((customer) => customer.id !== id))
+  }, [])
+
+  return { customers, isLoading, error, refetch, create, update, remove }
 }

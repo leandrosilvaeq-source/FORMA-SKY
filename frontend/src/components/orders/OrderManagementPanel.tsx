@@ -25,9 +25,26 @@ const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   CANCELLED: 'Cancelado',
 }
 
-const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = {
+// Rótulos DISTINTOS — usados só no histórico de transições (linha
+// "de -> para"), nunca no campo "Situação financeira" atual. Preservar essa
+// distinção aqui é exigência explícita (2026-08-29): "pagamentos parciais
+// continuam distinguíveis no histórico" — colapsar os dois em "Ag.
+// Pagamento" faria uma transição real (WAITING_PAYMENT -> DEPOSIT_RECEIVED)
+// aparecer como "Ag. Pagamento -> Ag. Pagamento" (nenhuma mudança visível),
+// perdendo informação real do histórico.
+const PAYMENT_STATUS_HISTORY_LABELS: Record<PaymentStatus, string> = {
   WAITING_PAYMENT: 'Aguardando pagamento',
   DEPOSIT_RECEIVED: 'Sinal recebido',
+  PAID: 'Pago',
+}
+
+// Rótulo UNIFICADO (2026-08-29) — usado para o status financeiro ATUAL
+// (campo "Situação financeira" abaixo), nunca no histórico acima. Os
+// valores internos de PaymentStatus (WAITING_PAYMENT/DEPOSIT_RECEIVED/PAID)
+// nunca mudam — só a apresentação.
+const PAYMENT_STATUS_DISPLAY_LABELS: Record<PaymentStatus, string> = {
+  WAITING_PAYMENT: 'Ag. Pagamento',
+  DEPOSIT_RECEIVED: 'Ag. Pagamento',
   PAID: 'Pago',
 }
 
@@ -105,8 +122,8 @@ function buildHistoryRows(
       changedAt: entry.changed_at,
       kind: 'Financeiro',
       description: entry.from_status
-        ? `${PAYMENT_STATUS_LABELS[entry.from_status]} → ${PAYMENT_STATUS_LABELS[entry.to_status]}`
-        : PAYMENT_STATUS_LABELS[entry.to_status],
+        ? `${PAYMENT_STATUS_HISTORY_LABELS[entry.from_status]} → ${PAYMENT_STATUS_HISTORY_LABELS[entry.to_status]}`
+        : PAYMENT_STATUS_HISTORY_LABELS[entry.to_status],
       amountText: null,
     })
   }
@@ -229,7 +246,7 @@ export function OrderManagementPanel({ orderId, clientLabel, onClose, onChanged 
         <CardContent className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <Field label="Cliente/Empresa" value={clientLabel ?? '—'} />
           <Field label="Status" value={ORDER_STATUS_LABELS[summary.order_status]} />
-          <Field label="Situação financeira" value={PAYMENT_STATUS_LABELS[summary.payment_status]} />
+          <Field label="Situação financeira" value={PAYMENT_STATUS_DISPLAY_LABELS[summary.payment_status]} />
           <Field label="Total do pedido" value={formatCurrency(summary.total_receivable)} />
           <Field label="Total pago" value={formatCurrency(summary.total_paid)} />
           <Field label="Saldo devedor" value={formatCurrency(summary.balance_due)} />

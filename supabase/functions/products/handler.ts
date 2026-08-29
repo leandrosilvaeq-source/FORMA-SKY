@@ -11,15 +11,26 @@
 //
 // Rotas:
 //   POST   /products                   -> RPC create_product
+//   PATCH  /products/:id               -> RPC update_product (NOVA — 2026-08-29)
 //   PATCH  /products/:id/price         -> RPC update_product_price
 //   PATCH  /products/:id/composition   -> RPC set_product_composition
-//   PATCH  /products/:id/filaments     -> RPC set_product_filaments (NOVA — Incremento 6A)
+//   PATCH  /products/:id/filaments     -> RPC set_product_filaments (Incremento 6A)
 //
-// As quatro RPCs são security definer com EXECUTE concedido só a
+// As cinco RPCs são security definer com EXECUTE concedido só a
 // service_role (supabase/migrations/20260814030351_create_order_business_functions.sql,
 // 20260816150500_create_product_composition_function.sql,
-// 20260827113000_create_product_filaments_table.sql) — só alcançáveis a
-// partir desta Edge Function, nunca diretamente do frontend.
+// 20260827113000_create_product_filaments_table.sql,
+// 20260829143000_add_product_edit_function.sql) — só alcançáveis a partir
+// desta Edge Function, nunca diretamente do frontend.
+//
+// PATCH /products/:id (NOVA, 2026-08-29): substitui o antigo botão "Alterar
+// preço" por "Editar produto" no frontend — edita campos descritivos/de
+// produção (whitelist de update_product, nunca default_price). Rota própria,
+// deliberadamente distinta de .../price: o preço continua exigindo sua
+// própria chamada a update_product_price (histórico em
+// product_price_history) — "Editar produto" no frontend pode disparar as
+// duas chamadas quando o preço muda, mas cada uma continua atômica por si,
+// nunca uma transação conjunta.
 //
 // composition/filaments usam PATCH, não PUT: _shared/cors.ts só libera
 // "GET, POST, PUT, PATCH, DELETE, OPTIONS" em Access-Control-Allow-Methods
@@ -88,6 +99,10 @@ export async function handleRequest(req: Request): Promise<Response> {
 
     if (req.method === "POST" && route.length === 0) {
       return await handleCreateProduct(req);
+    }
+
+    if (req.method === "PATCH" && route.length === 1) {
+      return await handleUpdateProduct(req, route[0]);
     }
 
     if (req.method === "PATCH" && route.length === 2 && route[1] === "price") {
@@ -180,6 +195,92 @@ async function handleCreateProduct(req: Request): Promise<Response> {
   if (error) throw mapPgError(error);
 
   return jsonResponse(req, { id: data }, 201);
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /products/:id -> update_product(p_product_id, p_patch, p_changed_by)
+//   -- NOVA (2026-08-29)
+//
+// Whitelist explícita, espelhando exatamente a whitelist da RPC
+// (20260829143000_add_product_edit_function.sql): name, category,
+// description, default_print_time_seconds, default_weight_grams,
+// default_file_id, allows_personalization. Nunca default_price (só
+// update_product_price), is_active (grant direto já existente) nem
+// product_type/units_per_plate (fora de escopo). Chave fora da whitelist é
+// REJEITADA aqui (400) — a RPC também rejeita, mas rejeitar já na Edge
+// Function devolve uma mensagem mais cedo, sem round-trip ao banco.
+// ---------------------------------------------------------------------------
+const PRODUCT_PATCH_KEYS = [
+  "name",
+  "category",
+  "description",
+  "default_print_time_seconds",
+  "default_weight_grams",
+  "default_file_id",
+  "allows_personalization",
+] as const;
+
+async function handleUpdateProduct(req: Request, productId: string): Promise<Response> {
+  const operator = await resolveOperator(req);
+
+  if (!isUuid(productId)) {
+    throw new ValidationError("Identificador de produto inválido na rota.");
+  }
+
+  const rawBody = await req.text();
+  rejectIdentityFields(rawBody);
+  const body = parseJsonBody(rawBody);
+
+  const unknownKeys = Object.keys(body).filter(
+    (key) => !(PRODUCT_PATCH_KEYS as readonly string[]).includes(key),
+  );
+  if (unknownKeys.length > 0) {
+    throw new ValidationError(
+      `Campo(s) não suportado(s) no corpo da requisição: ${unknownKeys.join(", ")}.`,
+    );
+  }
+  if (Object.keys(body).length === 0) {
+    throw new ValidationError("Corpo da requisição vazio — informe ao menos um campo reconhecido.");
+  }
+
+  const patch: Record<string, unknown> = {};
+  if ("name" in body) patch.name = requireString(body.name, "name");
+  if ("category" in body) patch.category = optionalString(body.category, "category");
+  if ("description" in body) patch.description = optionalString(body.description, "description");
+  if ("default_print_time_seconds" in body) {
+    patch.default_print_time_seconds = optionalInteger(
+      body.default_print_time_seconds,
+      "default_print_time_seconds",
+      { min: 0 },
+    );
+  }
+  if ("default_weight_grams" in body) {
+    patch.default_weight_grams = optionalNumber(
+      body.default_weight_grams,
+      "default_weight_grams",
+      { min: 0 },
+    );
+  }
+  if ("default_file_id" in body) {
+    patch.default_file_id = optionalUuid(body.default_file_id, "default_file_id");
+  }
+  if ("allows_personalization" in body) {
+    patch.allows_personalization = optionalBoolean(
+      body.allows_personalization,
+      "allows_personalization",
+    );
+  }
+
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("update_product", {
+    p_product_id: productId,
+    p_patch: patch,
+    p_changed_by: operator.userId,
+  });
+
+  if (error) throw mapPgError(error);
+
+  return jsonResponse(req, data, 200);
 }
 
 // ---------------------------------------------------------------------------

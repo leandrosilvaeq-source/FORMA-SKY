@@ -10,7 +10,15 @@
 import { supabase } from '@/lib/supabase'
 import { mapSupabaseError } from './errors'
 import { callEdgeFunction } from './edgeFunctionClient'
-import type { ItemType, Order, OrderStatus, OrderSummary, PaymentMethod, SearchTimeStatus } from '@/types/domain'
+import type {
+  ItemType,
+  Order,
+  OrderStatus,
+  OrderSummary,
+  PaymentCondition,
+  PaymentMethod,
+  SearchTimeStatus,
+} from '@/types/domain'
 
 // Payload de item usado tanto em createOrder (aninhado em `items`) quanto em
 // addOrderItem (orderItems.ts, mesmo formato no corpo raiz) — ver
@@ -90,6 +98,20 @@ export interface UpdateOrderInput {
   notes: string | null
 }
 
+// POST /orders/with-payment -> create_order_with_payment (NOVA, 2026-08-29).
+// Mesmos campos de CreateOrderInput + a escolha de "Forma de pagamento" —
+// só usada por "Novo Pedido" (nunca por edição de pedido existente:
+// updateOrder/updateQuoteOrder, abaixo, nunca ganham esses campos). Cria o
+// pedido e (conforme payment_condition) registra o pagamento inicial numa
+// única transação no banco — se o pagamento falhar (ex.: DEPOSIT >= total),
+// o pedido inteiro é desfeito; nunca duas chamadas HTTP separadas.
+export interface CreateOrderWithPaymentInput extends CreateOrderInput {
+  payment_condition: PaymentCondition
+  // Obrigatório (e só usado) quando payment_condition = 'DEPOSIT' — ignorado
+  // pela RPC nos outros dois casos.
+  deposit_amount?: number | null
+}
+
 // PUT /orders/:id/full -> update_quote_order(). Edição completa atômica de
 // cabeçalho + itens, numa única chamada — nunca create_order, nunca
 // update_order + add/update/remove_order_item em sequência. Só aceita a
@@ -139,6 +161,13 @@ export async function createOrder(input: CreateOrderInput): Promise<{ id: string
   return callEdgeFunction<{ id: string }>('orders', '', 'POST', input)
 }
 
+// POST /orders/with-payment -> create_order_with_payment.
+export async function createOrderWithPayment(
+  input: CreateOrderWithPaymentInput,
+): Promise<{ id: string; payment_id: string | null }> {
+  return callEdgeFunction<{ id: string; payment_id: string | null }>('orders', '/with-payment', 'POST', input)
+}
+
 // PUT /orders/:id -> update_order.
 export async function updateOrder(orderId: string, input: UpdateOrderInput): Promise<void> {
   await callEdgeFunction<{ success: true }>('orders', `/${orderId}`, 'PUT', input)
@@ -147,6 +176,14 @@ export async function updateOrder(orderId: string, input: UpdateOrderInput): Pro
 // PUT /orders/:id/full -> update_quote_order.
 export async function updateQuoteOrder(orderId: string, input: UpdateQuoteOrderInput): Promise<{ id: string }> {
   return callEdgeFunction<{ id: string }>('orders', `/${orderId}/full`, 'PUT', input)
+}
+
+// DELETE /orders/:id -> delete_order. Exclusão física protegida: bloqueada
+// (409) fora de QUOTE/CANCELLED ou com pagamento/aprovação/versão
+// vinculados — _shared/errors.ts mapeia ORDER_DELETE_*: para mensagens
+// amigáveis (business_rule), nunca um DELETE parcial/cascata.
+export async function deleteOrder(orderId: string): Promise<void> {
+  await callEdgeFunction<{ success: true }>('orders', `/${orderId}`, 'DELETE')
 }
 
 // POST /order-status/:orderId -> change_order_status

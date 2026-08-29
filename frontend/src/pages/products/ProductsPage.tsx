@@ -8,7 +8,9 @@ import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { ProductCompositionForm } from '@/components/products/ProductCompositionForm'
 import { FilamentCompositionForm } from '@/components/products/FilamentCompositionForm'
 import { ProductForm } from '@/components/products/ProductForm'
+import { ProductEditDetailsForm } from '@/components/products/ProductEditDetailsForm'
 import { ProductPriceForm } from '@/components/products/ProductPriceForm'
+import { ProductPriceHistoryList } from '@/components/products/ProductPriceHistoryList'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -19,13 +21,18 @@ import { useFilamentTypes } from '@/hooks/useFilamentTypes'
 import { usePackaging } from '@/hooks/usePackaging'
 import { useProductComposition } from '@/hooks/useProductComposition'
 import { useProductFilaments } from '@/hooks/useProductFilaments'
+import { useProductPriceHistory } from '@/hooks/useProductPriceHistory'
 import { useProducts } from '@/hooks/useProducts'
 import { ApiError } from '@/lib/api/errors'
 import { formatSecondsToHHMMSS } from '@/lib/forms/durationField'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
 import type { UpdateProductCompositionInput } from '@/lib/api/productComposition'
 import type { UpdateProductFilamentsInput } from '@/lib/api/productFilaments'
-import type { CreateProductInput, UpdateProductPriceInput } from '@/lib/api/products'
+import type {
+  CreateProductInput,
+  UpdateProductDetailsInput,
+  UpdateProductPriceInput,
+} from '@/lib/api/products'
 import type { Product, ProductType } from '@/types/domain'
 
 const PRODUCT_SEARCH_LISTBOX_ID = 'product-search-listbox'
@@ -86,7 +93,7 @@ function getProductSortValue(product: Product, column: ProductSortColumn): strin
 }
 
 export function ProductsPage() {
-  const { products, isLoading, error, refetch, create, changePrice, update } = useProducts()
+  const { products, isLoading, error, refetch, create, changePrice, update, updateDetails } = useProducts()
   const { accessories } = useAccessories()
   const { packaging } = usePackaging()
 
@@ -97,9 +104,19 @@ export function ProductsPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [sort, setSort] = useState<SortState<ProductSortColumn> | null>(null)
 
-  const [priceDialogProduct, setPriceDialogProduct] = useState<Product | null>(null)
+  // "Editar produto" (substitui o antigo botão "Alterar preço") — três
+  // seções independentes no mesmo diálogo: Dados do produto (update_product,
+  // NOVA), Preço (ProductPriceForm/update_product_price, inalterado) e
+  // Histórico de preços (somente leitura, useProductPriceHistory, NOVO).
+  // Cada seção tem seu próprio estado de submitting/erro — nunca a mesma
+  // chamada/transação entre elas, mesmo idioma já usado por Filamentos vs.
+  // Acessórios/Embalagens no diálogo de composição.
+  const [editDialogProduct, setEditDialogProduct] = useState<Product | null>(null)
+  const [isSubmittingDetails, setIsSubmittingDetails] = useState(false)
+  const [detailsError, setDetailsError] = useState<string | null>(null)
   const [isSubmittingPrice, setIsSubmittingPrice] = useState(false)
   const [priceError, setPriceError] = useState<string | null>(null)
+  const priceHistory = useProductPriceHistory(editDialogProduct?.id ?? null)
 
   const [compositionDialogProduct, setCompositionDialogProduct] = useState<Product | null>(null)
   const [isSubmittingComposition, setIsSubmittingComposition] = useState(false)
@@ -164,9 +181,10 @@ export function ProductsPage() {
     }
   }
 
-  function openPriceDialog(product: Product) {
+  function openEditDialog(product: Product) {
+    setDetailsError(null)
     setPriceError(null)
-    setPriceDialogProduct(product)
+    setEditDialogProduct(product)
   }
 
   function openCompositionDialog(product: Product) {
@@ -195,13 +213,13 @@ export function ProductsPage() {
   }
 
   async function handlePriceSubmit(values: UpdateProductPriceInput) {
-    if (!priceDialogProduct) return
+    if (!editDialogProduct) return
     setIsSubmittingPrice(true)
     setPriceError(null)
     try {
-      await changePrice(priceDialogProduct.id, values)
+      await changePrice(editDialogProduct.id, values)
       toast.success('Preço atualizado.')
-      setPriceDialogProduct(null)
+      setEditDialogProduct(null)
     } catch (err) {
       const message = toErrorMessage(err)
       if (err instanceof ApiError && err.type === 'validation') {
@@ -211,6 +229,30 @@ export function ProductsPage() {
       }
     } finally {
       setIsSubmittingPrice(false)
+    }
+  }
+
+  // Independente de handlePriceSubmit acima: chama updateDetails
+  // (Edge Function -> update_product, RPC própria) — nunca a mesma
+  // chamada/transação de Preço. Uma falha aqui nunca desfaz nem impede um
+  // salvamento de Preço já concluído (ou vice-versa).
+  async function handleDetailsSubmit(values: UpdateProductDetailsInput) {
+    if (!editDialogProduct) return
+    setIsSubmittingDetails(true)
+    setDetailsError(null)
+    try {
+      await updateDetails(editDialogProduct.id, values)
+      toast.success('Dados do produto atualizados.')
+      setEditDialogProduct(null)
+    } catch (err) {
+      const message = toErrorMessage(err)
+      if (err instanceof ApiError && err.type === 'validation') {
+        setDetailsError(message)
+      } else {
+        toast.error(message)
+      }
+    } finally {
+      setIsSubmittingDetails(false)
     }
   }
 
@@ -421,10 +463,10 @@ export function ProductsPage() {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => openPriceDialog(product)}
+                            onClick={() => openEditDialog(product)}
                             className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
                           >
-                            Alterar preço
+                            Editar produto
                           </Button>
                           <Button
                             variant="outline"
@@ -461,34 +503,62 @@ export function ProductsPage() {
       </Dialog>
 
       <Dialog
-        open={priceDialogProduct !== null}
+        open={editDialogProduct !== null}
         onOpenChange={(open) => {
-          if (!open) setPriceDialogProduct(null)
+          if (!open) setEditDialogProduct(null)
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Alterar preço</DialogTitle>
+            <DialogTitle>Editar produto</DialogTitle>
             <DialogDescription>
-              {priceDialogProduct ? (
+              {editDialogProduct ? (
                 <>
-                  Novo preço para <span className="text-foreground font-medium">"{priceDialogProduct.name}"</span>.
+                  Dados, preço e histórico de <span className="text-foreground font-medium">"{editDialogProduct.name}"</span>.
                 </>
               ) : (
                 ''
               )}
             </DialogDescription>
           </DialogHeader>
-          {priceDialogProduct && (
-            <ProductPriceForm
-              key={priceDialogProduct.id}
-              currentPrice={priceDialogProduct.default_price}
-              isSubmitting={isSubmittingPrice}
-              submitError={priceError}
-              onSubmit={(values) => void handlePriceSubmit(values)}
-              onCancel={() => setPriceDialogProduct(null)}
+          {editDialogProduct && (
+            <ProductEditDetailsForm
+              key={editDialogProduct.id}
+              product={editDialogProduct}
+              isSubmitting={isSubmittingDetails}
+              submitError={detailsError}
+              onSubmit={(values) => void handleDetailsSubmit(values)}
             />
           )}
+
+          {/* Preço — seção própria, independente de "Dados do produto"
+              acima: ProductPriceForm inalterado (mesmo componente já usado
+              antes, com Motivo/histórico preservados), nunca a mesma
+              chamada/transação. */}
+          <div className="border-border mt-2 flex flex-col gap-3 border-t pt-4">
+            <h3 className="text-sm font-semibold">Preço</h3>
+            {editDialogProduct && (
+              <ProductPriceForm
+                key={editDialogProduct.id}
+                currentPrice={editDialogProduct.default_price}
+                isSubmitting={isSubmittingPrice}
+                submitError={priceError}
+                onSubmit={(values) => void handlePriceSubmit(values)}
+                onCancel={() => setEditDialogProduct(null)}
+              />
+            )}
+          </div>
+
+          {/* Histórico de preços — somente leitura, independente das duas
+              seções acima. */}
+          <div className="border-border mt-2 border-t pt-4">
+            <ProductPriceHistoryList
+              status={priceHistory.status}
+              history={priceHistory.history}
+              errorMessage={priceHistory.error ? toErrorMessage(priceHistory.error) : null}
+              onRetry={priceHistory.retry}
+            />
+          </div>
         </DialogContent>
       </Dialog>
 

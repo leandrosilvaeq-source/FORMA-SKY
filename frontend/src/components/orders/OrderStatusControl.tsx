@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { changeOrderStatus } from '@/lib/api/orders'
 import { ApiError } from '@/lib/api/errors'
 import { canCancelOrder, getNextOrderStatus, isTerminalOrderStatus } from '@/lib/orders/orderStatusMachine'
+import { cn } from '@/lib/utils'
 import type { OrderStatus } from '@/types/domain'
 
 // Mesmos rótulos de OrdersPage.tsx/OrderEditForm.tsx/OrderManagementPanel.tsx
@@ -30,8 +31,30 @@ function toErrorMessage(err: unknown): string {
 // pedidos terminais (DELIVERED/CANCELLED, onde a máquina de estados não
 // permite mais nenhuma transição) e como base visual do botão interativo
 // abaixo, para os dois nunca parecerem elementos totalmente diferentes.
-const STATUS_BADGE_CLASSNAME =
-  'inline-flex items-center rounded-md border px-2 py-1 text-sm font-medium border-input text-muted-foreground'
+// Layout puro — a cor por status entra à parte, via ORDER_STATUS_COLOR_CLASSNAMES
+// abaixo (mesclada por cn()), nunca embutida aqui.
+const STATUS_BADGE_BASE_CLASSNAME = 'inline-flex items-center rounded-md border px-2 py-1 text-sm font-medium'
+
+// Cores por status (2026-08-29, requisito explícito) — reaproveita os
+// mesmos tokens/paletas já usados no projeto: `border-destructive/40
+// bg-destructive/10 text-destructive` é o token de erro/cancelamento já
+// usado em toda parte (ex.: banners de erro desta mesma página); o par
+// border-X-300/bg-X-50/text-X-800 é o mesmo padrão "soft" já aprovado em
+// StockLevelBadge (StockMovementPanel.tsx) para amber — só estendido às
+// cores azul/verde pedidas aqui, nunca uma paleta nova inventada. O texto
+// do status (ORDER_STATUS_LABELS, sempre visível) já diferencia cada
+// status por si só — a cor é reforço visual, nunca a única pista
+// ("não depender só da cor").
+export const ORDER_STATUS_COLOR_CLASSNAMES: Record<OrderStatus, string> = {
+  QUOTE: 'border-blue-300 bg-blue-50 text-blue-800',
+  WAITING_APPROVAL: 'border-amber-300 bg-amber-50 text-amber-800',
+  APPROVED: 'border-blue-300 bg-blue-50 text-blue-800',
+  IN_PRODUCTION_QUEUE: 'border-amber-300 bg-amber-50 text-amber-800',
+  IN_PRODUCTION: 'border-blue-300 bg-blue-50 text-blue-800',
+  WAITING_DELIVERY: 'border-amber-300 bg-amber-50 text-amber-800',
+  DELIVERED: 'border-emerald-300 bg-emerald-50 text-emerald-800',
+  CANCELLED: 'border-destructive/40 bg-destructive/10 text-destructive',
+}
 
 export interface OrderStatusControlProps {
   orderId: string
@@ -62,7 +85,11 @@ export function OrderStatusControl({ orderId, orderNumber, status, onChanged }: 
   const terminal = isTerminalOrderStatus(status)
 
   if (terminal) {
-    return <span className={STATUS_BADGE_CLASSNAME}>{ORDER_STATUS_LABELS[status]}</span>
+    return (
+      <span className={cn(STATUS_BADGE_BASE_CLASSNAME, ORDER_STATUS_COLOR_CLASSNAMES[status])}>
+        {ORDER_STATUS_LABELS[status]}
+      </span>
+    )
   }
 
   const nextStatus = getNextOrderStatus(status)
@@ -100,7 +127,11 @@ export function OrderStatusControl({ orderId, orderNumber, status, onChanged }: 
         type="button"
         aria-haspopup="dialog"
         onClick={() => setIsMenuOpen(true)}
-        className={`${STATUS_BADGE_CLASSNAME} focus-visible:ring-brand-accent hover:border-brand-primary hover:text-brand-primary-dark cursor-pointer transition-colors outline-none focus-visible:ring-2`}
+        className={cn(
+          STATUS_BADGE_BASE_CLASSNAME,
+          ORDER_STATUS_COLOR_CLASSNAMES[status],
+          'focus-visible:ring-brand-accent hover:border-brand-primary hover:text-brand-primary-dark cursor-pointer transition-colors outline-none focus-visible:ring-2',
+        )}
       >
         {ORDER_STATUS_LABELS[status]}
       </button>

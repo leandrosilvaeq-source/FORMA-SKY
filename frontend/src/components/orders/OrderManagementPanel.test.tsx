@@ -132,7 +132,7 @@ describe('OrderManagementPanel', () => {
     expect(refetch).toHaveBeenCalled()
   })
 
-  it('shows the order summary: number, client, status, financial status, totals', () => {
+  it('shows the order summary: number, client, status, financial status (unificado "Ag. Pagamento", 2026-08-29), totals', () => {
     mockHook()
     renderPanel()
 
@@ -140,7 +140,7 @@ describe('OrderManagementPanel', () => {
     const summaryCard = screen.getByText('Pedido FS-26-001').closest('[data-slot="card"]') as HTMLElement
     expect(within(summaryCard).getByText('Ana Cliente')).toBeInTheDocument()
     expect(within(summaryCard).getByText('Orçamento')).toBeInTheDocument()
-    expect(within(summaryCard).getByText('Aguardando pagamento')).toBeInTheDocument()
+    expect(within(summaryCard).getByText('Ag. Pagamento')).toBeInTheDocument()
     expect(within(summaryCard).getByText('R$ 110,00')).toBeInTheDocument() // total_receivable
     expect(within(summaryCard).getByText('R$ 30,00')).toBeInTheDocument() // total_paid (também aparece na tabela de Pagamentos, por isso escopado)
     expect(within(summaryCard).getByText('R$ 80,00')).toBeInTheDocument() // balance_due
@@ -262,15 +262,15 @@ describe('OrderManagementPanel', () => {
     expect(screen.getByText(/tem certeza que deseja avançar/i)).toBeInTheDocument()
   })
 
-  it('opens the payment registration dialog and registers a payment successfully', async () => {
+  it('opens the payment registration dialog and registers a payment successfully (payment_type inferido: saldo R$80/já pago R$30 -> FINAL)', async () => {
     const { registerPaymentForOrder } = mockHook()
     const user = userEvent.setup()
     const { onChanged } = renderPanel()
 
     await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
     expect(screen.getByRole('heading', { name: 'Registrar pagamento' })).toBeInTheDocument()
+    expect(screen.queryByRole('radiogroup', { name: 'Tipo de pagamento' })).not.toBeInTheDocument()
 
-    await user.click(within(screen.getByRole('radiogroup', { name: 'Tipo de pagamento' })).getByRole('radio', { name: 'Final' }))
     await user.click(within(screen.getByRole('radiogroup', { name: 'Método de pagamento' })).getByRole('radio', { name: 'Pix' }))
     await user.click(screen.getByLabelText(/^valor$/i))
     await user.keyboard('8000')
@@ -292,7 +292,6 @@ describe('OrderManagementPanel', () => {
     renderPanel()
 
     await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
-    await user.click(within(screen.getByRole('radiogroup', { name: 'Tipo de pagamento' })).getByRole('radio', { name: 'Ajuste' }))
     await user.click(within(screen.getByRole('radiogroup', { name: 'Método de pagamento' })).getByRole('radio', { name: 'Pix' }))
     // -10 passa na validação client-side (currentTotalPaid=30, 30-10=20 >= 0)
     // — o objetivo deste teste é o erro REAL do backend, não a réplica

@@ -1,10 +1,15 @@
 // Leitura e escrita diretas via supabase-js: public.customers concede
 // SELECT/INSERT/UPDATE a authenticated, com RLS is_active_user()
-// (supabase/migrations/20260813204515_create_customers_table.sql). Não há
-// Edge Function para clientes — nenhuma foi criada no backend do Módulo 1.
+// (supabase/migrations/20260813204515_create_customers_table.sql).
+// Exclusão física (2026-08-29) é a ÚNICA operação que passa por uma Edge
+// Function (`customers`, ainda NÃO publicada — roda só localmente nesta
+// rodada) chamando a RPC protegida delete_customer
+// (20260829140000_add_customer_deletion_function.sql, ainda não aplicada) —
+// nunca um DELETE direto (customers nunca concedeu DELETE a authenticated).
 
 import { supabase } from '@/lib/supabase'
 import { mapSupabaseError } from './errors'
+import { callEdgeFunction } from './edgeFunctionClient'
 import type { Customer } from '@/types/domain'
 
 export interface CreateCustomerInput {
@@ -45,4 +50,12 @@ export async function updateCustomer(id: string, input: UpdateCustomerInput): Pr
 
   if (error) throw mapSupabaseError(error)
   return data as Customer
+}
+
+// DELETE /customers/:id -> delete_customer. Exclusão física protegida:
+// bloqueada (409) quando o cliente tem pedido ou empresa vinculados —
+// _shared/errors.ts mapeia CUSTOMER_HAS_ORDERS:/CUSTOMER_HAS_COMPANY: para
+// uma mensagem amigável (business_rule), nunca um DELETE parcial/cascata.
+export async function deleteCustomer(id: string): Promise<void> {
+  await callEdgeFunction<{ success: true }>('customers', `/${id}`, 'DELETE')
 }

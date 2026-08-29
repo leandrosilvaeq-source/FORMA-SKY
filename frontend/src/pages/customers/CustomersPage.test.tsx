@@ -58,6 +58,7 @@ function mockCustomers(
   overrides: Partial<{ isLoading: boolean; error: unknown; refetch: ReturnType<typeof vi.fn> }> = {},
   createMock: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(list[0]),
   updateMock: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(list[0]),
+  removeMock: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined),
 ) {
   useCustomersMock.mockReturnValue({
     customers: list,
@@ -66,8 +67,9 @@ function mockCustomers(
     refetch: overrides.refetch ?? vi.fn(),
     create: createMock,
     update: updateMock,
+    remove: removeMock,
   })
-  return { createMock, updateMock }
+  return { createMock, updateMock, removeMock }
 }
 
 // Retorna, na ordem visual atual (DOM), o nome de "Cliente" de cada linha de
@@ -108,11 +110,13 @@ function getListbox(): HTMLElement {
 describe('CustomersPage', () => {
   let createMock: ReturnType<typeof vi.fn>
   let updateMock: ReturnType<typeof vi.fn>
+  let removeMock: ReturnType<typeof vi.fn>
   let refetchMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     createMock = vi.fn().mockResolvedValue(customer)
     updateMock = vi.fn().mockResolvedValue(customer)
+    removeMock = vi.fn().mockResolvedValue(undefined)
     refetchMock = vi.fn()
 
     useAuthMock.mockReturnValue({ session: { user: { email: 'op@formasky.com' } }, signOut: vi.fn() })
@@ -123,6 +127,7 @@ describe('CustomersPage', () => {
       refetch: refetchMock,
       create: createMock,
       update: updateMock,
+      remove: removeMock,
     })
     useCompaniesMock.mockReturnValue({ companies: [company], isLoading: false, error: null, refetch: vi.fn() })
     useLeadSourcesMock.mockReturnValue({
@@ -1055,6 +1060,121 @@ describe('CustomersPage', () => {
         expect(row).toHaveClass('odd:bg-brand-primary-soft/50')
         expect(row).toHaveClass('even:bg-white')
       }
+    })
+  })
+
+  describe('Exclusão física protegida de cliente (2026-08-29)', () => {
+    it('ícone de lixeira ao lado de "Editar", com nome acessível e tooltip com o nome do cliente', () => {
+      renderPage()
+
+      const row = screen.getByRole('row', { name: /ana/i })
+      const deleteButton = within(row).getByRole('button', { name: 'Excluir cliente Ana' })
+      expect(deleteButton).toBeInTheDocument()
+      expect(deleteButton).toHaveAttribute('title', 'Excluir cliente Ana')
+      expect(within(row).getByRole('button', { name: 'Editar' })).toBeInTheDocument()
+    })
+
+    it('exige confirmação explícita antes de excluir — nada é chamado até confirmar', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir cliente Ana' }))
+
+      expect(screen.getByRole('heading', { name: 'Excluir cliente' })).toBeInTheDocument()
+      expect(screen.getByText(/tem certeza que deseja excluir "ana"/i)).toBeInTheDocument()
+      expect(removeMock).not.toHaveBeenCalled()
+    })
+
+    it('cancelar a confirmação não chama remove nem altera a listagem', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir cliente Ana' }))
+      await user.click(screen.getByRole('button', { name: /^cancelar$/i }))
+
+      expect(screen.queryByRole('heading', { name: 'Excluir cliente' })).not.toBeInTheDocument()
+      expect(removeMock).not.toHaveBeenCalled()
+      expect(screen.getByText('Ana')).toBeInTheDocument()
+    })
+
+    it('cliente sem vínculos: confirmar exclui fisicamente, mostra toast de sucesso e atualiza a listagem', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir cliente Ana' }))
+      await user.click(screen.getByRole('button', { name: /excluir definitivamente/i }))
+
+      await waitFor(() => expect(removeMock).toHaveBeenCalledWith('1'))
+      expect(toastMock.success).toHaveBeenCalledWith('Cliente excluído.')
+      await waitFor(() =>
+        expect(screen.queryByRole('heading', { name: 'Excluir cliente' })).not.toBeInTheDocument(),
+      )
+    })
+
+    it('cliente com vínculos (pedido/empresa): backend bloqueia com 409, a mensagem orienta desativar, o registro NUNCA é removido e o diálogo permanece aberto', async () => {
+      const blockedRemove = vi
+        .fn()
+        .mockRejectedValue(
+          new ApiError(
+            'business_rule',
+            409,
+            'Este cliente possui pedido(s) vinculado(s) e não pode ser excluído. Desative o cliente.',
+          ),
+        )
+      mockCustomers([customer], {}, createMock, updateMock, blockedRemove)
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir cliente Ana' }))
+      await user.click(screen.getByRole('button', { name: /excluir definitivamente/i }))
+
+      expect(
+        await screen.findByText('Este cliente possui pedido(s) vinculado(s) e não pode ser excluído. Desative o cliente.'),
+      ).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Excluir cliente' })).toBeInTheDocument()
+      expect(screen.getByText('Ana')).toBeInTheDocument()
+    })
+
+    it('Petlink (ou qualquer cliente oficial protegido pelo backend): mesmo mecanismo genérico bloqueia a exclusão e preserva o registro', async () => {
+      const petlink: Customer = { ...customer, id: 'petlink-1', name: 'Petlink' }
+      const blockedRemove = vi
+        .fn()
+        .mockRejectedValue(
+          new ApiError(
+            'business_rule',
+            409,
+            'Este cliente está vinculado a uma empresa e não pode ser excluído. Desative o cliente.',
+          ),
+        )
+      mockCustomers([petlink], {}, createMock, updateMock, blockedRemove)
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir cliente Petlink' }))
+      await user.click(screen.getByRole('button', { name: /excluir definitivamente/i }))
+
+      await waitFor(() => expect(blockedRemove).toHaveBeenCalledWith('petlink-1'))
+      expect(await screen.findByText(/não pode ser excluído/i)).toBeInTheDocument()
+      expect(screen.getByText('Petlink')).toBeInTheDocument()
+    })
+
+    it('bloqueia duplo envio: o botão fica desabilitado durante a requisição', async () => {
+      let resolvePromise: () => void = () => {}
+      const pendingRemove = vi.fn().mockReturnValue(
+        new Promise<void>((resolve) => {
+          resolvePromise = resolve
+        }),
+      )
+      mockCustomers([customer], {}, createMock, updateMock, pendingRemove)
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir cliente Ana' }))
+      await user.click(screen.getByRole('button', { name: /excluir definitivamente/i }))
+
+      expect(screen.getByRole('button', { name: /excluindo/i })).toBeDisabled()
+      expect(pendingRemove).toHaveBeenCalledTimes(1)
+      resolvePromise()
     })
   })
 })

@@ -30,6 +30,13 @@ export type SearchTimeStatus = 'NOT_INFORMED' | 'IN_PROGRESS' | 'RECORDED'
 
 export type PaymentType = 'SINAL' | 'FINAL' | 'INTEGRAL' | 'AJUSTE'
 
+// orders.payment_condition — migration
+// 20260829142000_add_order_payment_condition_and_atomic_creation.sql (ainda
+// não aplicada). Só preenchida por create_order_with_payment(); pedidos
+// criados por create_order() "puro" permanecem null. Nunca reescrita por
+// edição de pedido.
+export type PaymentCondition = 'ADVANCE' | 'DEPOSIT' | 'ON_DELIVERY'
+
 export type ApprovalType = 'WHATSAPP' | 'PHOTO' | 'FORMAL_DOCUMENT' | 'OTHER'
 
 // supabase/migrations/20260813204515_create_customers_table.sql
@@ -101,6 +108,20 @@ export interface Product {
   updated_at: string
 }
 
+// supabase/migrations/20260814020237_create_product_price_history_table.sql
+// Histórico imutável — nunca editado nem excluído pelo frontend. effective_to
+// null marca a linha vigente (preço atual, igual a products.default_price).
+export interface ProductPriceHistory {
+  id: string
+  product_id: string
+  price: number
+  effective_from: string
+  effective_to: string | null
+  reason: string | null
+  created_by: string
+  created_at: string
+}
+
 // supabase/migrations/20260813221340_create_orders_table.sql
 export interface Order {
   id: string
@@ -111,6 +132,9 @@ export interface Order {
   order_status: OrderStatus
   payment_status: PaymentStatus
   payment_method: PaymentMethod | null
+  // migration 20260829142000 (ainda não aplicada) — null em pedidos criados
+  // antes desta coluna existir ou via create_order() "puro".
+  payment_condition: PaymentCondition | null
   order_date: string
   approval_date: string | null
   expected_delivery_date: string | null

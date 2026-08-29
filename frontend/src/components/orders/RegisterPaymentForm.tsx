@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react'
-import { CircleDollarSignIcon, FlagIcon, HandCoinsIcon, SlidersHorizontalIcon } from 'lucide-react'
 import { PAYMENT_METHOD_ITEMS, type IconComponent } from './OrderForm'
 import { Button } from '@/components/ui/button'
 import { DialogFooter } from '@/components/ui/dialog'
@@ -17,6 +16,7 @@ import {
   rawValueToCents,
   removeLastDigit,
 } from '@/lib/forms/currencyField'
+import { inferPaymentType } from '@/lib/orders/paymentTypeInference'
 import type { PaymentMethod, PaymentType } from '@/types/domain'
 
 // Espelha exatamente as regras de supabase/functions/payments/index.ts +
@@ -36,16 +36,6 @@ import type { PaymentMethod, PaymentType } from '@/types/domain'
 //   final e pode rejeitar mesmo assim — a mensagem de erro real do backend
 //   (submitError) é sempre exibida se, por qualquer motivo, o valor exibido
 //   aqui como saldo devedor estiver desatualizado.
-
-// Ícones novos (Tipo de pagamento não existe em OrderForm.tsx — nada para
-// reaproveitar ali; escolhidos pelo mesmo critério de "ícone com cor fixa
-// própria, decorativo" já usado em Método de pagamento/Forma de entrega).
-const PAYMENT_TYPE_ITEMS: Array<{ label: string; value: PaymentType; Icon: IconComponent }> = [
-  { label: 'Sinal', value: 'SINAL', Icon: HandCoinsIcon },
-  { label: 'Final', value: 'FINAL', Icon: FlagIcon },
-  { label: 'Integral', value: 'INTEGRAL', Icon: CircleDollarSignIcon },
-  { label: 'Ajuste', value: 'AJUSTE', Icon: SlidersHorizontalIcon },
-]
 
 // Reaproveita exatamente a mesma constante/ícones de OrderForm.tsx (Pix/
 // Dinheiro/Cartão) — só descarta a opção "Não informado" (value: null),
@@ -133,12 +123,17 @@ export function RegisterPaymentForm({
   onSubmit,
   onCancel,
 }: RegisterPaymentFormProps) {
-  const [paymentType, setPaymentType] = useState<PaymentType | null>(null)
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(null)
   // Valor sempre armazenado como centavos não-assinados (mesmo padrão
   // "bancário" de ProductPriceForm.tsx/lib/forms/currencyField.ts) + um
-  // sinal separado, só habilitável quando payment_type = AJUSTE — os dois
-  // eixos são ortogonais, currencyField.ts nunca precisou saber de sinal.
+  // sinal separado, alternável pelo Switch "Ajuste negativo (estorno)"
+  // abaixo — os dois eixos são ortogonais, currencyField.ts nunca precisou
+  // saber de sinal. payment_type não é mais escolhido pelo usuário (campo
+  // "Tipo de pagamento" removido, 2026-08-29) — é sempre inferido no
+  // submit, a partir do valor/saldo (ver inferPaymentType, chamada em
+  // handleSubmit abaixo); um valor negativo (isNegative=true) sempre infere
+  // AJUSTE, preservando exatamente o mesmo mecanismo de ajuste
+  // negativo/estorno já existente.
   const [cents, setCents] = useState(0)
   const [isNegative, setIsNegative] = useState(false)
   const [hasEditedAmount, setHasEditedAmount] = useState(false)
@@ -216,19 +211,11 @@ export function RegisterPaymentForm({
     applyCents(parsed)
   }
 
-  function handlePaymentTypeChange(value: PaymentType) {
-    setPaymentType(value)
-    // Sair de AJUSTE sempre limpa o sinal negativo — nenhum outro tipo
-    // aceita valor negativo (payments_amount_type_consistency).
-    if (value !== 'AJUSTE') setIsNegative(false)
-  }
-
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
     const errors: Record<string, string> = {}
 
-    if (!paymentType) errors.payment_type = 'Selecione o tipo de pagamento.'
     if (!paymentMethod) errors.payment_method = 'Selecione o método de pagamento.'
     if (!paidAt) errors.paid_at = 'Informe a data do pagamento.'
 
@@ -237,8 +224,6 @@ export function RegisterPaymentForm({
 
     if (!hasEditedAmount || cents === 0) {
       errors.amount = 'O valor não pode ser zero.'
-    } else if (paymentType && paymentType !== 'AJUSTE' && amountValue < 0) {
-      errors.amount = 'O valor deve ser maior que zero (só Ajuste aceita valor negativo).'
     } else if (amountValue > 0 && amountValue > balanceDue) {
       errors.amount = `O valor não pode ultrapassar o saldo devedor. Valor máximo permitido: ${formatBRL(balanceDue)}.`
     } else if (amountValue < 0 && currentTotalPaid + amountValue < 0) {
@@ -257,7 +242,7 @@ export function RegisterPaymentForm({
     setFieldErrors({})
 
     onSubmit({
-      payment_type: paymentType as PaymentType,
+      payment_type: inferPaymentType(amountValue, balanceDue, currentTotalPaid),
       payment_method: paymentMethod as PaymentMethod,
       amount: amountValue,
       paid_at: paidAt,
@@ -326,30 +311,6 @@ export function RegisterPaymentForm({
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label>Tipo de pagamento</Label>
-        <div role="radiogroup" aria-label="Tipo de pagamento" className="flex flex-wrap gap-2">
-          {PAYMENT_TYPE_ITEMS.map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              role="radio"
-              aria-checked={paymentType === item.value}
-              disabled={isSubmitting}
-              onClick={() => handlePaymentTypeChange(item.value)}
-              className={cn(
-                ACTION_BUTTON_CLASSNAME,
-                paymentType === item.value ? ACTION_BUTTON_SELECTED_CLASSNAME : ACTION_BUTTON_UNSELECTED_CLASSNAME,
-              )}
-            >
-              <item.Icon className="text-brand-primary size-8 shrink-0" />
-              {item.label}
-            </button>
-          ))}
-        </div>
-        {fieldErrors.payment_type && <p className="text-destructive text-sm">{fieldErrors.payment_type}</p>}
-      </div>
-
-      <div className="flex flex-col gap-2">
         <Label>Método de pagamento</Label>
         <div role="radiogroup" aria-label="Método de pagamento" className="flex flex-wrap gap-2">
           {PAYMENT_METHOD_OPTIONS.map((item) => (
@@ -388,18 +349,20 @@ export function RegisterPaymentForm({
           aria-describedby={fieldErrors.amount ? AMOUNT_ERROR_ID : undefined}
           className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
         />
-        {paymentType === 'AJUSTE' && (
-          <label className="flex items-center gap-2 text-sm">
-            <Switch
-              checked={isNegative}
-              onCheckedChange={setIsNegative}
-              disabled={isSubmitting}
-              aria-label="Ajuste negativo (estorno)"
-              className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
-            />
-            Ajuste negativo (estorno)
-          </label>
-        )}
+        {/* Sempre visível (2026-08-29): não depende mais de uma seleção
+            prévia de "Tipo de pagamento" (removido) — o tipo é inferido no
+            submit (inferPaymentType), e um valor negativo sempre infere
+            AJUSTE. Mesmo Switch/mecanismo já existente, só sem o gate. */}
+        <label className="flex items-center gap-2 text-sm">
+          <Switch
+            checked={isNegative}
+            onCheckedChange={setIsNegative}
+            disabled={isSubmitting}
+            aria-label="Ajuste negativo (estorno)"
+            className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
+          />
+          Ajuste negativo (estorno)
+        </label>
         {fieldErrors.amount && (
           <p id={AMOUNT_ERROR_ID} className="text-destructive text-sm">
             {fieldErrors.amount}

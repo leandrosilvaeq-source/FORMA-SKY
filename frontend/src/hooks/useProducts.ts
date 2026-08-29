@@ -3,8 +3,10 @@ import {
   createProduct,
   listProducts,
   updateProduct,
+  updateProductDetails,
   updateProductPrice,
   type CreateProductInput,
+  type UpdateProductDetailsInput,
   type UpdateProductInput,
   type UpdateProductPriceInput,
 } from '@/lib/api/products'
@@ -19,6 +21,7 @@ interface UseProductsResult {
   create: (input: CreateProductInput) => Promise<void>
   changePrice: (productId: string, input: UpdateProductPriceInput) => Promise<void>
   update: (productId: string, input: UpdateProductInput) => Promise<Product>
+  updateDetails: (productId: string, input: UpdateProductDetailsInput) => Promise<Product>
 }
 
 function toApiError(err: unknown): ApiError {
@@ -88,5 +91,15 @@ export function useProducts(): UseProductsResult {
     return updated
   }, [])
 
-  return { products, isLoading, error, refetch, create, changePrice, update }
+  // updateProductDetails (PATCH /products/:id -> update_product, NOVA
+  // 2026-08-29) também devolve a linha completa (RETURNING * na RPC) —
+  // mesmo padrão de substituição local de update() acima. Nunca toca
+  // default_price (fica com changePrice, acima).
+  const updateDetails = useCallback(async (productId: string, input: UpdateProductDetailsInput) => {
+    const updated = await updateProductDetails(productId, input)
+    setProducts((current) => current.map((product) => (product.id === productId ? updated : product)))
+    return updated
+  }, [])
+
+  return { products, isLoading, error, refetch, create, changePrice, update, updateDetails }
 }

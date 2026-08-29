@@ -433,6 +433,9 @@ verify_jwt = false
 [functions.inventory-purchases]
 verify_jwt = false
 
+[functions.customers]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

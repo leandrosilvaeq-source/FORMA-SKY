@@ -4,20 +4,30 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { RegisterPaymentForm, type RegisterPaymentFormValues } from './RegisterPaymentForm'
 import { registerPayment } from '@/lib/api/payments'
 import { ApiError } from '@/lib/api/errors'
+import { cn } from '@/lib/utils'
 import type { PaymentStatus } from '@/types/domain'
 
-// Mesmos rótulos de OrdersPage.tsx/OrderManagementPanel.tsx — duplicados de
-// propósito (componente auto-contido), mesma decisão já registrada nos
-// outros componentes de Pedidos. orders.payment_status é sempre DERIVADO
-// por recalculate_order_financials() a partir dos pagamentos + total do
-// pedido — nunca editado manualmente nem enviado direto ao backend por
-// nenhuma tela; por isso este componente nunca escreve payment_status, só
-// abre o mesmo fluxo de registro de pagamento que já provoca esse
-// recálculo no banco.
+// Rótulos UNIFICADOS (2026-08-29, requisito explícito): WAITING_PAYMENT e
+// DEPOSIT_RECEIVED mostram o mesmo texto "Ag. Pagamento" nesta badge — os
+// valores internos (payment_status) nunca mudam, só a apresentação. A
+// distinção entre "nunca pago" e "sinal recebido" continua visível no
+// histórico (OrderManagementPanel.tsx, rótulos distintos preservados ali de
+// propósito) e nos valores (Total pago/Saldo devedor, sempre exatos).
 const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = {
-  WAITING_PAYMENT: 'Aguardando pagamento',
-  DEPOSIT_RECEIVED: 'Sinal recebido',
+  WAITING_PAYMENT: 'Ag. Pagamento',
+  DEPOSIT_RECEIVED: 'Ag. Pagamento',
   PAID: 'Pago',
+}
+
+// Cores (2026-08-29, requisito explícito): Pago verde, Ag. Pagamento
+// amarelo — mesmos tokens/paletas de ORDER_STATUS_COLOR_CLASSNAMES
+// (OrderStatusControl.tsx), nunca uma paleta nova inventada. O texto
+// (sempre visível) já diferencia Pago de Ag. Pagamento por si só — a cor é
+// reforço, nunca a única pista.
+const PAYMENT_STATUS_COLOR_CLASSNAMES: Record<PaymentStatus, string> = {
+  WAITING_PAYMENT: 'border-amber-300 bg-amber-50 text-amber-800',
+  DEPOSIT_RECEIVED: 'border-amber-300 bg-amber-50 text-amber-800',
+  PAID: 'border-emerald-300 bg-emerald-50 text-emerald-800',
 }
 
 function toErrorMessage(err: unknown): string {
@@ -27,9 +37,9 @@ function toErrorMessage(err: unknown): string {
 
 // Mesma classe-base do badge de OrderStatusControl.tsx — os dois controles
 // de status da listagem (operacional e financeiro) precisam parecer a
-// mesma família visual, nunca dois padrões diferentes.
-const STATUS_BADGE_CLASSNAME =
-  'inline-flex items-center rounded-md border px-2 py-1 text-sm font-medium border-input text-muted-foreground'
+// mesma família visual, nunca dois padrões diferentes. Cor entra à parte
+// (PAYMENT_STATUS_COLOR_CLASSNAMES acima), nunca embutida aqui.
+const STATUS_BADGE_BASE_CLASSNAME = 'inline-flex items-center rounded-md border px-2 py-1 text-sm font-medium'
 
 export interface OrderPaymentStatusControlProps {
   orderId: string
@@ -115,7 +125,11 @@ export function OrderPaymentStatusControl({
         title="Clique para registrar um pagamento"
         aria-label={`Registrar pagamento — status financeiro: ${label}`}
         onClick={() => setIsDialogOpen(true)}
-        className={`${STATUS_BADGE_CLASSNAME} focus-visible:ring-brand-accent hover:border-brand-primary hover:text-brand-primary-dark cursor-pointer transition-colors outline-none focus-visible:ring-2`}
+        className={cn(
+          STATUS_BADGE_BASE_CLASSNAME,
+          PAYMENT_STATUS_COLOR_CLASSNAMES[paymentStatus],
+          'focus-visible:ring-brand-accent hover:border-brand-primary hover:text-brand-primary-dark cursor-pointer transition-colors outline-none focus-visible:ring-2',
+        )}
       >
         {label}
       </button>

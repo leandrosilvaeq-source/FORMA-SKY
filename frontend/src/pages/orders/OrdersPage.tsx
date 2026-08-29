@@ -1,16 +1,17 @@
 import { useMemo, useState } from 'react'
+import { Trash2Icon } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
 import { SearchAutocomplete, type SearchAutocompleteOption } from '@/components/search/SearchAutocomplete'
 import { OrderEditForm } from '@/components/orders/OrderEditForm'
-import { OrderForm } from '@/components/orders/OrderForm'
+import { OrderForm, type OrderFormSubmitValues } from '@/components/orders/OrderForm'
 import { OrderManagementPanel } from '@/components/orders/OrderManagementPanel'
 import { OrderPaymentStatusControl } from '@/components/orders/OrderPaymentStatusControl'
 import { OrderStatusControl } from '@/components/orders/OrderStatusControl'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useCompanies } from '@/hooks/useCompanies'
@@ -20,6 +21,7 @@ import { useOrders } from '@/hooks/useOrders'
 import { useProducts } from '@/hooks/useProducts'
 import { ApiError } from '@/lib/api/errors'
 import { updateQuoteOrder, type CreateOrderInput } from '@/lib/api/orders'
+import { isOrderOverdue } from '@/lib/orders/orderOverdue'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
 import { cn } from '@/lib/utils'
 import type { ItemType, OrderStatus, OrderSummary, PaymentMethod, PaymentStatus } from '@/types/domain'
@@ -72,9 +74,13 @@ const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   CANCELLED: 'Cancelado',
 }
 
+// Unificado (2026-08-29): usado só para ORDENAR a coluna "Status
+// financeiro" (o texto exibido de fato vem de OrderPaymentStatusControl,
+// que computa seu próprio rótulo) — mantido igual ao rótulo visível para a
+// ordenação bater com o que a badge mostra.
 const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = {
-  WAITING_PAYMENT: 'Aguardando pagamento',
-  DEPOSIT_RECEIVED: 'Sinal recebido',
+  WAITING_PAYMENT: 'Ag. Pagamento',
+  DEPOSIT_RECEIVED: 'Ag. Pagamento',
   PAID: 'Pago',
 }
 
@@ -296,7 +302,7 @@ function OrderStatusFilterBar({
 }
 
 export function OrdersPage() {
-  const { orders, isLoading, error, refetch, create } = useOrders()
+  const { orders, isLoading, error, refetch, createWithPayment, remove } = useOrders()
   const { customers } = useCustomers()
   const { companies } = useCompanies()
   const { leadSources } = useLeadSources()
@@ -308,6 +314,17 @@ export function OrdersPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [sort, setSort] = useState<SortState<OrderSortColumn> | null>(null)
   const [statusFilter, setStatusFilter] = useState<OrderStatusFilterValue>('all')
+
+  // Exclusão física protegida (2026-08-29) — mesmo padrão de InventoryPage.tsx/
+  // CustomersPage.tsx: deleteError fica dentro do próprio diálogo de
+  // confirmação (nunca vira toast) porque delete_order devolve uma
+  // mensagem de negócio (409: status/pagamento/aprovação) que o usuário
+  // precisa ver ali mesmo, com o diálogo continuando aberto. O pedido só
+  // sai da lista local depois do await resolver com sucesso.
+  const [deletingOrder, setDeletingOrder] = useState<OrderSummary | null>(null)
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   // Diálogo de edição ("Alterar pedido") — orderId presente = aberto, nulo
   // = fechado. isSubmitting/submitError seguem o MESMO padrão já usado
@@ -428,11 +445,20 @@ export function OrdersPage() {
     }
   }
 
-  async function handleSubmit(values: CreateOrderInput) {
+  // "Novo Pedido" com Forma de pagamento (2026-08-29): OrderForm em
+  // mode="create" (o único uso deste diálogo) sempre inclui
+  // payment_condition no objeto emitido — createWithPayment() chama
+  // create_order_with_payment(), que cria o pedido e (conforme a condição)
+  // registra o pagamento inicial numa única transação no banco. Nunca
+  // createOrder() "puro" aqui.
+  async function handleSubmit(values: OrderFormSubmitValues) {
     setIsSubmitting(true)
     setFormError(null)
     try {
-      await create(values)
+      await createWithPayment({
+        ...values,
+        payment_condition: values.payment_condition ?? 'ON_DELIVERY',
+      })
       toast.success('Pedido cadastrado.')
       setIsDialogOpen(false)
     } catch (err) {
@@ -444,6 +470,32 @@ export function OrdersPage() {
       }
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  function openDeleteDialog(order: OrderSummary) {
+    setDeletingOrder(order)
+    setDeleteError(null)
+    setIsDeleteDialogOpen(true)
+  }
+
+  // delete_order (Edge Function -> RPC) já bloqueia com 409 quando o
+  // pedido está fora de QUOTE/CANCELLED ou tem pagamento/aprovação/versão
+  // vinculados, com uma mensagem que já explica o motivo — exibida aqui tal
+  // qual, sem reescrever. Em bloqueio/erro, o pedido permanece exatamente
+  // como estava (nenhuma cascata) e o diálogo continua aberto e funcional.
+  async function handleConfirmDelete() {
+    if (!deletingOrder) return
+    setIsDeleting(true)
+    setDeleteError(null)
+    try {
+      await remove(deletingOrder.order_id)
+      toast.success(`Pedido ${deletingOrder.order_number} excluído.`)
+      setIsDeleteDialogOpen(false)
+    } catch (err) {
+      setDeleteError(toErrorMessage(err))
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -509,7 +561,7 @@ export function OrdersPage() {
           // truncamento/title previsível por coluna, mesmo padrão já
           // aprovado em Empresas.
           <div className="overflow-x-auto">
-            <Table className="min-w-[1360px] table-fixed text-[16px]">
+            <Table className="min-w-[1460px] table-fixed text-[16px]">
               <TableHeader>
                 <TableRow>
                   <SortableColumnHeader
@@ -559,7 +611,7 @@ export function OrdersPage() {
                     label="Método de pagamento"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[7%]"
+                    className="w-[4%]"
                   />
                   <SortableColumnHeader
                     column="delivery_method"
@@ -589,7 +641,7 @@ export function OrdersPage() {
                     onSortChange={setSort}
                     className="w-[7%]"
                   />
-                  <TableHead className="h-auto w-[11%] py-2 whitespace-normal">Ações</TableHead>
+                  <TableHead className="h-auto w-[14%] py-2 whitespace-normal">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -626,12 +678,22 @@ export function OrdersPage() {
                         {productsText ?? '—'}
                       </TableCell>
                       <TableCell className="truncate">
-                        <OrderStatusControl
-                          orderId={order.order_id}
-                          orderNumber={order.order_number}
-                          status={order.order_status}
-                          onChanged={refetch}
-                        />
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <OrderStatusControl
+                            orderId={order.order_id}
+                            orderNumber={order.order_number}
+                            status={order.order_status}
+                            onChanged={refetch}
+                          />
+                          {/* "Atrasado" — indicador visual derivado (nunca
+                              um status persistido), sempre ao lado do
+                              status operacional real, nunca no lugar dele. */}
+                          {isOrderOverdue(order.expected_delivery_date, order.order_status) && (
+                            <span className="border-destructive/40 bg-destructive/10 text-destructive inline-flex items-center rounded-md border px-2 py-1 text-xs font-medium">
+                              Atrasado
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="truncate">
                         <OrderPaymentStatusControl
@@ -672,6 +734,21 @@ export function OrdersPage() {
                             className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
                           >
                             Gerenciar pedido
+                          </Button>
+                          {/* Ícone de lixeira, variant="destructive" sutil
+                              (mesmo padrão de CustomersPage.tsx/
+                              InventoryPage.tsx) — nunca compete
+                              visualmente com os dois botões outline acima.
+                              aria-label/title carregam o número do pedido. */}
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => openDeleteDialog(order)}
+                            aria-label={`Excluir pedido ${order.order_number}`}
+                            title={`Excluir pedido ${order.order_number}`}
+                          >
+                            <Trash2Icon className="size-4" />
                           </Button>
                         </div>
                       </TableCell>
@@ -763,6 +840,37 @@ export function OrdersPage() {
               onChanged={refetch}
             />
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Excluir pedido</DialogTitle>
+            <DialogDescription>
+              {deletingOrder &&
+                `Tem certeza que deseja excluir o pedido ${deletingOrder.order_number}? Esta ação é permanente e não pode ser desfeita.`}
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && (
+            <p role="alert" className="text-destructive text-sm">
+              {deleteError}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsDeleteDialogOpen(false)}
+              disabled={isDeleting}
+              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+            >
+              Cancelar
+            </Button>
+            <Button type="button" variant="destructive" onClick={() => void handleConfirmDelete()} disabled={isDeleting}>
+              {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </AppLayout>

@@ -39,8 +39,9 @@ function renderControl(
   return onChanged
 }
 
+// "Tipo de pagamento" foi removido (2026-08-29, inferência automática) —
+// este helper não seleciona mais tipo, só método + valor.
 async function fillMinimalPayment(user: ReturnType<typeof userEvent.setup>, amountDigits: string) {
-  await user.click(screen.getByRole('radio', { name: 'Sinal' }))
   await user.click(screen.getByRole('radio', { name: 'Pix' }))
   await user.click(screen.getByLabelText(/^valor$/i))
   await user.keyboard(amountDigits)
@@ -54,20 +55,25 @@ describe('OrderPaymentStatusControl', () => {
   })
 
   it.each([
-    ['WAITING_PAYMENT', 'Aguardando pagamento'],
-    ['DEPOSIT_RECEIVED', 'Sinal recebido'],
+    ['WAITING_PAYMENT', 'Ag. Pagamento'],
+    ['DEPOSIT_RECEIVED', 'Ag. Pagamento'],
     ['PAID', 'Pago'],
-  ] as const)('renders the current payment_status label (%s -> %s), preserving the existing text', (status, label) => {
-    renderControl({ paymentStatus: status })
+  ] as const)(
+    'renders the current payment_status label (%s -> %s), unified text (2026-08-29)',
+    (status, label) => {
+      renderControl({ paymentStatus: status })
 
-    expect(screen.getByRole('button', { name: new RegExp(label, 'i') })).toHaveTextContent(label)
-  })
+      expect(screen.getByRole('button', { name: new RegExp(`status financeiro: ${label}`, 'i') })).toHaveTextContent(
+        label,
+      )
+    },
+  )
 
-  it('has an accessible name including the current financial status', () => {
+  it('has an accessible name including the current (unified) financial status', () => {
     renderControl({ paymentStatus: 'DEPOSIT_RECEIVED' })
 
     expect(
-      screen.getByRole('button', { name: 'Registrar pagamento — status financeiro: Sinal recebido' }),
+      screen.getByRole('button', { name: 'Registrar pagamento — status financeiro: Ag. Pagamento' }),
     ).toBeInTheDocument()
   })
 
@@ -80,14 +86,14 @@ describe('OrderPaymentStatusControl', () => {
     )
   })
 
-  it('clicking the badge opens the RegisterPaymentForm dialog', async () => {
+  it('clicking the badge opens the RegisterPaymentForm dialog (campo "Tipo de pagamento" removido, 2026-08-29)', async () => {
     const user = userEvent.setup()
     renderControl()
 
     await user.click(screen.getByRole('button', { name: /status financeiro/i }))
 
     expect(screen.getByRole('heading', { name: 'Registrar pagamento' })).toBeInTheDocument()
-    expect(screen.getByRole('radiogroup', { name: 'Tipo de pagamento' })).toBeInTheDocument()
+    expect(screen.queryByRole('radiogroup', { name: 'Tipo de pagamento' })).not.toBeInTheDocument()
     expect(screen.getByRole('radiogroup', { name: 'Método de pagamento' })).toBeInTheDocument()
     expect(screen.getByLabelText(/^valor$/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/data do pagamento/i)).toBeInTheDocument()
@@ -117,7 +123,7 @@ describe('OrderPaymentStatusControl', () => {
     expect(screen.getByText('R$ 500,00')).toBeInTheDocument()
   })
 
-  it('registers a partial (SINAL) payment: calls registerPayment with order_id injected, closes the dialog and calls onChanged', async () => {
+  it('registers a partial payment (amount < balance -> SINAL inferido): calls registerPayment with order_id injected, closes the dialog and calls onChanged', async () => {
     const user = userEvent.setup()
     const onChanged = renderControl({ paymentStatus: 'WAITING_PAYMENT' })
 
@@ -135,12 +141,11 @@ describe('OrderPaymentStatusControl', () => {
     expect(onChanged).toHaveBeenCalled()
   })
 
-  it('registers an INTEGRAL payment for the full balance due', async () => {
+  it('registers a full-balance payment with no prior payment (amount === balance, totalPaid = 0 -> INTEGRAL inferido)', async () => {
     const user = userEvent.setup()
-    const onChanged = renderControl({ balanceDue: 500 })
+    const onChanged = renderControl({ balanceDue: 500, totalPaid: 0 })
 
     await user.click(screen.getByRole('button', { name: /status financeiro/i }))
-    await user.click(screen.getByRole('radio', { name: 'Integral' }))
     await user.click(screen.getByRole('radio', { name: 'Cartão' }))
     await user.click(screen.getByLabelText(/^valor$/i))
     await user.keyboard('50000')
@@ -154,12 +159,29 @@ describe('OrderPaymentStatusControl', () => {
     expect(onChanged).toHaveBeenCalled()
   })
 
+  it('registers a full-balance payment WITH a prior payment (amount === balance, totalPaid > 0 -> FINAL inferido)', async () => {
+    const user = userEvent.setup()
+    const onChanged = renderControl({ orderTotal: 500, totalPaid: 300, balanceDue: 200 })
+
+    await user.click(screen.getByRole('button', { name: /status financeiro/i }))
+    await user.click(screen.getByRole('radio', { name: 'Cartão' }))
+    await user.click(screen.getByLabelText(/^valor$/i))
+    await user.keyboard('20000')
+    await user.click(screen.getByRole('button', { name: /^registrar pagamento$/i }))
+
+    await waitFor(() =>
+      expect(registerPaymentMock).toHaveBeenCalledWith(
+        expect.objectContaining({ order_id: 'o1', payment_type: 'FINAL', payment_method: 'CARTAO', amount: 200 }),
+      ),
+    )
+    expect(onChanged).toHaveBeenCalled()
+  })
+
   it('bloqueia um pagamento acima do saldo devedor (excedente) — regra confirmada em 2026-08-26, sem estar mais permitida', async () => {
     const user = userEvent.setup()
     const onChanged = renderControl({ balanceDue: 100 })
 
     await user.click(screen.getByRole('button', { name: /status financeiro/i }))
-    await user.click(screen.getByRole('radio', { name: 'Integral' }))
     await user.click(screen.getByRole('radio', { name: 'Pix' }))
     await user.click(screen.getByLabelText(/^valor$/i))
     await user.keyboard('20000')
@@ -195,12 +217,11 @@ describe('OrderPaymentStatusControl', () => {
     expect(screen.queryByRole('button', { name: /^registrar pagamento$/i })).not.toBeInTheDocument()
   })
 
-  it('AJUSTE negativo segue as regras já existentes do RegisterPaymentForm (exige observação)', async () => {
+  it('AJUSTE negativo (via o Switch, sem seleção de tipo — inferido automaticamente) segue as regras já existentes (exige observação)', async () => {
     const user = userEvent.setup()
     renderControl({ totalPaid: 100 })
 
     await user.click(screen.getByRole('button', { name: /status financeiro/i }))
-    await user.click(screen.getByRole('radio', { name: 'Ajuste' }))
     await user.click(screen.getByRole('radio', { name: 'Pix' }))
     await user.click(screen.getByRole('switch', { name: /ajuste negativo/i }))
     await user.click(screen.getByLabelText(/^valor$/i))

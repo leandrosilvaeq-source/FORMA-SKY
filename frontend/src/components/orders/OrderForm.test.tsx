@@ -1158,4 +1158,157 @@ describe('OrderForm', () => {
       )
     })
   })
+
+  describe('Forma de pagamento (2026-08-29) — só em "Novo Pedido" (mode="create")', () => {
+    it('mostra 3 action buttons (Adiantado/Sinal/Na entrega), com "Na entrega" pré-selecionada por padrão', () => {
+      renderForm()
+
+      const group = screen.getByRole('radiogroup', { name: 'Forma de pagamento' })
+      const options = within(group).getAllByRole('radio')
+      expect(options.map((option) => option.textContent)).toEqual(['Adiantado', 'Sinal', 'Na entrega'])
+      expect(within(group).getByRole('radio', { name: 'Na entrega' })).toHaveAttribute('aria-checked', 'true')
+    })
+
+    it('seleção exclusiva: escolher uma opção desmarca a anterior', async () => {
+      const user = userEvent.setup()
+      renderForm()
+
+      await clickRadio(user, 'Forma de pagamento', 'Adiantado')
+      expect(screen.getByRole('radio', { name: 'Adiantado' })).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByRole('radio', { name: 'Na entrega' })).toHaveAttribute('aria-checked', 'false')
+
+      await clickRadio(user, 'Forma de pagamento', 'Sinal')
+      expect(screen.getByRole('radio', { name: 'Sinal' })).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByRole('radio', { name: 'Adiantado' })).toHaveAttribute('aria-checked', 'false')
+    })
+
+    it('"Valor do sinal" só aparece quando Sinal está selecionado', async () => {
+      const user = userEvent.setup()
+      renderForm()
+
+      expect(screen.queryByLabelText(/valor do sinal/i)).not.toBeInTheDocument()
+
+      await clickRadio(user, 'Forma de pagamento', 'Sinal')
+      expect(screen.getByLabelText(/valor do sinal/i)).toBeInTheDocument()
+
+      await clickRadio(user, 'Forma de pagamento', 'Adiantado')
+      expect(screen.queryByLabelText(/valor do sinal/i)).not.toBeInTheDocument()
+    })
+
+    it('Adiantado: onSubmit recebe payment_condition ADVANCE, sem deposit_amount', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
+
+      await fillMinimalValidOrder(user)
+      await clickRadio(user, 'Forma de pagamento', 'Adiantado')
+      await user.click(screen.getByRole('button', { name: /^salvar pedido$/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ payment_condition: 'ADVANCE' }))
+      const payload = onSubmit.mock.calls[0][0]
+      expect('deposit_amount' in payload).toBe(false)
+    })
+
+    it('Na entrega (padrão): onSubmit recebe payment_condition ON_DELIVERY, sem deposit_amount', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
+
+      await fillMinimalValidOrder(user)
+      await user.click(screen.getByRole('button', { name: /^salvar pedido$/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ payment_condition: 'ON_DELIVERY' }))
+      const payload = onSubmit.mock.calls[0][0]
+      expect('deposit_amount' in payload).toBe(false)
+    })
+
+    it('Sinal: informar um valor válido (menor que o total) envia payment_condition DEPOSIT e deposit_amount', async () => {
+      // Chaveiro (p1) tem default_price 25 — total do pedido com 1 unidade = 25.
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
+
+      await fillMinimalValidOrder(user)
+      await clickRadio(user, 'Forma de pagamento', 'Sinal')
+      await user.click(screen.getByLabelText(/valor do sinal/i))
+      await user.keyboard('1000')
+      await user.click(screen.getByRole('button', { name: /^salvar pedido$/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ payment_condition: 'DEPOSIT', deposit_amount: 10 }),
+      )
+    })
+
+    it('Sinal: valor zero é bloqueado', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
+
+      await fillMinimalValidOrder(user)
+      await clickRadio(user, 'Forma de pagamento', 'Sinal')
+      await user.click(screen.getByRole('button', { name: /^salvar pedido$/i }))
+
+      expect(await screen.findByText('Informe o valor do sinal.')).toBeInTheDocument()
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('Sinal: valor igual ao total do pedido é bloqueado (precisa ser MENOR que o total)', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
+
+      await fillMinimalValidOrder(user)
+      await clickRadio(user, 'Forma de pagamento', 'Sinal')
+      await user.click(screen.getByLabelText(/valor do sinal/i))
+      await user.keyboard('2500') // R$ 25,00 == total do pedido (Chaveiro, qty 1)
+      await user.click(screen.getByRole('button', { name: /^salvar pedido$/i }))
+
+      expect(
+        await screen.findByText('O valor do sinal deve ser menor que o total do pedido.'),
+      ).toBeInTheDocument()
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('Sinal: valor acima do total do pedido é bloqueado', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
+
+      await fillMinimalValidOrder(user)
+      await clickRadio(user, 'Forma de pagamento', 'Sinal')
+      await user.click(screen.getByLabelText(/valor do sinal/i))
+      await user.keyboard('9900') // R$ 99,00 > total (R$ 25,00)
+      await user.click(screen.getByRole('button', { name: /^salvar pedido$/i }))
+
+      expect(
+        await screen.findByText('O valor do sinal deve ser menor que o total do pedido.'),
+      ).toBeInTheDocument()
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('modo de edição (mode="edit") nunca renderiza "Forma de pagamento" nem inclui payment_condition/deposit_amount no objeto emitido — edição nunca recria o pagamento inicial', async () => {
+      const editInitialValues = {
+        companyId: null,
+        customerId: 'c1',
+        leadSourceId: 'l1',
+        paymentMethod: 'PIX' as const,
+        deliveryMethod: 'Correios',
+        shippingCost: 15.5,
+        expectedDeliveryDate: '2026-08-25',
+        notes: 'Observação existente',
+        items: [{ productId: 'p1', quantity: 2, unitPrice: 25, personalizationFee: 0 }],
+      }
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm({
+        mode: 'edit',
+        orderNumber: 'FS-26-001',
+        orderStatusLabel: 'Orçamento',
+        paymentStatusLabel: 'Ag. Pagamento',
+        initialValues: editInitialValues,
+      })
+
+      expect(screen.queryByRole('radiogroup', { name: 'Forma de pagamento' })).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: /salvar alterações/i }))
+
+      expect(onSubmit).toHaveBeenCalled()
+      const payload = onSubmit.mock.calls[0][0]
+      expect('payment_condition' in payload).toBe(false)
+      expect('deposit_amount' in payload).toBe(false)
+    })
+  })
 })

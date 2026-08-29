@@ -217,6 +217,10 @@ function mockOrders(
   list: OrderSummary[],
   overrides: Partial<{ isLoading: boolean; error: unknown; refetch: ReturnType<typeof vi.fn> }> = {},
   createMock: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({ id: list[0]?.order_id }),
+  createWithPaymentMock: ReturnType<typeof vi.fn> = vi
+    .fn()
+    .mockResolvedValue({ id: list[0]?.order_id, payment_id: null }),
+  removeMock: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined),
 ) {
   useOrdersMock.mockReturnValue({
     orders: list,
@@ -224,6 +228,8 @@ function mockOrders(
     error: overrides.error ?? null,
     refetch: overrides.refetch ?? vi.fn(),
     create: createMock,
+    createWithPayment: createWithPaymentMock,
+    remove: removeMock,
   })
 }
 
@@ -273,10 +279,14 @@ describe('formatDateOnly', () => {
 
 describe('OrdersPage', () => {
   let createMock: ReturnType<typeof vi.fn>
+  let createWithPaymentMock: ReturnType<typeof vi.fn>
+  let removeMock: ReturnType<typeof vi.fn>
   let refetchMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     createMock = vi.fn().mockResolvedValue({ id: 'o1' })
+    createWithPaymentMock = vi.fn().mockResolvedValue({ id: 'o1', payment_id: null })
+    removeMock = vi.fn().mockResolvedValue(undefined)
     refetchMock = vi.fn()
 
     useAuthMock.mockReturnValue({ session: { user: { email: 'op@formasky.com' } }, signOut: vi.fn() })
@@ -286,6 +296,8 @@ describe('OrdersPage', () => {
       error: null,
       refetch: refetchMock,
       create: createMock,
+      createWithPayment: createWithPaymentMock,
+      remove: removeMock,
     })
     useCustomersMock.mockReturnValue({ customers: [customer], isLoading: false, error: null, refetch: vi.fn() })
     useCompaniesMock.mockReturnValue({ companies: [company], isLoading: false, error: null, refetch: vi.fn() })
@@ -319,7 +331,7 @@ describe('OrdersPage', () => {
     expect(screen.getByText('FS-26-001')).toBeInTheDocument()
     expect(screen.getByText('Ana Cliente')).toBeInTheDocument()
     expect(screen.getByText('Orçamento')).toBeInTheDocument()
-    expect(screen.getByText('Aguardando pagamento')).toBeInTheDocument()
+    expect(screen.getByText('Ag. Pagamento')).toBeInTheDocument()
     expect(screen.getByText('Pix')).toBeInTheDocument()
     expect(screen.getByText('Correios')).toBeInTheDocument()
     expect(screen.getByText('Catálogo')).toBeInTheDocument()
@@ -531,7 +543,7 @@ describe('OrdersPage', () => {
     expect(screen.getByText('Nenhum pedido cadastrado.')).toBeInTheDocument()
   })
 
-  it('opens the dialog, submits a new order with a Catálogo item and shows a success toast', async () => {
+  it('opens the dialog, submits a new order with a Catálogo item and shows a success toast (criação atômica via createWithPayment, 2026-08-29)', async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -543,17 +555,21 @@ describe('OrdersPage', () => {
     await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
 
     await waitFor(() =>
-      expect(createMock).toHaveBeenCalledWith(
+      expect(createWithPaymentMock).toHaveBeenCalledWith(
         expect.objectContaining({
           customer_id: 'c1',
           items: [expect.objectContaining({ item_type: 'CATALOG', product_id: 'p1', quantity: 1, unit_price: 25 })],
+          // "Na entrega" é a Forma de pagamento pré-selecionada por padrão —
+          // nenhum pagamento inicial nesta chamada.
+          payment_condition: 'ON_DELIVERY',
         }),
       ),
     )
+    expect(createMock).not.toHaveBeenCalled()
     expect(toastMock.success).toHaveBeenCalledWith('Pedido cadastrado.')
   })
 
-  it('envia payment_method e expected_delivery_date escolhidos no formulário, atomicamente na criação (mesmo POST)', async () => {
+  it('envia payment_method e expected_delivery_date escolhidos no formulário, atomicamente na criação (mesma chamada createWithPayment)', async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -567,10 +583,11 @@ describe('OrdersPage', () => {
     await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
 
     await waitFor(() =>
-      expect(createMock).toHaveBeenCalledWith(
+      expect(createWithPaymentMock).toHaveBeenCalledWith(
         expect.objectContaining({
           payment_method: 'PIX',
           expected_delivery_date: '2026-09-01',
+          payment_condition: 'ON_DELIVERY',
         }),
       ),
     )
@@ -586,7 +603,7 @@ describe('OrdersPage', () => {
     await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
 
     await waitFor(() =>
-      expect(createMock).toHaveBeenCalledWith(
+      expect(createWithPaymentMock).toHaveBeenCalledWith(
         expect.objectContaining({
           payment_method: null,
           expected_delivery_date: null,
@@ -603,7 +620,7 @@ describe('OrdersPage', () => {
     await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
 
     expect(await screen.findByText('Selecione um cliente.')).toBeInTheDocument()
-    expect(createMock).not.toHaveBeenCalled()
+    expect(createWithPaymentMock).not.toHaveBeenCalled()
   })
 
   it('shows an inline error with a retry action when the list fails to load', async () => {
@@ -631,8 +648,8 @@ describe('OrdersPage', () => {
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
   })
 
-  it('shows a validation ApiError from create() inline, not as a toast', async () => {
-    createMock.mockRejectedValue(new ApiError('validation', 400, 'cliente inválido'))
+  it('shows a validation ApiError from createWithPayment() inline, not as a toast', async () => {
+    createWithPaymentMock.mockRejectedValue(new ApiError('validation', 400, 'cliente inválido'))
     const user = userEvent.setup()
     renderPage()
 
@@ -645,8 +662,8 @@ describe('OrdersPage', () => {
     expect(toastMock.error).not.toHaveBeenCalled()
   })
 
-  it('shows a non-validation ApiError from create() via toast, not inline', async () => {
-    createMock.mockRejectedValue(new ApiError('business_rule', 409, 'conflito de negócio'))
+  it('shows a non-validation ApiError from createWithPayment() via toast, not inline', async () => {
+    createWithPaymentMock.mockRejectedValue(new ApiError('business_rule', 409, 'conflito de negócio'))
     const user = userEvent.setup()
     renderPage()
 
@@ -656,6 +673,93 @@ describe('OrdersPage', () => {
     await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
 
     await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('conflito de negócio'))
+  })
+
+  it('DEPOSIT: envia payment_condition DEPOSIT e deposit_amount na mesma chamada createWithPayment (Sinal atômico)', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /novo pedido/i }))
+    await selectOption(user, 'Cliente/Contato', 'Ana Cliente')
+    await selectOption(user, 'Produto', 'Chaveiro')
+    await clickRadio(user, 'Forma de pagamento', 'Sinal')
+    await user.click(screen.getByLabelText(/valor do sinal/i))
+    await user.keyboard('1000')
+    await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+
+    await waitFor(() =>
+      expect(createWithPaymentMock).toHaveBeenCalledWith(
+        expect.objectContaining({ payment_condition: 'DEPOSIT', deposit_amount: 10 }),
+      ),
+    )
+  })
+
+  it('ADVANCE: envia payment_condition ADVANCE na mesma chamada createWithPayment (Adiantado atômico)', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /novo pedido/i }))
+    await selectOption(user, 'Cliente/Contato', 'Ana Cliente')
+    await selectOption(user, 'Produto', 'Chaveiro')
+    await clickRadio(user, 'Forma de pagamento', 'Adiantado')
+    await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+
+    await waitFor(() =>
+      expect(createWithPaymentMock).toHaveBeenCalledWith(expect.objectContaining({ payment_condition: 'ADVANCE' })),
+    )
+  })
+
+  it('falha do pagamento (retornada pela RPC atômica): o pedido nunca fica criado — nenhuma chamada extra separada, erro mostrado inline', async () => {
+    // create_order_with_payment (RPC) desfaz o INSERT do pedido inteiro
+    // quando o pagamento falha — do ponto de vista do frontend, isso é
+    // representado por createWithPayment() rejeitando (uma ÚNICA chamada,
+    // nunca duas requisições HTTP separadas); a listagem nunca reflete um
+    // pedido "meio criado".
+    // Valor válido do lado do cliente (R$ 10,00 < total R$ 25,00) — a
+    // validação client-side de OrderForm não bloqueia; o objetivo aqui é o
+    // erro REAL vindo do backend (create_order_with_payment), simulando o
+    // caso em que o pagamento falhou depois do pedido já ter sido criado
+    // dentro da mesma transação — a RPC desfaz tudo, então o frontend nunca
+    // vê um pedido "meio criado": uma única chamada rejeitada, nada na
+    // listagem.
+    createWithPaymentMock.mockRejectedValue(new ApiError('validation', 400, 'Pagamento inicial recusado pelo banco'))
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /novo pedido/i }))
+    await selectOption(user, 'Cliente/Contato', 'Ana Cliente')
+    await selectOption(user, 'Produto', 'Chaveiro')
+    await clickRadio(user, 'Forma de pagamento', 'Sinal')
+    await user.click(screen.getByLabelText(/valor do sinal/i))
+    await user.keyboard('1000')
+    await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+
+    expect(await screen.findByText('Pagamento inicial recusado pelo banco')).toBeInTheDocument()
+    expect(createWithPaymentMock).toHaveBeenCalledTimes(1)
+    expect(refetchMock).not.toHaveBeenCalled()
+  })
+
+  it('bloqueia duplo envio na criação: o botão "Salvando..." fica desabilitado durante a requisição, evitando retry duplicado', async () => {
+    let resolvePromise: (value: { id: string; payment_id: string | null }) => void = () => {}
+    createWithPaymentMock.mockReturnValue(
+      new Promise<{ id: string; payment_id: string | null }>((resolve) => {
+        resolvePromise = resolve
+      }),
+    )
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /novo pedido/i }))
+    await selectOption(user, 'Cliente/Contato', 'Ana Cliente')
+    await selectOption(user, 'Produto', 'Chaveiro')
+    await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+
+    expect(screen.getByRole('button', { name: /salvando/i })).toBeDisabled()
+    expect(createWithPaymentMock).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      resolvePromise({ id: 'o1', payment_id: null })
+      await Promise.resolve()
+    })
   })
 
   describe('coluna Ações — "Alterar pedido"', () => {
@@ -1206,14 +1310,14 @@ describe('OrdersPage', () => {
   })
 
   describe('Alterar status financeiro diretamente pela listagem (coluna Status financeiro)', () => {
-    it('mostra um badge clicável com o texto do status financeiro atual', () => {
+    it('mostra um badge clicável com o texto do status financeiro atual (unificado "Ag. Pagamento", 2026-08-29)', () => {
       renderPage()
 
       const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
-      expect(within(row).getByRole('button', { name: /status financeiro: aguardando pagamento/i })).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: /status financeiro: ag\. pagamento/i })).toBeInTheDocument()
     })
 
-    it('clicar no status financeiro abre o RegisterPaymentForm com os totais corretos do pedido', async () => {
+    it('clicar no status financeiro abre o RegisterPaymentForm com os totais corretos do pedido (campo "Tipo de pagamento" removido)', async () => {
       const user = userEvent.setup()
       renderPage()
 
@@ -1221,7 +1325,8 @@ describe('OrdersPage', () => {
       await user.click(within(row).getByRole('button', { name: /status financeiro/i }))
 
       expect(screen.getByRole('heading', { name: 'Registrar pagamento' })).toBeInTheDocument()
-      expect(screen.getByRole('radiogroup', { name: 'Tipo de pagamento' })).toBeInTheDocument()
+      expect(screen.queryByRole('radiogroup', { name: 'Tipo de pagamento' })).not.toBeInTheDocument()
+      expect(screen.getByRole('radiogroup', { name: 'Método de pagamento' })).toBeInTheDocument()
       // orderSummary: total_receivable=50, total_paid=0, balance_due=50
       const totals = screen.getAllByText('R$ 50,00')
       expect(totals.length).toBeGreaterThanOrEqual(2)
@@ -1246,7 +1351,6 @@ describe('OrdersPage', () => {
       const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
       await user.click(within(row).getByRole('button', { name: /status financeiro/i }))
 
-      await user.click(screen.getByRole('radio', { name: 'Sinal' }))
       await user.click(screen.getByRole('radio', { name: 'Pix' }))
       await user.click(screen.getByLabelText(/^valor$/i))
       await user.keyboard('2000')
@@ -1254,6 +1358,7 @@ describe('OrdersPage', () => {
 
       await waitFor(() =>
         expect(registerPaymentMock).toHaveBeenCalledWith(
+          // orderSummary balance_due=50: 20 < 50 -> SINAL inferido automaticamente.
           expect.objectContaining({ order_id: 'o1', payment_type: 'SINAL', payment_method: 'PIX', amount: 20 }),
         ),
       )
@@ -1269,7 +1374,6 @@ describe('OrdersPage', () => {
 
       const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
       await user.click(within(row).getByRole('button', { name: /status financeiro/i }))
-      await user.click(screen.getByRole('radio', { name: 'Sinal' }))
       await user.click(screen.getByRole('radio', { name: 'Pix' }))
       await user.click(screen.getByLabelText(/^valor$/i))
       await user.keyboard('2000')
@@ -1291,7 +1395,6 @@ describe('OrdersPage', () => {
 
       const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
       await user.click(within(row).getByRole('button', { name: /status financeiro/i }))
-      await user.click(screen.getByRole('radio', { name: 'Sinal' }))
       await user.click(screen.getByRole('radio', { name: 'Pix' }))
       await user.click(screen.getByLabelText(/^valor$/i))
       await user.keyboard('2000')
@@ -1882,7 +1985,7 @@ describe('OrdersPage', () => {
       expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-QUOTE', 'ORD-DELIVERED', 'ORD-APPROVED'])
     })
 
-    it('coluna Status financeiro: ordena pelo rótulo exibido, crescente e decrescente', async () => {
+    it('coluna Status financeiro: ordena pelo rótulo exibido (unificado, 2026-08-29) — WAITING_PAYMENT/DEPOSIT_RECEIVED empatam em "Ag. Pagamento" e preservam a ordem original entre si (sort estável)', async () => {
       mockOrders([
         { ...orderSummary, order_id: 'o1', order_number: 'ORD-WAITING', payment_status: 'WAITING_PAYMENT' },
         { ...orderSummary, order_id: 'o2', order_number: 'ORD-PAID', payment_status: 'PAID' },
@@ -1891,12 +1994,13 @@ describe('OrdersPage', () => {
       const user = userEvent.setup()
       renderPage()
 
-      // Rótulos: "Aguardando pagamento", "Pago", "Sinal recebido".
+      // Rótulos: WAITING_PAYMENT e DEPOSIT_RECEIVED -> "Ag. Pagamento" (empate,
+      // sort estável preserva a ordem original o1 antes de o3); PAID -> "Pago".
       await applySort(user, 'Status financeiro', 'Ordenar crescente')
-      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-WAITING', 'ORD-PAID', 'ORD-DEPOSIT'])
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-WAITING', 'ORD-DEPOSIT', 'ORD-PAID'])
 
       await applySort(user, 'Status financeiro', 'Ordenar decrescente')
-      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-DEPOSIT', 'ORD-PAID', 'ORD-WAITING'])
+      expect(getVisibleOrderNumbersInOrder()).toEqual(['ORD-PAID', 'ORD-WAITING', 'ORD-DEPOSIT'])
     })
 
     it('coluna Método de pagamento: ordena pelo rótulo exibido; ausente (null) sempre no final', async () => {
@@ -2177,6 +2281,235 @@ describe('OrdersPage', () => {
         expect(row).toHaveClass('odd:bg-brand-primary-soft/50')
         expect(row).toHaveClass('even:bg-white')
       }
+    })
+  })
+
+  describe('Exclusão física protegida de pedido (2026-08-29)', () => {
+    it('terceiro botão "Excluir pedido" ao lado de "Alterar pedido"/"Gerenciar pedido", sem sobreposição', () => {
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      expect(within(row).getByRole('button', { name: /^alterar pedido$/i })).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: /^gerenciar pedido$/i })).toBeInTheDocument()
+      const deleteButton = within(row).getByRole('button', { name: 'Excluir pedido FS-26-001' })
+      expect(deleteButton).toBeInTheDocument()
+      expect(deleteButton).toHaveAttribute('title', 'Excluir pedido FS-26-001')
+    })
+
+    it('exige confirmação explícita mostrando o número do pedido — nada é chamado até confirmar', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir pedido FS-26-001' }))
+
+      expect(screen.getByRole('heading', { name: 'Excluir pedido' })).toBeInTheDocument()
+      expect(screen.getByText(/tem certeza que deseja excluir o pedido fs-26-001/i)).toBeInTheDocument()
+      expect(removeMock).not.toHaveBeenCalled()
+    })
+
+    it('cancelar a confirmação não chama remove nem altera a listagem', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir pedido FS-26-001' }))
+      await user.click(screen.getByRole('button', { name: /^cancelar$/i }))
+
+      expect(screen.queryByRole('heading', { name: 'Excluir pedido' })).not.toBeInTheDocument()
+      expect(removeMock).not.toHaveBeenCalled()
+      expect(screen.getByText('FS-26-001')).toBeInTheDocument()
+    })
+
+    it('pedido em QUOTE sem pagamento/aprovação: confirmar exclui, mostra toast e atualiza a listagem', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir pedido FS-26-001' }))
+      await user.click(screen.getByRole('button', { name: /excluir definitivamente/i }))
+
+      await waitFor(() => expect(removeMock).toHaveBeenCalledWith('o1'))
+      expect(toastMock.success).toHaveBeenCalledWith('Pedido FS-26-001 excluído.')
+      await waitFor(() => expect(screen.queryByRole('heading', { name: 'Excluir pedido' })).not.toBeInTheDocument())
+    })
+
+    it('bloqueio por status (fora de QUOTE/CANCELLED): erro real do backend exibido inline, pedido preservado', async () => {
+      const blockedRemove = vi
+        .fn()
+        .mockRejectedValue(
+          new ApiError('business_rule', 409, 'Só é possível excluir pedidos em Orçamento ou Cancelado (status atual: APPROVED).'),
+        )
+      mockOrders([orderSummary], {}, createMock, createWithPaymentMock, blockedRemove)
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir pedido FS-26-001' }))
+      await user.click(screen.getByRole('button', { name: /excluir definitivamente/i }))
+
+      expect(
+        await screen.findByText('Só é possível excluir pedidos em Orçamento ou Cancelado (status atual: APPROVED).'),
+      ).toBeInTheDocument()
+      expect(screen.getByText('FS-26-001')).toBeInTheDocument()
+    })
+
+    it('bloqueio por pagamento vinculado: erro real do backend exibido inline, pedido preservado', async () => {
+      const blockedRemove = vi
+        .fn()
+        .mockRejectedValue(
+          new ApiError('business_rule', 409, 'Este pedido possui pagamento(s) registrado(s) e não pode ser excluído.'),
+        )
+      mockOrders([orderSummary], {}, createMock, createWithPaymentMock, blockedRemove)
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir pedido FS-26-001' }))
+      await user.click(screen.getByRole('button', { name: /excluir definitivamente/i }))
+
+      expect(
+        await screen.findByText('Este pedido possui pagamento(s) registrado(s) e não pode ser excluído.'),
+      ).toBeInTheDocument()
+      expect(screen.getByText('FS-26-001')).toBeInTheDocument()
+    })
+
+    it('bloqueio por aprovação vinculada: erro real do backend exibido inline, pedido preservado', async () => {
+      const blockedRemove = vi
+        .fn()
+        .mockRejectedValue(
+          new ApiError('business_rule', 409, 'Este pedido possui aprovação(ões) registrada(s) e não pode ser excluído.'),
+        )
+      mockOrders([orderSummary], {}, createMock, createWithPaymentMock, blockedRemove)
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir pedido FS-26-001' }))
+      await user.click(screen.getByRole('button', { name: /excluir definitivamente/i }))
+
+      expect(
+        await screen.findByText('Este pedido possui aprovação(ões) registrada(s) e não pode ser excluído.'),
+      ).toBeInTheDocument()
+      expect(screen.getByText('FS-26-001')).toBeInTheDocument()
+    })
+
+    it('exclusão nunca apaga Cliente/Empresa/Produto: a chamada é escopada só ao id do pedido (delete_order, nunca uma função de excluir customers/companies/products)', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir pedido FS-26-001' }))
+      await user.click(screen.getByRole('button', { name: /excluir definitivamente/i }))
+
+      await waitFor(() => expect(removeMock).toHaveBeenCalledWith('o1'))
+      // A única chamada de exclusão feita por esta ação é remove(orderId) —
+      // nenhum outro identificador (customer_id/company_id/product_id) é
+      // passado a ela, e nenhuma outra função de exclusão existe nesta
+      // página para Clientes/Empresas/Produtos.
+      expect(removeMock).toHaveBeenCalledTimes(1)
+      expect(removeMock.mock.calls[0]).toEqual(['o1'])
+    })
+
+    it('bloqueia duplo envio: o botão fica desabilitado durante a requisição', async () => {
+      let resolvePromise: () => void = () => {}
+      const pendingRemove = vi.fn().mockReturnValue(
+        new Promise<void>((resolve) => {
+          resolvePromise = resolve
+        }),
+      )
+      mockOrders([orderSummary], {}, createMock, createWithPaymentMock, pendingRemove)
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir pedido FS-26-001' }))
+      await user.click(screen.getByRole('button', { name: /excluir definitivamente/i }))
+
+      expect(screen.getByRole('button', { name: /excluindo/i })).toBeDisabled()
+      expect(pendingRemove).toHaveBeenCalledTimes(1)
+      resolvePromise()
+    })
+  })
+
+  describe('Cores dos status operacional e financeiro + "Atrasado" (2026-08-29)', () => {
+    const ORDER_STATUS_LABELS_FOR_TEST = {
+      QUOTE: 'Orçamento',
+      WAITING_APPROVAL: 'Aguardando aprovação',
+      APPROVED: 'Aprovado',
+      IN_PRODUCTION_QUEUE: 'Fila de produção',
+      IN_PRODUCTION: 'Em produção',
+      WAITING_DELIVERY: 'Aguardando entrega',
+      DELIVERED: 'Entregue',
+    } as const
+
+    it.each([
+      ['QUOTE', 'border-blue-300'],
+      ['WAITING_APPROVAL', 'border-amber-300'],
+      ['APPROVED', 'border-blue-300'],
+      ['IN_PRODUCTION_QUEUE', 'border-amber-300'],
+      ['IN_PRODUCTION', 'border-blue-300'],
+      ['WAITING_DELIVERY', 'border-amber-300'],
+      ['DELIVERED', 'border-emerald-300'],
+    ] as const)('status operacional %s tem a classe de cor %s', (status, colorClass) => {
+      mockOrders([{ ...orderSummary, order_status: status }])
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      const label = ORDER_STATUS_LABELS_FOR_TEST[status]
+      expect(within(row).getByText(label)).toHaveClass(colorClass)
+    })
+
+    it('CANCELLED é um badge estático (terminal) com a classe de cor vermelha (token destructive)', () => {
+      mockOrders([{ ...orderSummary, order_status: 'CANCELLED' }])
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      expect(within(row).getByText('Cancelado')).toHaveClass('border-destructive/40')
+    })
+
+    it('status financeiro Pago tem a classe de cor verde; Ag. Pagamento tem a classe de cor amarela', () => {
+      mockOrders([
+        { ...orderSummary, order_id: 'o1', order_number: 'FS-26-001', payment_status: 'PAID' },
+      ])
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      expect(within(row).getByRole('button', { name: /status financeiro/i })).toHaveClass('border-emerald-300')
+    })
+
+    it('"Atrasado" aparece para um pedido com prazo vencido, ainda não entregue/cancelado, sem alterar o status operacional real', () => {
+      mockOrders([
+        { ...orderSummary, order_status: 'APPROVED', expected_delivery_date: '2000-01-01' },
+      ])
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      expect(within(row).getByText('Atrasado')).toBeInTheDocument()
+      // Status operacional real continua visível e correto, ao lado.
+      expect(within(row).getByText('Aprovado')).toBeInTheDocument()
+    })
+
+    it('"Atrasado" NÃO aparece para um pedido DELIVERED, mesmo com prazo no passado', () => {
+      mockOrders([
+        { ...orderSummary, order_status: 'DELIVERED', expected_delivery_date: '2000-01-01' },
+      ])
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      expect(within(row).queryByText('Atrasado')).not.toBeInTheDocument()
+    })
+
+    it('"Atrasado" NÃO aparece para um pedido CANCELLED, mesmo com prazo no passado', () => {
+      mockOrders([
+        { ...orderSummary, order_status: 'CANCELLED', expected_delivery_date: '2000-01-01' },
+      ])
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      expect(within(row).queryByText('Atrasado')).not.toBeInTheDocument()
+    })
+
+    it('"Atrasado" NÃO aparece quando o prazo ainda não venceu', () => {
+      mockOrders([
+        { ...orderSummary, order_status: 'APPROVED', expected_delivery_date: '2999-01-01' },
+      ])
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      expect(within(row).queryByText('Atrasado')).not.toBeInTheDocument()
     })
   })
 })
