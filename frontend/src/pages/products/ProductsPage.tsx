@@ -6,6 +6,7 @@ import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeade
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { ProductCompositionForm } from '@/components/products/ProductCompositionForm'
+import { FilamentCompositionForm } from '@/components/products/FilamentCompositionForm'
 import { ProductForm } from '@/components/products/ProductForm'
 import { ProductPriceForm } from '@/components/products/ProductPriceForm'
 import { Button } from '@/components/ui/button'
@@ -14,13 +15,16 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useAccessories } from '@/hooks/useAccessories'
+import { useFilamentTypes } from '@/hooks/useFilamentTypes'
 import { usePackaging } from '@/hooks/usePackaging'
 import { useProductComposition } from '@/hooks/useProductComposition'
+import { useProductFilaments } from '@/hooks/useProductFilaments'
 import { useProducts } from '@/hooks/useProducts'
 import { ApiError } from '@/lib/api/errors'
 import { formatSecondsToHHMMSS } from '@/lib/forms/durationField'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
 import type { UpdateProductCompositionInput } from '@/lib/api/productComposition'
+import type { UpdateProductFilamentsInput } from '@/lib/api/productFilaments'
 import type { CreateProductInput, UpdateProductPriceInput } from '@/lib/api/products'
 import type { Product, ProductType } from '@/types/domain'
 
@@ -102,6 +106,16 @@ export function ProductsPage() {
   const [compositionError, setCompositionError] = useState<string | null>(null)
   const composition = useProductComposition(compositionDialogProduct?.id ?? null)
 
+  // Filamentos (Módulo 3, Incremento 6A) — estado próprio, independente do
+  // de Acessórios/Embalagens acima: salvamento separado e atômico (nunca
+  // reaproveita isSubmittingComposition/compositionError). filamentTypesHook
+  // só é usado para preencher as opções do Select desta seção — nenhuma
+  // relação com useAccessories/usePackaging já existentes.
+  const [isSubmittingFilaments, setIsSubmittingFilaments] = useState(false)
+  const [filamentsError, setFilamentsError] = useState<string | null>(null)
+  const filamentComposition = useProductFilaments(compositionDialogProduct?.id ?? null)
+  const filamentTypesHook = useFilamentTypes()
+
   // Busca: só pelo nome (product.name), local sobre `products` já
   // carregados — nenhuma nova chamada a useProducts/API a cada tecla
   // digitada.
@@ -157,6 +171,7 @@ export function ProductsPage() {
 
   function openCompositionDialog(product: Product) {
     setCompositionError(null)
+    setFilamentsError(null)
     setCompositionDialogProduct(product)
   }
 
@@ -215,6 +230,31 @@ export function ProductsPage() {
       }
     } finally {
       setIsSubmittingComposition(false)
+    }
+  }
+
+  // Independente de handleCompositionSubmit acima: chama
+  // filamentComposition.save (Edge Function -> set_product_filaments, RPC
+  // própria) — nunca a mesma chamada/transação de Acessórios/Embalagens.
+  // Uma falha aqui nunca desfaz nem impede um salvamento de
+  // Acessórios/Embalagens já concluído (ou vice-versa) — são duas operações
+  // atômicas independentes, cada uma numa única transação Postgres própria.
+  async function handleFilamentsSubmit(values: UpdateProductFilamentsInput) {
+    setIsSubmittingFilaments(true)
+    setFilamentsError(null)
+    try {
+      await filamentComposition.save(values)
+      toast.success('Filamentos atualizados.')
+      setCompositionDialogProduct(null)
+    } catch (err) {
+      const message = toErrorMessage(err)
+      if (err instanceof ApiError && err.type === 'validation') {
+        setFilamentsError(message)
+      } else {
+        toast.error(message)
+      }
+    } finally {
+      setIsSubmittingFilaments(false)
     }
   }
 
@@ -492,6 +532,56 @@ export function ProductsPage() {
               onCancel={() => setCompositionDialogProduct(null)}
             />
           )}
+
+          {/* Filamentos (Módulo 3, Incremento 6A) — seção própria dentro do
+              mesmo diálogo "Composição do Produto", mas com carregamento,
+              erro e salvamento inteiramente independentes da seção de
+              Acessórios/Embalagens acima (nunca a mesma requisição, nunca o
+              mesmo estado de submitting/erro). */}
+          <div className="border-border mt-2 flex flex-col gap-3 border-t pt-4">
+            {compositionDialogProduct &&
+              (filamentComposition.status === 'idle' ||
+                filamentComposition.status === 'loading' ||
+                filamentTypesHook.isLoading) && (
+                <div className="flex flex-col gap-2">
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                </div>
+              )}
+            {compositionDialogProduct &&
+              !filamentTypesHook.isLoading &&
+              filamentComposition.status !== 'loading' &&
+              filamentComposition.status !== 'idle' &&
+              filamentTypesHook.error && (
+                <div className="border-destructive/50 bg-destructive/10 flex items-center justify-between rounded-lg border p-3 text-sm">
+                  <span>{toErrorMessage(filamentTypesHook.error)}</span>
+                  <Button variant="outline" size="sm" onClick={filamentTypesHook.refetch}>
+                    Tentar novamente
+                  </Button>
+                </div>
+              )}
+            {compositionDialogProduct && filamentComposition.status === 'error' && (
+              <div className="border-destructive/50 bg-destructive/10 flex items-center justify-between rounded-lg border p-3 text-sm">
+                <span>{toErrorMessage(filamentComposition.error)}</span>
+                <Button variant="outline" size="sm" onClick={filamentComposition.retry}>
+                  Tentar novamente
+                </Button>
+              </div>
+            )}
+            {compositionDialogProduct &&
+              !filamentTypesHook.isLoading &&
+              !filamentTypesHook.error &&
+              filamentComposition.status === 'success' && (
+                <FilamentCompositionForm
+                  key={compositionDialogProduct.id}
+                  filamentTypes={filamentTypesHook.types}
+                  initialFilaments={filamentComposition.filaments}
+                  isSubmitting={isSubmittingFilaments}
+                  submitError={filamentsError}
+                  onSubmit={(values) => void handleFilamentsSubmit(values)}
+                />
+              )}
+          </div>
         </DialogContent>
       </Dialog>
     </AppLayout>

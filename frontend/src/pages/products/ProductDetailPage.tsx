@@ -5,9 +5,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useAccessories } from '@/hooks/useAccessories'
+import { useFilamentTypes } from '@/hooks/useFilamentTypes'
 import { usePackaging } from '@/hooks/usePackaging'
 import { useProduct } from '@/hooks/useProduct'
 import { useProductComposition } from '@/hooks/useProductComposition'
+import { useProductFilaments } from '@/hooks/useProductFilaments'
 import { ApiError } from '@/lib/api/errors'
 import { formatSecondsToHHMMSS } from '@/lib/forms/durationField'
 import {
@@ -18,6 +20,7 @@ import {
   type ComponentsSubtotal,
   type ResolvedCompositionLine,
 } from '@/lib/products/productCosts'
+import { resolveFilamentLines, type ResolvedFilamentLine } from '@/lib/products/productFilamentLines'
 import type { Product } from '@/types/domain'
 
 const BACK_LINK_CLASSNAME =
@@ -137,6 +140,49 @@ function ComponentsTable({
   )
 }
 
+// Filamentos (Módulo 3, Incremento 6A) — somente leitura, mesmo padrão
+// visual de ComponentsTable acima, mas sem colunas de custo (filament_types
+// não tem unit_cost cadastrado — fora do "Subtotal de componentes"
+// existente, que continua considerando só Acessórios/Embalagens; nenhuma
+// alteração nele por esta seção).
+function FilamentComponentsTable({ lines }: { lines: ResolvedFilamentLine[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Filamentos</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {lines.length === 0 ? (
+          <p className="text-muted-foreground text-sm">Nenhum filamento vinculado.</p>
+        ) : (
+          <Table className="table-fixed text-sm">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="h-auto w-[60%] py-2 whitespace-normal">Tipo de filamento</TableHead>
+                <TableHead className="h-auto w-[20%] py-2 whitespace-normal">Situação</TableHead>
+                <TableHead className="h-auto w-[20%] py-2 text-right whitespace-normal">Peso teórico</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {lines.map((line) => (
+                <TableRow key={line.key}>
+                  <TableCell className="truncate" title={line.name}>
+                    {line.name}
+                  </TableCell>
+                  <TableCell>
+                    <LineStatusBadge status={line.status} />
+                  </TableCell>
+                  <TableCell className="text-right">{formatGrams(line.weightGrams, 2)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 function ComponentsSubtotalCard({ subtotal }: { subtotal: ComponentsSubtotal }) {
   const valueText =
     subtotal.status === 'not_calculable' ? 'Não calculável' : formatBRL(subtotal.total)
@@ -202,6 +248,25 @@ function ProductDetailContent({ product }: { product: Product }) {
     : []
   const subtotal = calculateComponentsSubtotal(accessoryLines, packagingLines)
 
+  // Filamentos (Módulo 3, Incremento 6A) — bloco de leitura totalmente
+  // independente do de Acessórios/Embalagens acima (própria fonte,
+  // carregamento, erro e retry) — nenhuma variável de componentsLoading/
+  // componentsErrorInfo/componentsReady é reaproveitada ou alterada.
+  const filamentComposition = useProductFilaments(product.id)
+  const filamentTypesHook = useFilamentTypes()
+
+  const filamentsLoading = filamentComposition.status === 'loading' || filamentTypesHook.isLoading
+  const filamentsErrorInfo =
+    filamentComposition.status === 'error'
+      ? { message: toErrorMessage(filamentComposition.error), retry: filamentComposition.retry }
+      : filamentTypesHook.error
+        ? { message: toErrorMessage(filamentTypesHook.error), retry: filamentTypesHook.refetch }
+        : null
+  const filamentsReady = !filamentsLoading && !filamentsErrorInfo && filamentComposition.status === 'success'
+  const filamentLines = filamentsReady
+    ? resolveFilamentLines(filamentComposition.filaments, filamentTypesHook.types)
+    : []
+
   return (
     <div className="mt-4 flex flex-col gap-4">
       <Card>
@@ -239,6 +304,29 @@ function ProductDetailContent({ product }: { product: Product }) {
           </div>
         </CardContent>
       </Card>
+
+      {filamentsLoading && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Filamentos</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2">
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+          </CardContent>
+        </Card>
+      )}
+
+      {!filamentsLoading && filamentsErrorInfo && (
+        <div className="border-destructive/50 bg-destructive/10 flex items-center justify-between rounded-lg border p-3 text-sm">
+          <span>{filamentsErrorInfo.message}</span>
+          <Button variant="outline" size="sm" onClick={filamentsErrorInfo.retry}>
+            Tentar novamente
+          </Button>
+        </div>
+      )}
+
+      {filamentsReady && <FilamentComponentsTable lines={filamentLines} />}
 
       {componentsLoading && (
         <Card>

@@ -5,20 +5,32 @@ import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
 import type { Product } from '@/types/domain'
 
-const { useProductsMock, useAccessoriesMock, usePackagingMock, useProductCompositionMock, toastMock, useAuthMock } =
-  vi.hoisted(() => ({
-    useProductsMock: vi.fn(),
-    useAccessoriesMock: vi.fn(),
-    usePackagingMock: vi.fn(),
-    useProductCompositionMock: vi.fn(),
-    toastMock: { success: vi.fn(), error: vi.fn() },
-    useAuthMock: vi.fn(),
-  }))
+const {
+  useProductsMock,
+  useAccessoriesMock,
+  usePackagingMock,
+  useProductCompositionMock,
+  useFilamentTypesMock,
+  useProductFilamentsMock,
+  toastMock,
+  useAuthMock,
+} = vi.hoisted(() => ({
+  useProductsMock: vi.fn(),
+  useAccessoriesMock: vi.fn(),
+  usePackagingMock: vi.fn(),
+  useProductCompositionMock: vi.fn(),
+  useFilamentTypesMock: vi.fn(),
+  useProductFilamentsMock: vi.fn(),
+  toastMock: { success: vi.fn(), error: vi.fn() },
+  useAuthMock: vi.fn(),
+}))
 
 vi.mock('@/hooks/useProducts', () => ({ useProducts: useProductsMock }))
 vi.mock('@/hooks/useAccessories', () => ({ useAccessories: useAccessoriesMock }))
 vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
 vi.mock('@/hooks/useProductComposition', () => ({ useProductComposition: useProductCompositionMock }))
+vi.mock('@/hooks/useFilamentTypes', () => ({ useFilamentTypes: useFilamentTypesMock }))
+vi.mock('@/hooks/useProductFilaments', () => ({ useProductFilaments: useProductFilamentsMock }))
 vi.mock('sonner', () => ({ toast: toastMock }))
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
 
@@ -70,6 +82,28 @@ const packagingItem = {
 }
 
 const productAccessoryRow = { id: 'pa1', product_id: '1', accessory_id: 'a1', quantity: 2, created_at: '' }
+
+const filamentType = {
+  filament_type_id: 'ft1',
+  material: 'PLA' as const,
+  manufacturer: 'Voolt3D',
+  line: 'Sólida',
+  commercial_color: 'Preto',
+  color_code: null,
+  minimum_stock_grams: null,
+  is_active: true,
+  total_available_grams: 1000,
+  usable_spool_count: 1,
+  total_spool_count: 1,
+}
+
+const productFilamentRow = {
+  id: 'pf1',
+  product_id: '1',
+  filament_type_id: 'ft1',
+  theoretical_weight_grams: 12.5,
+  created_at: '',
+}
 
 function renderPage() {
   return render(<ProductsPage />, { wrapper: MemoryRouter })
@@ -135,6 +169,7 @@ describe('ProductsPage', () => {
   let updateMock: ReturnType<typeof vi.fn>
   let refetchMock: ReturnType<typeof vi.fn>
   let saveCompositionMock: ReturnType<typeof vi.fn>
+  let saveFilamentsMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     createMock = vi.fn().mockResolvedValue(undefined)
@@ -142,6 +177,7 @@ describe('ProductsPage', () => {
     updateMock = vi.fn().mockResolvedValue({ ...product, is_active: false })
     refetchMock = vi.fn()
     saveCompositionMock = vi.fn().mockResolvedValue(undefined)
+    saveFilamentsMock = vi.fn().mockResolvedValue(undefined)
 
     useAuthMock.mockReturnValue({ session: { user: { email: 'op@formasky.com' } }, signOut: vi.fn() })
     useProductsMock.mockReturnValue({
@@ -163,6 +199,23 @@ describe('ProductsPage', () => {
       error: null,
       retry: vi.fn(),
       save: saveCompositionMock,
+    })
+    useFilamentTypesMock.mockReturnValue({
+      types: [filamentType],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    })
+    useProductFilamentsMock.mockReturnValue({
+      status: 'success',
+      filaments: [productFilamentRow],
+      isLoading: false,
+      error: null,
+      retry: vi.fn(),
+      save: saveFilamentsMock,
     })
     toastMock.success.mockReset()
     toastMock.error.mockReset()
@@ -588,6 +641,212 @@ describe('ProductsPage', () => {
 
     await waitFor(() => expect(saveCompositionMock).toHaveBeenCalledWith({ accessories: [], packaging: [] }))
     expect(toastMock.success).toHaveBeenCalledWith('Acessórios e embalagem atualizados.')
+  })
+
+  // ---------------------------------------------------------------------------
+  // Filamentos (Módulo 3, Incremento 6A) — seção própria dentro do mesmo
+  // diálogo "Acessórios e Embalagem", com carregamento/erro/salvamento
+  // inteiramente independentes da seção acima (nunca a mesma chamada).
+  // ---------------------------------------------------------------------------
+
+  it('a seção Filamentos aparece pré-preenchida e salva de forma independente da seção de Acessórios/Embalagens', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
+
+    expect(screen.getByRole('combobox', { name: 'Tipo de filamento' })).toHaveTextContent('PLA · Voolt3D · Sólida · Preto')
+    expect(screen.getByRole('textbox', { name: 'Peso teórico por unidade (g)' })).toHaveValue('12.5')
+
+    await user.click(screen.getByRole('button', { name: /^salvar filamentos$/i }))
+
+    await waitFor(() =>
+      expect(saveFilamentsMock).toHaveBeenCalledWith({
+        filaments: [{ id: 'ft1', theoretical_weight_grams: 12.5 }],
+      }),
+    )
+    expect(toastMock.success).toHaveBeenCalledWith('Filamentos atualizados.')
+    // Salvar filamentos nunca aciona o salvamento de Acessórios/Embalagens.
+    expect(saveCompositionMock).not.toHaveBeenCalled()
+  })
+
+  it('salvar Acessórios/Embalagens nunca aciona o salvamento de Filamentos', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
+    await user.click(screen.getByRole('button', { name: /^salvar$/i }))
+
+    await waitFor(() => expect(saveCompositionMock).toHaveBeenCalled())
+    expect(saveFilamentsMock).not.toHaveBeenCalled()
+  })
+
+  it('permite múltiplos tipos de filamento e peso decimal brasileiro (vírgula)', async () => {
+    useProductFilamentsMock.mockReturnValue({
+      status: 'success',
+      filaments: [],
+      isLoading: false,
+      error: null,
+      retry: vi.fn(),
+      save: saveFilamentsMock,
+    })
+    useFilamentTypesMock.mockReturnValue({
+      types: [filamentType, { ...filamentType, filament_type_id: 'ft2', commercial_color: 'Branco' }],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
+    await user.click(screen.getByRole('button', { name: /^adicionar filamento$/i }))
+    await user.click(screen.getByRole('button', { name: /^adicionar filamento$/i }))
+
+    const typeSelects = screen.getAllByRole('combobox', { name: 'Tipo de filamento' })
+    expect(typeSelects).toHaveLength(2)
+    await user.click(typeSelects[0])
+    await user.click(await screen.findByRole('option', { name: /PLA · Voolt3D · Sólida · Preto/ }))
+    await user.click(typeSelects[1])
+    await user.click(await screen.findByRole('option', { name: /PLA · Voolt3D · Sólida · Branco/ }))
+
+    const weightInputs = screen.getAllByRole('textbox', { name: 'Peso teórico por unidade (g)' })
+    await user.type(weightInputs[0], '12,5')
+    await user.type(weightInputs[1], '3,25')
+
+    await user.click(screen.getByRole('button', { name: /^salvar filamentos$/i }))
+
+    await waitFor(() =>
+      expect(saveFilamentsMock).toHaveBeenCalledWith({
+        filaments: [
+          { id: 'ft1', theoretical_weight_grams: 12.5 },
+          { id: 'ft2', theoretical_weight_grams: 3.25 },
+        ],
+      }),
+    )
+  })
+
+  it('impede selecionar o mesmo tipo de filamento em duas linhas (sem duplicidade)', async () => {
+    useProductFilamentsMock.mockReturnValue({
+      status: 'success',
+      filaments: [productFilamentRow],
+      isLoading: false,
+      error: null,
+      retry: vi.fn(),
+      save: saveFilamentsMock,
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
+    await user.click(screen.getByRole('button', { name: /^adicionar filamento$/i }))
+
+    const typeSelects = screen.getAllByRole('combobox', { name: 'Tipo de filamento' })
+    await user.click(typeSelects[1])
+
+    // O único tipo cadastrado (ft1) já está escolhido na primeira linha —
+    // não deve aparecer como opção disponível na segunda.
+    expect(screen.queryByRole('option', { name: /PLA · Voolt3D · Sólida · Preto/ })).not.toBeInTheDocument()
+  })
+
+  it('bloqueia salvar com peso zero ou negativo', async () => {
+    useProductFilamentsMock.mockReturnValue({
+      status: 'success',
+      filaments: [{ ...productFilamentRow, theoretical_weight_grams: 0 }],
+      isLoading: false,
+      error: null,
+      retry: vi.fn(),
+      save: saveFilamentsMock,
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
+    await user.click(screen.getByRole('button', { name: /^salvar filamentos$/i }))
+
+    expect(await screen.findByText(/deve ser maior ou igual a 0.01/i)).toBeInTheDocument()
+    expect(saveFilamentsMock).not.toHaveBeenCalled()
+  })
+
+  it('preserva um tipo de filamento inativo já vinculado (nunca some da tela) e bloqueia salvar até ser removido', async () => {
+    useFilamentTypesMock.mockReturnValue({
+      types: [{ ...filamentType, is_active: false }],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
+
+    expect(screen.getByRole('combobox', { name: 'Tipo de filamento' })).toHaveTextContent(
+      'PLA · Voolt3D · Sólida · Preto (inativo)',
+    )
+    expect(screen.getByText(/este tipo de filamento está inativo/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^salvar filamentos$/i })).toBeDisabled()
+  })
+
+  it('a seção Filamentos não aparece enquanto ainda está carregando', async () => {
+    useProductFilamentsMock.mockReturnValue({
+      status: 'loading',
+      filaments: [],
+      isLoading: true,
+      error: null,
+      retry: vi.fn(),
+      save: saveFilamentsMock,
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
+
+    expect(screen.queryByRole('button', { name: /^salvar filamentos$/i })).not.toBeInTheDocument()
+  })
+
+  it('mostra o erro real e permite tentar novamente quando a composição de filamentos falha ao carregar', async () => {
+    const retryMock = vi.fn()
+    useProductFilamentsMock.mockReturnValue({
+      status: 'error',
+      filaments: [],
+      isLoading: false,
+      error: new ApiError('database', 500, 'Falha ao carregar filamentos.'),
+      retry: retryMock,
+      save: saveFilamentsMock,
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
+
+    expect(screen.getByText('Falha ao carregar filamentos.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^salvar filamentos$/i })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /tentar novamente/i }))
+    expect(retryMock).toHaveBeenCalled()
+  })
+
+  it('mostra "Nenhum filamento na composição." quando a composição de filamentos carrega genuinamente vazia', async () => {
+    useProductFilamentsMock.mockReturnValue({
+      status: 'success',
+      filaments: [],
+      isLoading: false,
+      error: null,
+      retry: vi.fn(),
+      save: saveFilamentsMock,
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /^acessórios e embalagem$/i }))
+
+    expect(screen.getByText('Nenhum filamento na composição.')).toBeInTheDocument()
   })
 
   it('shows an inline error with a retry action when the list fails to load', async () => {

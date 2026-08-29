@@ -4,20 +4,30 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
 
-const { useProductMock, useProductCompositionMock, useAccessoriesMock, usePackagingMock, useAuthMock } = vi.hoisted(
-  () => ({
-    useProductMock: vi.fn(),
-    useProductCompositionMock: vi.fn(),
-    useAccessoriesMock: vi.fn(),
-    usePackagingMock: vi.fn(),
-    useAuthMock: vi.fn(),
-  }),
-)
+const {
+  useProductMock,
+  useProductCompositionMock,
+  useAccessoriesMock,
+  usePackagingMock,
+  useFilamentTypesMock,
+  useProductFilamentsMock,
+  useAuthMock,
+} = vi.hoisted(() => ({
+  useProductMock: vi.fn(),
+  useProductCompositionMock: vi.fn(),
+  useAccessoriesMock: vi.fn(),
+  usePackagingMock: vi.fn(),
+  useFilamentTypesMock: vi.fn(),
+  useProductFilamentsMock: vi.fn(),
+  useAuthMock: vi.fn(),
+}))
 
 vi.mock('@/hooks/useProduct', () => ({ useProduct: useProductMock }))
 vi.mock('@/hooks/useProductComposition', () => ({ useProductComposition: useProductCompositionMock }))
 vi.mock('@/hooks/useAccessories', () => ({ useAccessories: useAccessoriesMock }))
 vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
+vi.mock('@/hooks/useFilamentTypes', () => ({ useFilamentTypes: useFilamentTypesMock }))
+vi.mock('@/hooks/useProductFilaments', () => ({ useProductFilaments: useProductFilamentsMock }))
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
 
 import { ProductDetailPage } from './ProductDetailPage'
@@ -75,6 +85,28 @@ const packagingWithCost = {
 const inactivePackaging = { ...packagingWithCost, id: 'k2', name: 'Ziplock PP', unit_cost: 0.5, is_active: false }
 const packagingWithoutCost = { ...packagingWithCost, id: 'k3', name: 'Sacola Kraft', unit_cost: null }
 
+const filamentType = {
+  filament_type_id: 'ft1',
+  material: 'PLA' as const,
+  manufacturer: 'Voolt3D',
+  line: 'Sólida',
+  commercial_color: 'Preto',
+  color_code: null,
+  minimum_stock_grams: null,
+  is_active: true,
+  total_available_grams: 1000,
+  usable_spool_count: 1,
+  total_spool_count: 1,
+}
+
+const productFilamentRow = {
+  id: 'pf1',
+  product_id: 'p1',
+  filament_type_id: 'ft1',
+  theoretical_weight_grams: 12.5,
+  created_at: '',
+}
+
 function renderPage(path = '/produtos/p1') {
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -113,6 +145,26 @@ describe('ProductDetailPage', () => {
     })
     useAccessoriesMock.mockReturnValue({ accessories: [], isLoading: false, error: null, refetch: accessoriesRefetchMock })
     usePackagingMock.mockReturnValue({ packaging: [], isLoading: false, error: null, refetch: packagingRefetchMock })
+
+    // Filamentos (Módulo 3, Incremento 6A) — mesma ressalva: padrão vazio e
+    // bem-sucedido, independente das três fontes acima.
+    useFilamentTypesMock.mockReturnValue({
+      types: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    })
+    useProductFilamentsMock.mockReturnValue({
+      status: 'success',
+      filaments: [],
+      isLoading: false,
+      error: null,
+      retry: vi.fn(),
+      save: vi.fn(),
+    })
   })
 
   it('renders a loading skeleton while the product is loading', () => {
@@ -639,6 +691,136 @@ describe('ProductDetailPage', () => {
 
       await userEvent.setup().click(screen.getByRole('button', { name: /tentar novamente/i }))
       expect(packagingRefetchMock).toHaveBeenCalled()
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Filamentos (Módulo 3, Incremento 6A) — somente leitura, bloco
+  // inteiramente independente do de Acessórios/Embalagens acima (própria
+  // fonte/carregamento/erro/retry; nenhuma alteração no Subtotal de
+  // componentes, que continua só Acessórios/Embalagens).
+  // ---------------------------------------------------------------------------
+
+  describe('Filamentos', () => {
+    beforeEach(() => {
+      useProductMock.mockReturnValue({ status: 'success', product, error: null, retry: retryMock })
+    })
+
+    it('exibe o tipo de filamento, situação e peso teórico', () => {
+      useFilamentTypesMock.mockReturnValue({
+        types: [filamentType],
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+        create: vi.fn(),
+        update: vi.fn(),
+        delete: vi.fn(),
+      })
+      useProductFilamentsMock.mockReturnValue({
+        status: 'success',
+        filaments: [productFilamentRow],
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+        save: vi.fn(),
+      })
+      renderPage()
+
+      const row = screen.getByText('PLA · Voolt3D · Sólida · Preto').closest('tr')
+      if (!row) throw new Error('linha da tabela de Filamentos não encontrada')
+      expect(within(row).getByText('Ativo')).toBeInTheDocument()
+      expect(within(row).getByText('12,50 g')).toBeInTheDocument()
+    })
+
+    it('marca um tipo de filamento inativo como "Inativo", nunca esconde a linha', () => {
+      useFilamentTypesMock.mockReturnValue({
+        types: [{ ...filamentType, is_active: false }],
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+        create: vi.fn(),
+        update: vi.fn(),
+        delete: vi.fn(),
+      })
+      useProductFilamentsMock.mockReturnValue({
+        status: 'success',
+        filaments: [productFilamentRow],
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+        save: vi.fn(),
+      })
+      renderPage()
+
+      const row = screen.getByText('PLA · Voolt3D · Sólida · Preto').closest('tr')
+      if (!row) throw new Error('linha da tabela de Filamentos não encontrada')
+      expect(within(row).getByText('Inativo')).toBeInTheDocument()
+    })
+
+    it('mostra "Nenhum filamento vinculado." quando a composição de filamentos está genuinamente vazia', () => {
+      renderPage()
+
+      expect(screen.getByText('Nenhum filamento vinculado.')).toBeInTheDocument()
+    })
+
+    it('erro ao carregar filamentos fica restrito ao bloco de Filamentos, com retry próprio', async () => {
+      const filamentsRetryMock = vi.fn()
+      useProductFilamentsMock.mockReturnValue({
+        status: 'error',
+        filaments: [],
+        isLoading: false,
+        error: new ApiError('database', 500, 'Falha ao carregar filamentos.'),
+        retry: filamentsRetryMock,
+        save: vi.fn(),
+      })
+      renderPage()
+
+      expect(screen.getByText('Identificação')).toBeInTheDocument()
+      expect(screen.getByText('Falha ao carregar filamentos.')).toBeInTheDocument()
+
+      await userEvent.setup().click(screen.getByRole('button', { name: /tentar novamente/i }))
+      expect(filamentsRetryMock).toHaveBeenCalled()
+    })
+
+    it('não altera o Subtotal de componentes (continua só Acessórios/Embalagens)', () => {
+      useAccessoriesMock.mockReturnValue({
+        accessories: [accessoryWithCost],
+        isLoading: false,
+        error: null,
+        refetch: accessoriesRefetchMock,
+      })
+      useProductCompositionMock.mockReturnValue({
+        status: 'success',
+        accessories: [{ accessory_id: 'a1', quantity: 2 }],
+        packaging: [],
+        isLoading: false,
+        error: null,
+        retry: compositionRetryMock,
+        save: vi.fn(),
+      })
+      useFilamentTypesMock.mockReturnValue({
+        types: [filamentType],
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+        create: vi.fn(),
+        update: vi.fn(),
+        delete: vi.fn(),
+      })
+      useProductFilamentsMock.mockReturnValue({
+        status: 'success',
+        filaments: [productFilamentRow],
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+        save: vi.fn(),
+      })
+      renderPage()
+
+      // Subtotal = 2 × R$1,50 = R$3,00 — exatamente como seria sem
+      // nenhum filamento vinculado; filamento nunca soma no subtotal
+      // (sem unit_cost cadastrado, fora de escopo desta rodada).
+      expect(screen.getAllByText(/R\$\s*3,00/).length).toBeGreaterThan(0)
     })
   })
 })
