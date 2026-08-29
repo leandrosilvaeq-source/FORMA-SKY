@@ -884,6 +884,13 @@ begin
     values ('TESTE OPS — Cliente idempotência (payload diferente)', true)
     returning id into v_other_customer_id;
 
+  -- Primeira chamada num bloco begin/end PRÓPRIO (sem exception aqui): seu
+  -- savepoint fecha ao final do bloco, então o pedido criado sobrevive ao
+  -- rollback-to-savepoint da SEGUNDA chamada abaixo. Colocar as duas
+  -- chamadas num único begin/exception faria a exceção da segunda desfazer
+  -- TAMBÉM a primeira (mesmo savepoint) — isso seria um bug do teste, não
+  -- da RPC: seria impossível provar "o primeiro pedido não é afetado" já
+  -- fora do escopo do PL/pgSQL, então cada chamada tem seu próprio bloco.
   begin
     v_result1 := public.create_order_with_payment(
       v_customer_id, null, null, null, null, 0, 0, 'idempotência: payload original',
@@ -893,6 +900,9 @@ begin
       )),
       v_user_id, 'PIX', 'ADVANCE', null, v_key
     );
+  end;
+
+  begin
     perform public.create_order_with_payment(
       v_other_customer_id, null, null, null, null, 0, 0, 'idempotência: payload DIFERENTE (outro cliente)',
       jsonb_build_array(jsonb_build_object(
@@ -902,13 +912,16 @@ begin
       v_user_id, 'PIX', 'ADVANCE', null, v_key
     );
     insert into zz_ops_test_results(section, test_name, status, details)
-      values ('5', '5.2 mesma chave + payload diferente é REJEITADO (IDEMPOTENCY_KEY_CONFLICT:)', 'FAIL', 'não levantou exceção');
+      values ('5', '5.2 mesma chave + payload diferente é REJEITADO (IDEMPOTENCY_KEY_CONFLICT:), o PRIMEIRO pedido não é afetado', 'FAIL', 'não levantou exceção');
   exception when others then
     select count(*) into v_order_count from public.orders where idempotency_key = v_key;
     insert into zz_ops_test_results(section, test_name, status, details)
-      values ('5', '5.2 mesma chave + payload diferente é REJEITADO (IDEMPOTENCY_KEY_CONFLICT:)',
-        case when sqlerrm like 'IDEMPOTENCY_KEY_CONFLICT:%' and v_order_count = 1 then 'PASS' else 'FAIL' end,
-        sqlerrm || ' order_count_com_essa_chave=' || v_order_count);
+      values ('5', '5.2 mesma chave + payload diferente é REJEITADO (IDEMPOTENCY_KEY_CONFLICT:), o PRIMEIRO pedido não é afetado',
+        case when sqlerrm like 'IDEMPOTENCY_KEY_CONFLICT:%'
+                and v_order_count = 1
+                and (v_result1 ->> 'order_id')::uuid in (select id from public.orders where idempotency_key = v_key)
+             then 'PASS' else 'FAIL' end,
+        sqlerrm || ' order_count_com_essa_chave=' || v_order_count || ' primeiro_order_id=' || (v_result1 ->> 'order_id'));
   end;
 end $$;
 
