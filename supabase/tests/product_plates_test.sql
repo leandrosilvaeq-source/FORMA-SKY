@@ -2,8 +2,13 @@
 -- Forma Sky — estrutura produtiva por plates (regra aprovada 2026-08-29,
 -- migration 20260829160000_add_product_plates_structure.sql)
 -- TESTE DE INTEGRAÇÃO das novas funções (set_product_production,
--- create_product_with_plates, update_product_full) e da atualização de
--- compatibilidade em validate_catalog_composition_for_creation.
+-- create_product_with_plates, update_product_full) e da definição final de
+-- fonte autoritativa em validate_catalog_composition_for_creation (rodada
+-- corretiva 2026-08-29: deixou de aceitar product_filaments/legado como
+-- alternativa — Seção 3 cobre o cenário crítico: composição legada stale +
+-- plates esvaziados deve BLOQUEAR o Pedido, nunca "salvar" o Produto pela
+-- linha antiga) e a desativação da RPC/rota legada (set_product_filaments,
+-- Seção 4).
 --
 -- ESTE ARQUIVO NÃO É UMA MIGRATION. Roda inteiro dentro de UMA ÚNICA
 -- transação, terminada sempre com ROLLBACK — nenhum dado criado por este
@@ -585,9 +590,30 @@ exception when others then
 end $$;
 
 -- =============================================================================
--- SEÇÃO 3 — compatibilidade com a validação de composição de Pedidos
--- (validate_catalog_composition_for_creation aceita product_plates OU
--- product_filaments — ver migration 20260829150000, corrigida por esta)
+-- SEÇÃO 3 — validação de composição de Pedidos usa EXCLUSIVAMENTE
+-- product_plate_filaments (rodada corretiva 2026-08-29 — a versão anterior
+-- desta mesma migration aceitava product_plates OU product_filaments como
+-- alternativas; auditoria apontou que isso permitia um Produto cuja
+-- composição real nos plates havia sido esvaziada continuar "aprovado" só
+-- por uma linha legada nunca tocada por nenhuma escrita nova — Seção 3.5
+-- prova esse cenário exato bloqueado corretamente).
+--
+-- LIMITAÇÃO REGISTRADA — "falha no backfill desfaz toda a migration": essa
+-- garantia vem da migration inteira (schema + backfill + verificações +
+-- nova validação + revogação da RPC legada) rodar dentro de UMA transação
+-- só (convenção padrão do Supabase CLI por arquivo) — qualquer `raise
+-- exception` em qualquer bloco da migration desfaz tudo, comprovado pelas
+-- verificações 8.1-8.8/11.1-11.4 da própria migration (cada uma aborta com
+-- `raise exception` se algo divergir). Como o backfill é um bloco `DO`
+-- embutido na migration, não uma função reutilizável, este arquivo de
+-- teste — que roda DEPOIS da migration já aplicada, dentro da própria
+-- transação BEGIN...ROLLBACK — não pode invocá-lo isoladamente para simular
+-- uma falha real; os testes 3.4/3.5 abaixo replicam manualmente a MESMA
+-- fórmula do backfill sobre um Produto de teste específico, para provar
+-- que a fórmula em si (peso/filamento preservados, composição só em plates
+-- passa a validar) está correta — não que a migration inteira é atômica
+-- (isso é uma propriedade do Postgres/Supabase CLI, já coberta pelas
+-- verificações internas da própria migration).
 -- =============================================================================
 
 -- 3.1 — Produto com composição só em product_plates (novo) passa na
@@ -674,6 +700,189 @@ begin
   end;
 end $$;
 
+-- 3.3 — product_filaments (legado) SOZINHO, sem nenhum plate, NÃO é mais
+-- suficiente para validar um Pedido (rodada corretiva 2026-08-29 —
+-- validate_catalog_composition_for_creation deixou de aceitar product_filaments
+-- como fonte alternativa). Simula um Produto "congelado no estado
+-- pré-migration": nenhum plate, só a linha legada direta.
+do $$
+declare
+  v_user_id uuid;
+  v_type_a uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+begin
+  select value::uuid into v_user_id from zz_pp_fixtures where key = 'user_id';
+  select value::uuid into v_type_a from zz_pp_fixtures where key = 'type_a';
+  select value::uuid into v_customer_id from public.customers where name = 'TESTE OPS Plates — Cliente';
+
+  v_product_id := public.create_product_with_plates(
+    'TESTE OPS Plates — Só legado, sem plate', 'CATALOG', 'teste', null,
+    30.00, null, true, '[]'::jsonb, null, null, '[]'::jsonb, '[]'::jsonb, v_user_id
+  );
+  insert into public.product_filaments (product_id, filament_type_id, theoretical_weight_grams)
+    values (v_product_id, v_type_a, 15);
+
+  begin
+    perform public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'CATALOG só com product_filaments legado, sem plate',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item teste', 'quantity', 1, 'unit_price', 30
+      )),
+      v_user_id, null
+    );
+    insert into zz_pp_test_results(section, test_name, status, details)
+      values ('3', '3.3 product_filaments SOZINHO (sem product_plate_filaments) NÃO é mais suficiente — Pedido deveria ser BLOQUEADO', 'FAIL', 'não levantou exceção (regressão: fonte legada ainda está sendo aceita)');
+  exception when others then
+    insert into zz_pp_test_results(section, test_name, status, details)
+      values ('3', '3.3 product_filaments SOZINHO (sem product_plate_filaments) NÃO é mais suficiente — Pedido deveria ser BLOQUEADO',
+        case when sqlerrm like 'ORDER_CATALOG_MISSING_COMPOSITION:%' then 'PASS' else 'FAIL' end, sqlerrm);
+  end;
+end $$;
+
+-- 3.4 — Backfill simulado (a migração real só roda uma vez, na aplicação;
+-- aqui replicamos manualmente, para UM produto de teste, a MESMA fórmula
+-- do bloco de backfill da migration — "Plate 1" a partir de
+-- product_filaments) para provar que: (a) a cópia preserva filamento e
+-- peso exatamente, e (b) depois da cópia, a validação passa a usar
+-- product_plate_filaments (não mais o legado) sem exigir mais nada do
+-- usuário.
+do $$
+declare
+  v_user_id uuid;
+  v_type_a uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_plate_id uuid;
+  v_copied_weight numeric;
+  v_order_id uuid;
+  v_order_status text;
+begin
+  select value::uuid into v_user_id from zz_pp_fixtures where key = 'user_id';
+  select value::uuid into v_type_a from zz_pp_fixtures where key = 'type_a';
+  select value::uuid into v_customer_id from public.customers where name = 'TESTE OPS Plates — Cliente';
+
+  v_product_id := public.create_product_with_plates(
+    'TESTE OPS Plates — Backfill simulado', 'CATALOG', 'teste', null,
+    30.00, null, true, '[]'::jsonb, null, null, '[]'::jsonb, '[]'::jsonb, v_user_id
+  );
+  insert into public.product_filaments (product_id, filament_type_id, theoretical_weight_grams)
+    values (v_product_id, v_type_a, 22.75);
+
+  -- Replica exatamente o bloco de backfill da migration (Seção 7): cria
+  -- Plate 1 e copia cada linha de product_filaments verbatim.
+  insert into public.product_plates (product_id, plate_number, production_time_seconds)
+    values (v_product_id, 1, 0)
+    returning id into v_plate_id;
+  insert into public.product_plate_filaments (plate_id, filament_type_id, weight_grams)
+    select v_plate_id, pf.filament_type_id, pf.theoretical_weight_grams
+    from public.product_filaments pf
+    where pf.product_id = v_product_id;
+
+  select weight_grams into v_copied_weight
+    from public.product_plate_filaments where plate_id = v_plate_id and filament_type_id = v_type_a;
+
+  begin
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'CATALOG com Plate 1 vindo do backfill simulado',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item teste', 'quantity', 1, 'unit_price', 30
+      )),
+      v_user_id, null
+    );
+    select order_status into v_order_status from public.orders where id = v_order_id;
+
+    insert into zz_pp_test_results(section, test_name, status, details)
+      values ('3', '3.4 backfill simulado: peso copiado preserva 22.75 exatamente E Pedido passa a ser aceito usando plates',
+        case when v_copied_weight = 22.75 and v_order_status = 'IN_PRODUCTION_QUEUE' then 'PASS' else 'FAIL' end,
+        'copied_weight=' || v_copied_weight || ' order_status=' || v_order_status);
+  exception when others then
+    insert into zz_pp_test_results(section, test_name, status, details)
+      values ('3', '3.4 backfill simulado: peso copiado E Pedido aceito', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 3.5 — CENÁRIO CRÍTICO da auditoria: um Produto tem composição REAL nos
+-- plates, o usuário remove toda a composição dos plates (update_product_full
+-- com plates vazios) — mas uma linha ANTIGA sobrevive isolada em
+-- product_filaments (nunca tocada por nenhuma escrita nova, exatamente como
+-- o achado descreve). A criação do Pedido precisa ser BLOQUEADA mesmo assim
+-- — a presença de dado legado nunca pode "salvar" um Produto cuja
+-- composição REAL (plates) está vazia.
+do $$
+declare
+  v_user_id uuid;
+  v_type_a uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+begin
+  select value::uuid into v_user_id from zz_pp_fixtures where key = 'user_id';
+  select value::uuid into v_type_a from zz_pp_fixtures where key = 'type_a';
+  select value::uuid into v_customer_id from public.customers where name = 'TESTE OPS Plates — Cliente';
+
+  -- Produto nasce com composição real (1 plate, 1 filamento).
+  v_product_id := public.create_product_with_plates(
+    'TESTE OPS Plates — Cenário crítico (stale legado)', 'CATALOG', 'teste', null,
+    30.00, null, true,
+    jsonb_build_array(jsonb_build_object(
+      'production_time_seconds', 60,
+      'filaments', jsonb_build_array(jsonb_build_object('filament_type_id', v_type_a, 'weight_grams', 10))
+    )),
+    null, null, '[]'::jsonb, '[]'::jsonb, v_user_id
+  );
+
+  -- Simula uma linha legada "órfã": nunca escrita por create_product_with_plates
+  -- (que nunca toca product_filaments — teste 2.4), inserida diretamente
+  -- aqui só para representar um resíduo pré-migration coexistindo com
+  -- plates reais.
+  insert into public.product_filaments (product_id, filament_type_id, theoretical_weight_grams)
+    values (v_product_id, v_type_a, 10);
+
+  -- Usuário esvazia a composição real (remove todos os filamentos dos
+  -- plates) — mesma operação que a Ficha por plates já expõe hoje.
+  perform public.update_product_full(
+    v_product_id, '{}'::jsonb,
+    jsonb_build_array(jsonb_build_object('production_time_seconds', 60, 'filaments', '[]'::jsonb)),
+    null, null, '[]'::jsonb, '[]'::jsonb, v_user_id
+  );
+
+  begin
+    perform public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'CATALOG com plates esvaziados mas product_filaments ainda com linha antiga',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item teste', 'quantity', 1, 'unit_price', 30
+      )),
+      v_user_id, null
+    );
+    insert into zz_pp_test_results(section, test_name, status, details)
+      values ('3', '3.5 CENÁRIO CRÍTICO: plates esvaziados + product_filaments com linha antiga -> Pedido deveria ser BLOQUEADO', 'FAIL', 'não levantou exceção — a linha legada obsoleta indevidamente validou o Produto');
+  exception when others then
+    insert into zz_pp_test_results(section, test_name, status, details)
+      values ('3', '3.5 CENÁRIO CRÍTICO: plates esvaziados + product_filaments com linha antiga -> Pedido deveria ser BLOQUEADO',
+        case when sqlerrm like 'ORDER_CATALOG_MISSING_COMPOSITION:%' then 'PASS' else 'FAIL' end, sqlerrm);
+  end;
+
+  -- 3.6 — a mesma operação (esvaziar os plates) NUNCA alterou nem apagou a
+  -- linha legada — continua exatamente como foi inserida (1 linha, mesmo
+  -- peso). Confirma "alterar plates não altera nem apaga o dado legado"
+  -- mesmo no caminho de REMOÇÃO de composição, não só no de substituição
+  -- (teste 2.4, que já cobria substituição por outro conteúdo).
+  declare
+    v_legacy_count integer;
+    v_legacy_weight numeric;
+  begin
+    select count(*), max(theoretical_weight_grams) into v_legacy_count, v_legacy_weight
+      from public.product_filaments where product_id = v_product_id;
+    insert into zz_pp_test_results(section, test_name, status, details)
+      values ('3', '3.6 esvaziar os plates não altera nem apaga a linha legada em product_filaments (continua 1 linha, peso 10 intacto)',
+        case when v_legacy_count = 1 and v_legacy_weight = 10 then 'PASS' else 'FAIL' end,
+        'legacy_count=' || v_legacy_count || ' legacy_weight=' || v_legacy_weight);
+  end;
+end $$;
+
 -- =============================================================================
 -- SEÇÃO 4 — permissões e segurança
 -- =============================================================================
@@ -716,6 +925,68 @@ begin
 exception when others then
   insert into zz_pp_test_results(section, test_name, status, details)
     values ('4', '4.2 grants de leitura de product_plates', 'FAIL', sqlerrm);
+end $$;
+
+-- 4.3 — set_product_filaments (RPC legada) sem NENHUM EXECUTE (nem
+-- service_role, que é como a Edge Function `products` a chamava antes
+-- desta rodada corretiva) — desativada para escrita operacional, mas a
+-- função em si continua existindo (has_function_privilege levantaria
+-- "function does not exist" se tivesse sido apagada, provando por si só
+-- que não foi).
+do $$
+declare
+  v_anon_can_execute boolean;
+  v_authenticated_can_execute boolean;
+  v_service_role_can_execute boolean;
+begin
+  select has_function_privilege('anon', 'public.set_product_filaments(uuid,jsonb,uuid)', 'EXECUTE') into v_anon_can_execute;
+  select has_function_privilege('authenticated', 'public.set_product_filaments(uuid,jsonb,uuid)', 'EXECUTE') into v_authenticated_can_execute;
+  select has_function_privilege('service_role', 'public.set_product_filaments(uuid,jsonb,uuid)', 'EXECUTE') into v_service_role_can_execute;
+
+  insert into zz_pp_test_results(section, test_name, status, details)
+    values ('4', '4.3 set_product_filaments (legada) sem EXECUTE para nenhum papel — desativada só para escrita, função preservada',
+      case when not v_anon_can_execute and not v_authenticated_can_execute and not v_service_role_can_execute
+           then 'PASS' else 'FAIL' end,
+      'anon=' || v_anon_can_execute || ' authenticated=' || v_authenticated_can_execute || ' service_role=' || v_service_role_can_execute);
+exception when others then
+  insert into zz_pp_test_results(section, test_name, status, details)
+    values ('4', '4.3 grants de set_product_filaments', 'FAIL', sqlerrm);
+end $$;
+
+-- 4.4 — validate_catalog_composition_for_creation (versão nova desta
+-- migration) continua zero grants, E seu corpo real (pg_get_functiondef,
+-- não busca de texto genérica) não referencia mais product_filaments —
+-- prova estrutural de que a fonte legada foi removida da validação, não só
+-- documentada como removida. product_filaments (tabela) continua existindo
+-- (to_regclass não nulo) — nenhum dado apagado por esta migration.
+do $$
+declare
+  v_anon_can_execute boolean;
+  v_authenticated_can_execute boolean;
+  v_service_role_can_execute boolean;
+  v_function_body text;
+  v_table_exists boolean;
+begin
+  select has_function_privilege('anon', 'public.validate_catalog_composition_for_creation(jsonb)', 'EXECUTE') into v_anon_can_execute;
+  select has_function_privilege('authenticated', 'public.validate_catalog_composition_for_creation(jsonb)', 'EXECUTE') into v_authenticated_can_execute;
+  select has_function_privilege('service_role', 'public.validate_catalog_composition_for_creation(jsonb)', 'EXECUTE') into v_service_role_can_execute;
+  select pg_get_functiondef('public.validate_catalog_composition_for_creation(jsonb)'::regprocedure) into v_function_body;
+  select (to_regclass('public.product_filaments') is not null) into v_table_exists;
+
+  insert into zz_pp_test_results(section, test_name, status, details)
+    values ('4', '4.4 validate_catalog_composition_for_creation sem grants, corpo real sem referência a product_filaments, tabela legada preservada',
+      case when not v_anon_can_execute and not v_authenticated_can_execute and not v_service_role_can_execute
+             and v_function_body not ilike '%product_filaments%'
+             and v_function_body ilike '%product_plate_filaments%'
+             and v_table_exists
+           then 'PASS' else 'FAIL' end,
+      'grants(anon/auth/service)=' || v_anon_can_execute || '/' || v_authenticated_can_execute || '/' || v_service_role_can_execute ||
+      ' references_product_filaments=' || (v_function_body ilike '%product_filaments%') ||
+      ' references_product_plate_filaments=' || (v_function_body ilike '%product_plate_filaments%') ||
+      ' table_exists=' || v_table_exists);
+exception when others then
+  insert into zz_pp_test_results(section, test_name, status, details)
+    values ('4', '4.4 corpo/grants de validate_catalog_composition_for_creation', 'FAIL', sqlerrm);
 end $$;
 
 -- =============================================================================

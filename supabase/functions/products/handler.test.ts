@@ -21,11 +21,24 @@
 // Por que "produto não encontrado", "tipo de filamento inativo/inexistente",
 // "reaproveitar tipo já vinculado" etc. NÃO são testados via handleRequest
 // ponta a ponta: são regras que dependem de ler o banco
-// (set_product_filaments/set_product_composition/create_product/
-// update_product_price) — exigem uma sessão autenticada real (rede) e um
-// Postgres real, que este arquivo não pode exercitar sem Supabase local
-// rodando. Mesmo critério já documentado em todos os arquivos irmãos deste
-// projeto.
+// (set_product_composition/create_product/update_product_price/
+// create_product_with_plates/update_product_full) — exigem uma sessão
+// autenticada real (rede) e um Postgres real, que este arquivo não pode
+// exercitar sem Supabase local rodando. Mesmo critério já documentado em
+// todos os arquivos irmãos deste projeto.
+//
+// PATCH /products/:id/filaments (rodada corretiva 2026-08-29 — RPC
+// set_product_filaments retirada da escrita operacional, ver
+// "FONTE AUTORITATIVA" no cabeçalho de
+// supabase/migrations/20260829160000_add_product_plates_structure.sql):
+// a MESMA limitação acima se aplica ao novo comportamento — o erro de
+// negócio PRODUCT_FILAMENTS_ROUTE_RETIRED: só é alcançado DEPOIS de
+// resolveOperator(req) (rede real), então não é exercitável aqui sem
+// Supabase local. O que ESTE arquivo já prova sem rede — que a rota
+// continua respondendo com 401 sem Authorization, nunca 404 (roteamento
+// preservado) — permanece verdadeiro depois da mudança, porque
+// resolveOperator continua sendo a primeira linha da função, antes de
+// qualquer lógica nova.
 //
 // LIMITAÇÃO DE AMBIENTE (mesma já registrada em todas as rodadas
 // anteriores): o runtime `deno` não está instalado nesta máquina/sessão —
@@ -201,9 +214,30 @@ Deno.test("handleRequest rejeita POST /products sem Authorization com 401 (sem t
   assertEquals(res.status, 401);
 });
 
-Deno.test("handleRequest rejeita PATCH .../filaments sem Authorization com 401 (sem tocar rede)", async () => {
+Deno.test("handleRequest rejeita PATCH .../filaments sem Authorization com 401 (sem tocar rede) — rota descontinuada, mas ainda responde e ainda exige auth, nunca 404", async () => {
   const res = await handleRequest(
     makeRequest("PATCH", `/${VALID_UUID_1}/filaments`, { filaments: [] }),
+  );
+  assertEquals(res.status, 401);
+});
+
+Deno.test("handleRequest rejeita POST /products/with-plates sem Authorization com 401 (sem tocar rede)", async () => {
+  const res = await handleRequest(
+    makeRequest("POST", "/with-plates", {
+      name: "x",
+      product_type: "CATALOG",
+      default_price: 10,
+      plates: [],
+      accessories: [],
+      packaging: [],
+    }),
+  );
+  assertEquals(res.status, 401);
+});
+
+Deno.test("handleRequest rejeita PATCH /products/:id/full sem Authorization com 401 (sem tocar rede)", async () => {
+  const res = await handleRequest(
+    makeRequest("PATCH", `/${VALID_UUID_1}/full`, { plates: [], accessories: [], packaging: [] }),
   );
   assertEquals(res.status, 401);
 });
@@ -228,19 +262,26 @@ Deno.test("handleRequest rejeita PATCH /products/:id sem Authorization com 401 (
   assertEquals(res.status, 401);
 });
 
-Deno.test("handleRequest PATCH /products/:id não é confundido com /:id/price nem /:id/composition nem /:id/filaments (rotas distintas, todas exigem auth 401)", async () => {
+Deno.test("handleRequest PATCH /products/:id não é confundido com /:id/price, /:id/composition, /:id/filaments nem /:id/full (rotas distintas, todas exigem auth 401)", async () => {
   const resPlain = await handleRequest(makeRequest("PATCH", `/${VALID_UUID_1}`, { name: "x" }));
   const resPrice = await handleRequest(makeRequest("PATCH", `/${VALID_UUID_1}/price`, { new_price: 10 }));
   const resComposition = await handleRequest(
     makeRequest("PATCH", `/${VALID_UUID_1}/composition`, { accessories: [], packaging: [] }),
   );
   const resFilaments = await handleRequest(makeRequest("PATCH", `/${VALID_UUID_1}/filaments`, { filaments: [] }));
-  // Todas as 4 rotas existem e exigem autenticação (401) — nenhuma cai em
-  // 404 (o que indicaria roteamento ambíguo/quebrado entre elas).
+  const resFull = await handleRequest(
+    makeRequest("PATCH", `/${VALID_UUID_1}/full`, { plates: [], accessories: [], packaging: [] }),
+  );
+  // Todas as 5 rotas existem e exigem autenticação (401) — nenhuma cai em
+  // 404 (o que indicaria roteamento ambíguo/quebrado entre elas). /filaments
+  // continua respondendo (rota descontinuada só para escrita, nunca
+  // removida do roteador) — 401 aqui prova que ainda é resolvida antes de
+  // qualquer lógica de negócio, exatamente como as demais.
   assertEquals(resPlain.status, 401);
   assertEquals(resPrice.status, 401);
   assertEquals(resComposition.status, 401);
   assertEquals(resFilaments.status, 401);
+  assertEquals(resFull.status, 401);
 });
 
 Deno.test("respostas de erro não expõem detalhes internos (mensagem genérica e segura)", async () => {

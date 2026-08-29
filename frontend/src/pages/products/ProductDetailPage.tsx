@@ -263,6 +263,15 @@ function ProductDetailContent({ product }: { product: Product }) {
   // igual a plateRowsFromLegacyFilaments em ProductForm.tsx — quando o
   // Produto ainda não tem nenhum plate (backfill não rodou no remoto
   // ainda). Nunca escrito por esta página (somente leitura).
+  //
+  // IMPORTANTE — este fallback é uma proteção TRANSITÓRIA, não o fluxo
+  // normal: depois que a migration 20260829160000 for aplicada, o backfill
+  // garante Plate 1 para todo Produto com composição/peso/tempo legados —
+  // usingLegacyFilamentsFallback deixa de ser alcançado para qualquer
+  // Produto que já tinha produção cadastrada. product_filaments
+  // (tabela) e set_product_filaments (RPC) continuam existindo só como
+  // dado histórico/leitura de compatibilidade — a RPC perde o EXECUTE de
+  // service_role na mesma migration (supabase/functions/products/handler.ts).
   const productPlates = useProductPlates(product.id)
   const legacyFilaments = useProductFilaments(product.id)
   const filamentTypesHook = useFilamentTypes()

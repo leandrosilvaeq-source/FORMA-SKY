@@ -11,27 +11,31 @@
 -- remoto (só criada localmente, nesta rodada). Aplicar exige autorização
 -- explícita separada, fora do escopo desta entrada.
 --
--- FONTE AUTORITATIVA (reafirmado pela auditoria da rodada corretiva de
--- 2026-08-29, que bloqueou a rodada anterior por permitir duas fontes
--- divergentes no FRONTEND): product_plates/product_plate_filaments é a
--- ÚNICA estrutura autoritativa da composição de produção a partir desta
--- migration. product_filaments (legado) é só uma PROJEÇÃO DE LEITURA de
--- compatibilidade, nunca mais escrita de forma independente por nenhuma
--- tela — o antigo diálogo "Composição de filamentos" (escrita direta e
--- isolada em product_filaments) foi removido do frontend nessa mesma
--- rodada corretiva. Nenhum trigger sincroniza as duas tabelas — não é
--- necessário, porque não existe mais nenhum caminho de escrita
--- independente em product_filaments capaz de divergir de product_plates:
--- toda escrita de composição de produção passa por set_product_production
--- (só chamada de dentro de create_product_with_plates/update_product_full),
--- que nunca toca product_filaments. product_filaments continua existindo
--- só para representar, sem perda, a composição de Produtos que ainda não
--- passaram pelo backfill desta migration (Seção 5 abaixo) — será seguro
--- remover essa dependência legada (a tabela, a RPC set_product_filaments e
--- a leitura de fallback no frontend) quando o backfill tiver rodado no
--- remoto E toda leitura (ProductDetailPage.tsx, ProductForm.tsx via
--- ProductsPage.tsx) tiver confirmado 100% dos Produtos ativos com ao menos
--- 1 linha em product_plates — não antes disso.
+-- FONTE AUTORITATIVA (definição CONCLUÍDA nesta rodada corretiva de
+-- 2026-08-29 — uma rodada anterior só tinha corrigido o lado FRONTEND,
+-- deixando a validação de Pedidos e a RPC legada ainda aceitarem/
+-- permitirem escrita por product_filaments; auditoria bloqueou até isso
+-- ser fechado também no banco): a partir de quando esta migration for
+-- aplicada, product_plates/product_plate_filaments passam a ser a ÚNICA
+-- estrutura autoritativa da composição de produção, em TODOS os níveis:
+--   - escrita: só set_product_production (Seção 4), chamada só de dentro
+--     de create_product_with_plates/update_product_full (Seções 5-6);
+--   - validação de Pedidos: validate_catalog_composition_for_creation
+--     (Seção 9) passa a exigir composição real em product_plate_filaments
+--     — product_filaments deixa de ser aceita como alternativa;
+--   - RPC/rota legada: set_product_filaments perde o grant de EXECUTE de
+--     service_role (Seção 10) — PATCH /products/:id/filaments passa a
+--     responder com um erro de negócio, sem chegar a chamar a RPC.
+-- product_filaments (tabela) e set_product_filaments (função) NÃO são
+-- removidas nem têm nenhuma linha apagada — preservadas apenas como DADO
+-- LEGADO/histórico e como fonte do próprio backfill (Seção 7). Nenhum
+-- trigger sincroniza as duas tabelas — não é necessário, porque depois
+-- desta migration não sobra nenhum caminho de escrita operacional em
+-- product_filaments capaz de divergir de product_plates. A remoção FÍSICA
+-- dessa dependência legada (dropar a tabela/função, remover o fallback de
+-- leitura do frontend) continua sendo um passo FUTURO, separado, só depois
+-- que 100% dos Produtos ativos tiverem confirmadamente ao menos 1 linha em
+-- product_plates — não antes disso, e não parte desta migration.
 --
 -- NOMENCLATURA — ATENÇÃO: "plate" aqui é um conceito NOVO ("um dos N
 -- trabalhos de impressão separados que compõem uma unidade do Produto",
@@ -49,14 +53,16 @@
 --                              tempo de produção do plate, em segundos).
 --   product_plate_filaments — uma linha de filamento/cor DENTRO de um
 --                              plate (peso em gramas), N por plate.
--- Substitui, para produtos que passarem a usar plates, o modelo anterior
--- "flat" de composição (public.product_filaments, Migration
--- 20260827113000 — 1 nível, sem noção de plate) como fonte de verdade da
--- Ficha Técnica de produção. A tabela flat product_filaments e sua RPC
--- (set_product_filaments) NÃO são removidas nem alteradas nesta migration
--- — permanecem exatamente como estão, preservando 100% de compatibilidade
--- com qualquer fluxo que ainda as use; a validação de composição de
--- Pedidos (Seção 4 abaixo) passa a aceitar QUALQUER uma das duas fontes.
+-- Substitui por completo, como fonte de verdade da Ficha Técnica de
+-- produção e da validação de composição de Pedidos, o modelo anterior
+-- "flat" (public.product_filaments, Migration 20260827113000 — 1 nível,
+-- sem noção de plate). A tabela product_filaments e a função
+-- set_product_filaments NÃO são removidas nem têm nenhuma linha apagada
+-- por esta migration — permanecem intactas, só como registro histórico e
+-- fonte de dados do próprio backfill (Seção 7 abaixo); deixam de ser um
+-- caminho de ESCRITA operacional (Seção 10) e deixam de ser aceitas pela
+-- validação de composição de Pedidos (Seção 9) assim que esta migration
+-- for aplicada — ver "FONTE AUTORITATIVA" acima para a decisão completa.
 --
 -- TOTAIS EFETIVOS — decisão de design: em vez de criar colunas novas
 -- "peso efetivo"/"tempo efetivo" que os contratos existentes precisariam
@@ -504,78 +510,7 @@ grant execute on function public.update_product_full(uuid, jsonb, jsonb, numeric
   to service_role;
 
 -- =============================================================================
--- 7) validate_catalog_composition_for_creation — CORREÇÃO DE COMPATIBILIDADE
---    (mesma assinatura de 20260829150000_add_order_initial_status_classification.sql,
---    corpo real conferido integralmente antes desta substituição): a
---    checagem de "este Produto de Catálogo tem composição de filamentos"
---    passa a aceitar QUALQUER UMA das duas fontes — product_plates (novo)
---    OU product_filaments (legado, flat) — em vez de só a segunda. Um
---    Produto migrado para plates passa a ser reconhecido pela primeira; um
---    Produto que nunca adotou plates (ou um Produto criado antes desta
---    migration, antes de qualquer backfill futuro) continua sendo
---    reconhecido pela segunda, exatamente como já funcionava. Nenhuma
---    outra linha desta função é alterada.
--- =============================================================================
-create or replace function public.validate_catalog_composition_for_creation(p_items jsonb)
-returns void
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  v_item jsonb;
-  v_item_type text;
-  v_product_id uuid;
-  v_product_name text;
-  v_product_type text;
-  v_has_composition boolean;
-  v_missing_names text[] := '{}';
-begin
-  for v_item in select * from jsonb_array_elements(p_items)
-  loop
-    v_item_type := v_item ->> 'item_type';
-    if v_item_type <> 'CATALOG' then
-      continue;
-    end if;
-
-    v_product_id := nullif(v_item ->> 'product_id', '')::uuid;
-    if v_product_id is null then
-      raise exception 'Item CATALOG exige product_id';
-    end if;
-
-    select name, product_type into v_product_name, v_product_type
-      from public.products
-      where id = v_product_id;
-
-    if not found or v_product_type <> 'CATALOG' then
-      raise exception 'products.id % não encontrado ou não corresponde a um produto de Catálogo', v_product_id;
-    end if;
-
-    select exists (
-      select 1 from public.product_plates where product_id = v_product_id
-      union all
-      select 1 from public.product_filaments where product_id = v_product_id
-    ) into v_has_composition;
-
-    if not v_has_composition and not (v_product_name = any(v_missing_names)) then
-      v_missing_names := v_missing_names || v_product_name;
-    end if;
-  end loop;
-
-  if array_length(v_missing_names, 1) > 0 then
-    raise exception 'ORDER_CATALOG_MISSING_COMPOSITION: Não foi possível enviar o pedido para a Fila de produção. Cadastre a composição de filamentos dos produtos: %.', array_to_string(v_missing_names, ', ');
-  end if;
-end;
-$$;
-
-comment on function public.validate_catalog_composition_for_creation(jsonb) is
-  'Valida, para um Pedido novo que nasceria em IN_PRODUCTION_QUEUE (nenhum item CUSTOM), que todo item CATALOG tem product_id apontando para um Produto de Catálogo real com composição de filamentos em product_plates (novo, por plate) OU product_filaments (legado, flat) — qualquer uma das duas fontes é aceita. Bloqueia toda a criação e lista, deduplicados por nome, todos os produtos sem composição na mesma mensagem (ORDER_CATALOG_MISSING_COMPOSITION:). Nunca chamada para pedidos com item CUSTOM nem para editar um pedido existente.';
-
-revoke execute on function public.validate_catalog_composition_for_creation(jsonb)
-  from public, anon, authenticated, service_role;
-
--- =============================================================================
--- 8) BACKFILL (parte desta migration, só executa quando ela for APLICADA —
+-- 7) BACKFILL (parte desta migration, só executa quando ela for APLICADA —
 --    não nesta rodada) — representa a composição/peso/tempo JÁ EXISTENTES
 --    de cada Produto como "Plate 1", preservando os valores efetivos
 --    EXATAMENTE como estavam, byte a byte, nunca recalculados.
@@ -644,8 +579,15 @@ begin
 end $$;
 
 -- =============================================================================
--- 9) Verificações — mesmo padrão de todas as migrations anteriores deste
---    projeto: prova estruturalmente que nada além do pretendido mudou.
+-- 8) Verificações do backfill — mesmo padrão de todas as migrations
+--    anteriores deste projeto: prova estruturalmente que nada além do
+--    pretendido mudou. Roda ANTES da Seção 9 (redefinição de
+--    validate_catalog_composition_for_creation para aceitar exclusivamente
+--    product_plate_filaments) — se o backfill deixou qualquer Produto
+--    legado sem a composição correspondente em product_plate_filaments,
+--    este bloco aborta a migration inteira (schema + backfill + a nova
+--    validação, tudo na mesma transação) ANTES que a validação mais
+--    estrita chegue a se tornar operacional.
 -- =============================================================================
 do $$
 declare
@@ -655,8 +597,13 @@ declare
   v_authenticated_can_execute boolean;
   v_service_role_can_execute boolean;
   v_orphan_count integer;
+  v_missing_count integer;
+  v_mismatch_count integer;
+  v_eligible_product_count integer;
+  v_plate_count integer;
+  v_override_mismatch_count integer;
 begin
-  -- 9.1 set_product_production: SECURITY DEFINER, search_path vazio, ZERO
+  -- 8.1 set_product_production: SECURITY DEFINER, search_path vazio, ZERO
   -- grants (nem service_role).
   select prosecdef into v_is_security_definer
     from pg_proc where pronamespace = 'public'::regnamespace and proname = 'set_product_production';
@@ -680,7 +627,7 @@ begin
       v_anon_can_execute, v_authenticated_can_execute, v_service_role_can_execute;
   end if;
 
-  -- 9.2 create_product_with_plates / update_product_full: exclusivas de
+  -- 8.2 create_product_with_plates / update_product_full: exclusivas de
   -- service_role.
   select has_function_privilege('authenticated', 'public.create_product_with_plates(text,text,text,text,numeric,uuid,boolean,jsonb,numeric,integer,jsonb,jsonb,uuid)', 'EXECUTE') into v_authenticated_can_execute;
   if v_authenticated_can_execute then
@@ -700,7 +647,7 @@ begin
     raise exception 'Abortando: service_role deveria ter EXECUTE em update_product_full.';
   end if;
 
-  -- 9.3 validate_catalog_composition_for_creation: continua zero grants
+  -- 8.3 validate_catalog_composition_for_creation: continua zero grants
   -- (nem service_role) — só o corpo mudou.
   select has_function_privilege('anon', 'public.validate_catalog_composition_for_creation(jsonb)', 'EXECUTE') into v_anon_can_execute;
   select has_function_privilege('authenticated', 'public.validate_catalog_composition_for_creation(jsonb)', 'EXECUTE') into v_authenticated_can_execute;
@@ -709,7 +656,7 @@ begin
     raise exception 'Abortando: validate_catalog_composition_for_creation tem EXECUTE concedido a alguém — deveria continuar sem nenhum grant.';
   end if;
 
-  -- 9.4 Backfill: nenhum product_plate_filaments órfão (todo filament_type_id
+  -- 8.4 Backfill: nenhum product_plate_filaments órfão (todo filament_type_id
   -- copiado do product_filaments original continua existindo e ativo não é
   -- exigido aqui — a checagem de ativo é só na escrita, não retroativa a
   -- dados legados) e toda linha de product_plates tem plate_number = 1
@@ -729,5 +676,229 @@ begin
     where pf.id is null;
   if v_orphan_count > 0 then
     raise exception 'Abortando: encontrada(s) % linha(s) em product_plate_filaments sem correspondência em product_filaments — o backfill não deveria inventar nenhuma linha nova.', v_orphan_count;
+  end if;
+
+  -- 8.5 Nenhum Produto com composição em product_filaments ficou SEM a
+  -- correspondente em product_plate_filaments — a checagem inversa da 8.4
+  -- acima (que só provava "nada foi inventado"; esta prova "nada foi
+  -- esquecido"). Aborta a migration inteira se encontrar qualquer um —
+  -- é exatamente o cenário "Produto legado com composição, mas plates sem
+  -- ela" que tornaria a nova validação (Seção 9) uma regressão real.
+  select count(*) into v_missing_count
+    from public.product_filaments pf
+    where not exists (
+      select 1
+      from public.product_plate_filaments ppf
+      join public.product_plates pp on pp.id = ppf.plate_id
+      where pp.product_id = pf.product_id
+        and ppf.filament_type_id = pf.filament_type_id
+    );
+  if v_missing_count > 0 then
+    raise exception 'Abortando: encontrada(s) % linha(s) em product_filaments sem a linha correspondente copiada para product_plate_filaments — o backfill teria deixado um Produto legado sem a composição autoritativa nova.', v_missing_count;
+  end if;
+
+  -- 8.6 Nenhuma divergência de peso entre a linha legada e a linha copiada
+  -- (mesmo filamento, mesmo produto, peso diferente) — o backfill deveria
+  -- ser uma cópia byte a byte, nunca um recálculo.
+  select count(*) into v_mismatch_count
+    from public.product_filaments pf
+    join public.product_plates pp on pp.product_id = pf.product_id
+    join public.product_plate_filaments ppf
+      on ppf.plate_id = pp.id and ppf.filament_type_id = pf.filament_type_id
+    where ppf.weight_grams <> pf.theoretical_weight_grams;
+  if v_mismatch_count > 0 then
+    raise exception 'Abortando: encontrada(s) % linha(s) copiada(s) para product_plate_filaments com peso diferente do original em product_filaments — o backfill deveria preservar o peso exatamente.', v_mismatch_count;
+  end if;
+
+  -- 8.7 Nenhum "plate órfão": a quantidade de Plates 1 criados pelo
+  -- backfill bate exatamente com a quantidade de Produtos elegíveis (mesmo
+  -- critério do WHERE da Seção 7) — nem plate a mais (criado sem
+  -- justificativa) nem a menos (Produto elegível esquecido).
+  select count(*) into v_eligible_product_count
+    from public.products p
+    where exists (select 1 from public.product_filaments pf where pf.product_id = p.id)
+       or p.default_print_time_seconds is not null
+       or p.default_weight_grams is not null;
+  select count(*) into v_plate_count from public.product_plates where plate_number = 1;
+  if v_plate_count <> v_eligible_product_count then
+    raise exception 'Abortando: % Produto(s) elegível(is) para backfill, mas % Plate(s) 1 criado(s) — deveriam ser exatamente iguais (nenhum plate órfão, nenhum Produto esquecido).', v_eligible_product_count, v_plate_count;
+  end if;
+
+  -- 8.8 Ajustes manuais copiados preservam EXATAMENTE o peso/tempo efetivo
+  -- anterior (products.default_weight_grams/default_print_time_seconds,
+  -- colunas não tocadas pelo backfill, continuam com o valor original para
+  -- comparar) — garante que "preserva ajustes" vale para 100% dos Produtos
+  -- backfilled, não só os que tinham product_filaments.
+  select count(*) into v_override_mismatch_count
+    from public.products p
+    join public.product_plates pp on pp.product_id = p.id and pp.plate_number = 1
+    where p.production_weight_manual_override_grams is distinct from p.default_weight_grams
+       or p.production_time_manual_override_seconds is distinct from p.default_print_time_seconds;
+  if v_override_mismatch_count > 0 then
+    raise exception 'Abortando: % Produto(s) com Plate 1 cujo ajuste manual não bate byte a byte com o peso/tempo efetivo anterior — o backfill deveria preservá-lo exatamente.', v_override_mismatch_count;
+  end if;
+end $$;
+
+-- =============================================================================
+-- 9) validate_catalog_composition_for_creation — REDEFINIDA para exigir
+--    EXCLUSIVAMENTE product_plate_filaments (rodada corretiva 2026-08-29,
+--    ver "FONTE AUTORITATIVA" no cabeçalho). A versão anterior desta mesma
+--    migration aceitava product_plates OU product_filaments como
+--    alternativas — uma auditoria posterior apontou que isso permitia um
+--    Produto cuja composição real nos plates havia sido esvaziada (todos os
+--    filamentos removidos pelo usuário via update_product_full) continuar
+--    "aprovado" só porque a linha antiga em product_filaments nunca foi
+--    tocada por nenhuma escrita nova. Corrigido: a checagem de composição
+--    passa a olhar SÓ product_plate_filaments (via product_plates do
+--    Produto) — nunca mais product_filaments. Só roda depois da Seção 8
+--    (verificações do backfill) ter confirmado, sem exceção, que todo
+--    Produto com composição legada válida já tem a cópia correspondente em
+--    product_plate_filaments — nenhum Produto antes válido perde
+--    validade por causa desta troca. Assinatura, `SECURITY DEFINER`,
+--    `search_path=''` e o restante do corpo (classificação
+--    CATALOG/SPOT/CUSTOM feita por determine_order_initial_status, nunca
+--    tocada aqui; mensagem ORDER_CATALOG_MISSING_COMPOSITION: com os nomes
+--    reais dos produtos incompletos; formas de pagamento, idempotência,
+--    rollback, histórico, autenticação, grants de create_order — nenhum
+--    tocado) preservados byte a byte em relação à versão anterior desta
+--    própria migration, só a fonte da checagem de composição muda.
+-- =============================================================================
+create or replace function public.validate_catalog_composition_for_creation(p_items jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_item jsonb;
+  v_item_type text;
+  v_product_id uuid;
+  v_product_name text;
+  v_product_type text;
+  v_has_composition boolean;
+  v_missing_names text[] := '{}';
+begin
+  for v_item in select * from jsonb_array_elements(p_items)
+  loop
+    v_item_type := v_item ->> 'item_type';
+    if v_item_type <> 'CATALOG' then
+      continue;
+    end if;
+
+    v_product_id := nullif(v_item ->> 'product_id', '')::uuid;
+    if v_product_id is null then
+      raise exception 'Item CATALOG exige product_id';
+    end if;
+
+    select name, product_type into v_product_name, v_product_type
+      from public.products
+      where id = v_product_id;
+
+    if not found or v_product_type <> 'CATALOG' then
+      raise exception 'products.id % não encontrado ou não corresponde a um produto de Catálogo', v_product_id;
+    end if;
+
+    select exists (
+      select 1
+      from public.product_plate_filaments ppf
+      join public.product_plates pp on pp.id = ppf.plate_id
+      where pp.product_id = v_product_id
+    ) into v_has_composition;
+
+    if not v_has_composition and not (v_product_name = any(v_missing_names)) then
+      v_missing_names := v_missing_names || v_product_name;
+    end if;
+  end loop;
+
+  if array_length(v_missing_names, 1) > 0 then
+    raise exception 'ORDER_CATALOG_MISSING_COMPOSITION: Não foi possível enviar o pedido para a Fila de produção. Cadastre a composição de filamentos dos produtos: %.', array_to_string(v_missing_names, ', ');
+  end if;
+end;
+$$;
+
+comment on function public.validate_catalog_composition_for_creation(jsonb) is
+  'Valida, para um Pedido novo que nasceria em IN_PRODUCTION_QUEUE (nenhum item CUSTOM), que todo item CATALOG tem product_id apontando para um Produto de Catálogo real com composição de filamentos real em product_plate_filaments (via product_plates do Produto) — a ÚNICA fonte aceita a partir desta migration; product_filaments (legado) NÃO é mais considerada, mesmo que ainda tenha linhas. Bloqueia toda a criação e lista, deduplicados por nome, todos os produtos sem composição na mesma mensagem (ORDER_CATALOG_MISSING_COMPOSITION:). Nunca chamada para pedidos com item CUSTOM nem para editar um pedido existente.';
+
+revoke execute on function public.validate_catalog_composition_for_creation(jsonb)
+  from public, anon, authenticated, service_role;
+
+-- =============================================================================
+-- 10) Desativação da RPC/rota legada para escrita operacional —
+--     set_product_filaments (Migration 20260827113000, já aplicada) perde
+--     o EXECUTE de service_role: depois desta migration, nenhum papel
+--     operacional (nem authenticated/anon, que nunca tiveram, nem
+--     service_role, que é como a Edge Function `products` a chamava) pode
+--     mais executá-la. A função e a tabela product_filaments continuam
+--     existindo, com todos os dados intactos — só a CAPACIDADE de
+--     ESCREVER de forma independente nelas é removida; nenhum DROP, nenhum
+--     DELETE. `supabase/functions/products/handler.ts` (mesma rodada,
+--     arquivo local ainda não publicado) já para de chamar esta RPC na
+--     rota `PATCH /products/:id/filaments`, respondendo com um erro de
+--     negócio claro (marcador `PRODUCT_FILAMENTS_ROUTE_RETIRED:`) antes de
+--     sequer tentar — esta revogação de grant é a segunda camada de defesa
+--     (nível banco), para que a RPC também falhe mesmo se algo além da
+--     Edge Function tentasse chamá-la diretamente. `PATCH /products/:id/full`
+--     (update_product_full, Seção 6) continua sendo o único caminho
+--     autorizado para alterar a composição de produção de um Produto —
+--     substitui integralmente set_product_filaments, inclusive para
+--     Produtos com múltiplos plates (que a RPC legada nunca soube
+--     representar, já que só conhecia uma composição "flat" por Produto).
+-- =============================================================================
+revoke execute on function public.set_product_filaments(uuid, jsonb, uuid)
+  from service_role;
+
+comment on function public.set_product_filaments(uuid, jsonb, uuid) is
+  'DESCONTINUADA para escrita operacional a partir de 20260829160000 (estrutura produtiva por plates) — sem EXECUTE concedido a nenhum papel. Preservada só por compatibilidade histórica/rollback: a tabela product_filaments e os dados gravados por esta função antes da descontinuação NÃO são apagados. A composição de produção de um Produto (incl. múltiplos plates) é alterada exclusivamente por update_product_full/create_product_with_plates (via set_product_production).';
+
+-- =============================================================================
+-- 11) Verificações finais — confirma que a Seção 9 (nova validação) e a
+--     Seção 10 (RPC legada desativada) ficaram exatamente como descrito
+--     acima, sem efeito colateral em nenhuma outra função/grant.
+-- =============================================================================
+do $$
+declare
+  v_anon_can_execute boolean;
+  v_authenticated_can_execute boolean;
+  v_service_role_can_execute boolean;
+  v_function_body text;
+begin
+  -- 11.1 validate_catalog_composition_for_creation: continua zero grants
+  -- (nem service_role) depois da redefinição da Seção 9.
+  select has_function_privilege('anon', 'public.validate_catalog_composition_for_creation(jsonb)', 'EXECUTE') into v_anon_can_execute;
+  select has_function_privilege('authenticated', 'public.validate_catalog_composition_for_creation(jsonb)', 'EXECUTE') into v_authenticated_can_execute;
+  select has_function_privilege('service_role', 'public.validate_catalog_composition_for_creation(jsonb)', 'EXECUTE') into v_service_role_can_execute;
+  if v_anon_can_execute or v_authenticated_can_execute or v_service_role_can_execute then
+    raise exception 'Abortando: validate_catalog_composition_for_creation (versão nova, Seção 9) tem EXECUTE concedido a alguém — deveria continuar sem nenhum grant.';
+  end if;
+
+  -- 11.2 O corpo real da função (via pg_get_functiondef, não uma busca de
+  -- texto genérica que geraria falso positivo contra este próprio
+  -- comentário) não contém mais nenhuma referência a product_filaments —
+  -- prova estrutural de que a fonte antiga foi removida da validação, não
+  -- só documentada como removida.
+  select pg_get_functiondef('public.validate_catalog_composition_for_creation(jsonb)'::regprocedure) into v_function_body;
+  if v_function_body ilike '%product_filaments%' then
+    raise exception 'Abortando: o corpo de validate_catalog_composition_for_creation ainda referencia product_filaments — a fonte legada não deveria mais ser aceita.';
+  end if;
+  if v_function_body not ilike '%product_plate_filaments%' then
+    raise exception 'Abortando: o corpo de validate_catalog_composition_for_creation não referencia product_plate_filaments — a checagem de composição parece ter sido perdida.';
+  end if;
+
+  -- 11.3 set_product_filaments: zero EXECUTE para qualquer papel (a função
+  -- continua existindo — só sem grants; se não existisse mais,
+  -- has_function_privilege abaixo já levantaria erro de "function does not
+  -- exist", provando por si só que não foi apagada).
+  select has_function_privilege('anon', 'public.set_product_filaments(uuid,jsonb,uuid)', 'EXECUTE') into v_anon_can_execute;
+  select has_function_privilege('authenticated', 'public.set_product_filaments(uuid,jsonb,uuid)', 'EXECUTE') into v_authenticated_can_execute;
+  select has_function_privilege('service_role', 'public.set_product_filaments(uuid,jsonb,uuid)', 'EXECUTE') into v_service_role_can_execute;
+  if v_anon_can_execute or v_authenticated_can_execute or v_service_role_can_execute then
+    raise exception 'Abortando: set_product_filaments ainda tem EXECUTE concedido a alguém (anon=%, authenticated=%, service_role=%) — deveria estar completamente desativada para escrita operacional.',
+      v_anon_can_execute, v_authenticated_can_execute, v_service_role_can_execute;
+  end if;
+
+  -- 11.4 A tabela product_filaments continua existindo (não foi dropada) —
+  -- to_regclass devolve NULL se a tabela não existisse mais.
+  if to_regclass('public.product_filaments') is null then
+    raise exception 'Abortando: a tabela product_filaments não deveria ter sido removida (só a capacidade de escrita operacional, nunca os dados).';
   end if;
 end $$;

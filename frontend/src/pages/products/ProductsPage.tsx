@@ -121,6 +121,18 @@ export function ProductsPage() {
   // (FilamentCompositionForm, escrita direta e independente em
   // product_filaments) foi removido: mantê-lo abriria exatamente o caminho
   // de duas fontes divergentes que esta rodada corrige.
+  //
+  // IMPORTANTE — este fallback é uma proteção TRANSITÓRIA, não o fluxo
+  // normal: depois que a migration 20260829160000 for aplicada, o backfill
+  // garante que todo Produto com composição/peso/tempo legados já nasce
+  // com Plate 1 preenchido — editPlates.plates.length === 0 deixa de
+  // acontecer para qualquer Produto que já tinha alguma produção
+  // cadastrada, e este ramo (editUsingLegacyFallback) só continua
+  // relevante para um Produto genuinamente novo, sem nenhuma composição
+  // ainda. Não reintroduza nenhum diálogo/formulário que escreva em
+  // product_filaments — a RPC set_product_filaments também perde o
+  // EXECUTE de service_role nessa mesma migration (ver
+  // supabase/functions/products/handler.ts).
   const [editDialogProduct, setEditDialogProduct] = useState<Product | null>(null)
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)

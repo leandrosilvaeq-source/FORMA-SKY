@@ -14,7 +14,12 @@
 //   PATCH  /products/:id               -> RPC update_product (NOVA — 2026-08-29)
 //   PATCH  /products/:id/price         -> RPC update_product_price
 //   PATCH  /products/:id/composition   -> RPC set_product_composition
-//   PATCH  /products/:id/filaments     -> RPC set_product_filaments (Incremento 6A)
+//   PATCH  /products/:id/filaments     -> DESCONTINUADA (rodada corretiva 2026-08-29):
+//                                          nunca mais chama set_product_filaments;
+//                                          responde sempre com um erro de negócio
+//                                          (PRODUCT_FILAMENTS_ROUTE_RETIRED:) depois
+//                                          de autenticar — ver comentário da própria
+//                                          função abaixo.
 //   POST   /products/with-plates       -> RPC create_product_with_plates (NOVA — estrutura por plates, 2026-08-29)
 //   PATCH  /products/:id/full          -> RPC update_product_full (NOVA — estrutura por plates, 2026-08-29)
 //
@@ -34,10 +39,14 @@
 // plates + filamentos por plate + totais/ajuste manual + Acessórios +
 // Embalagens são salvos numa ÚNICA chamada atômica cada (create_product_with_plates/
 // update_product_full), nunca várias chamadas HTTP separadas. As rotas
-// antigas (POST /products, PATCH /:id, PATCH /:id/composition, PATCH
-// /:id/filaments) continuam existindo e funcionando exatamente como antes
-// — nenhuma removida, nenhuma alterada — preservando 100% de
-// compatibilidade para qualquer uso direto delas fora do novo formulário.
+// antigas POST /products, PATCH /:id e PATCH /:id/composition continuam
+// existindo e funcionando exatamente como antes — nenhuma removida, nenhuma
+// alterada — preservando 100% de compatibilidade para qualquer uso direto
+// delas fora do novo formulário. PATCH /:id/filaments é a ÚNICA exceção
+// (rodada corretiva 2026-08-29): continua existindo como ROTA (nunca 404,
+// autenticação preservada), mas foi DESCONTINUADA para escrita — ver
+// comentário de handleUpdateProductFilaments logo abaixo e "FONTE
+// AUTORITATIVA" em supabase/migrations/20260829160000_add_product_plates_structure.sql.
 //
 // PATCH /products/:id (NOVA, 2026-08-29): substitui o antigo botão "Alterar
 // preço" por "Editar produto" no frontend — edita campos descritivos/de
@@ -69,7 +78,7 @@
 
 import { handlePreflight } from "../_shared/cors.ts";
 import { jsonResponse, errorResponse } from "../_shared/http.ts";
-import { NotFoundError, mapPgError, ValidationError } from "../_shared/errors.ts";
+import { BusinessRuleError, NotFoundError, mapPgError, ValidationError } from "../_shared/errors.ts";
 import { resolveOperator } from "../_shared/authContext.ts";
 import { getAdminClient } from "../_shared/supabaseAdmin.ts";
 import {
@@ -443,29 +452,33 @@ export function validateCompositionItems(
 // SÓ essa RPC, nunca as duas juntas na mesma requisição, preservando a
 // mesma separação/atomicidade independente já decidida no banco.
 // ---------------------------------------------------------------------------
+// DESCONTINUADA para escrita operacional (rodada corretiva 2026-08-29 —
+// ver "FONTE AUTORITATIVA" no cabeçalho de
+// supabase/migrations/20260829160000_add_product_plates_structure.sql).
+// Uma auditoria encontrou que, mesmo depois de product_plates passar a
+// existir, esta rota continuava chamando set_product_filaments — uma
+// segunda fonte de escrita operacional para a mesma composição que
+// PATCH /products/:id/full (update_product_full) já cobre integralmente,
+// inclusive para Produtos com múltiplos plates (que esta rota legada nunca
+// soube representar, por só conhecer uma composição "flat" por Produto).
+// A partir desta rodada, a rota continua respondendo (nunca 404 — mantém
+// autenticação e validação de UUID exatamente como antes), mas rejeita
+// TODA chamada com um erro de negócio claro, ANTES de sequer montar o
+// corpo ou chamar a RPC — set_product_filaments nunca é invocada daqui em
+// diante. A própria RPC também perde o EXECUTE de service_role
+// na migration pendente (defesa em profundidade, nível banco) — as duas
+// camadas juntas garantem que não sobra nenhum caminho de escrita
+// operacional independente em product_filaments.
 async function handleUpdateProductFilaments(req: Request, productId: string): Promise<Response> {
-  const operator = await resolveOperator(req);
+  await resolveOperator(req);
 
   if (!isUuid(productId)) {
     throw new ValidationError("Identificador de produto inválido na rota.");
   }
 
-  const rawBody = await req.text();
-  rejectIdentityFields(rawBody);
-  const body = parseJsonBody(rawBody);
-
-  const filaments = validateFilamentCompositionItems(body.filaments, "filaments");
-
-  const admin = getAdminClient();
-  const { error } = await admin.rpc("set_product_filaments", {
-    p_product_id: productId,
-    p_filaments: filaments,
-    p_changed_by: operator.userId,
-  });
-
-  if (error) throw mapPgError(error);
-
-  return jsonResponse(req, { success: true }, 200);
+  throw new BusinessRuleError(
+    "PRODUCT_FILAMENTS_ROUTE_RETIRED: Esta rota foi descontinuada. Altere a composição de filamentos pelo fluxo completo de edição do Produto (PATCH /products/:id/full), que suporta múltiplos plates.",
+  );
 }
 
 // ---------------------------------------------------------------------------

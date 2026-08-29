@@ -80,11 +80,15 @@ export function plateRowsFrom(
   }))
 }
 
-// Compatibilidade com Produtos legados (2026-08-29): product_plates é a
-// estrutura AUTORITATIVA de produção a partir desta migration; product_filaments
-// (tabela antiga, ainda não descontinuada) é só uma projeção de leitura,
-// mantida por compatibilidade até que o backfill da migration rode no
-// remoto. Enquanto isso não acontece, um Produto existente ainda não tem
+// Compatibilidade com Produtos legados (2026-08-29, ampliado na rodada
+// corretiva do mesmo dia): product_plates é a ÚNICA estrutura AUTORITATIVA
+// de produção a partir desta migration — em escrita (set_product_production)
+// E, a partir desta rodada corretiva, também na validação de composição de
+// Pedidos. product_filaments (tabela antiga) continua existindo só como
+// PROJEÇÃO DE LEITURA de compatibilidade — a RPC set_product_filaments foi
+// descontinuada para escrita operacional (perde o EXECUTE de service_role
+// na mesma migration) — mantida por compatibilidade até que o backfill da
+// migration rode no remoto. Enquanto isso não acontece, um Produto existente ainda não tem
 // nenhuma linha em product_plates — se ProductForm abrisse a edição desse
 // Produto com `plates: []`, o usuário veria uma composição vazia e, ao
 // salvar, apagaria silenciosamente o peso/tempo/filamentos que na verdade
