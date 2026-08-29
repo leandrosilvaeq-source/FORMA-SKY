@@ -260,6 +260,9 @@ export interface OrderFormInitialValues {
 export interface OrderFormSubmitValues extends CreateOrderInput {
   payment_condition?: PaymentCondition
   deposit_amount?: number | null
+  // Idempotência (2026-08-29) — só em mode === 'create', mesmo motivo dos
+  // dois campos acima. Ver getIdempotencyKey() abaixo.
+  idempotency_key?: string
 }
 
 interface OrderFormProps {
@@ -325,6 +328,22 @@ export function OrderForm({
   const [hasEditedDeposit, setHasEditedDeposit] = useState(false)
   const [depositError, setDepositError] = useState<string | null>(null)
   const depositInputRef = useRef<HTMLInputElement>(null)
+  // Idempotência (2026-08-29, só mode === 'create') — mesmo padrão exato de
+  // StockMovementForm.tsx: a chave só é (re)gerada quando o "fingerprint" do
+  // payload muda; duplo clique/retry de rede reenvia a MESMA chave, então
+  // create_order_with_payment devolve o pedido já criado em vez de duplicar.
+  // Nunca gerada a cada render — só dentro de handleSubmit.
+  const idempotencyRef = useRef<{ key: string; fingerprint: string } | null>(null)
+
+  function getIdempotencyKey(fingerprint: string): string {
+    if (idempotencyRef.current && idempotencyRef.current.fingerprint === fingerprint) {
+      return idempotencyRef.current.key
+    }
+    const key = crypto.randomUUID()
+    idempotencyRef.current = { key, fingerprint }
+    return key
+  }
+
   const [notes, setNotes] = useState(initialValues?.notes ?? '')
   const [items, setItems] = useState<ItemRow[]>(() =>
     initialValues && initialValues.items.length > 0
@@ -690,6 +709,26 @@ export function OrderForm({
     setItemErrors({})
     setDepositError(null)
 
+    // Fingerprint (só usado em mode === 'create', ver bloco abaixo) —
+    // mesmo princípio de StockMovementForm.tsx: cobre todos os campos que
+    // create_order_with_payment efetivamente recebe (cabeçalho + itens +
+    // forma de pagamento), para que qualquer alteração real no envio gere
+    // uma chave nova, e um reenvio idêntico (duplo clique/retry de rede)
+    // reutilize a mesma chave.
+    const fingerprint = JSON.stringify([
+      customerId,
+      saleType === 'B2B' ? companyId : null,
+      leadSourceId ?? null,
+      paymentMethod,
+      expectedDeliveryDate ? expectedDeliveryDate : null,
+      deliveryMethod ? deliveryMethod : null,
+      showShipping ? (shippingCostField.value ?? null) : null,
+      notes.trim() ? notes.trim() : null,
+      validatedItems,
+      paymentCondition,
+      paymentCondition === 'DEPOSIT' ? centsToAmount(depositCents) : null,
+    ])
+
     onSubmit({
       customer_id: customerId as string,
       // Força null em B2C independente do valor de companyId no estado —
@@ -734,6 +773,9 @@ export function OrderForm({
         ? {
             payment_condition: paymentCondition,
             ...(paymentCondition === 'DEPOSIT' ? { deposit_amount: centsToAmount(depositCents) } : {}),
+            // idempotency_key segue a mesma regra: só em mode === 'create',
+            // nunca em edição — getIdempotencyKey() SÓ é chamada aqui.
+            idempotency_key: getIdempotencyKey(fingerprint),
           }
         : {}),
     })

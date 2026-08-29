@@ -343,6 +343,14 @@ async function handleCreateOrder(req: Request): Promise<Response> {
 // deposit_amount só é lido/enviado quando payment_condition = DEPOSIT;
 // omitido/null nos outros dois casos (a RPC ignora o parâmetro nesses
 // casos, então enviar null é seguro).
+//
+// idempotency_key OPCIONAL — gerada pelo frontend (OrderForm.tsx, useRef
+// estável por "fingerprint", mesmo padrão de StockMovementForm.tsx) e
+// simplesmente repassada à RPC (que decide sozinha: chave nova cria
+// normalmente, chave repetida com o mesmo payload devolve o pedido já
+// criado em vez de duplicar, chave repetida com payload diferente é
+// rejeitada com IDEMPOTENCY_KEY_CONFLICT:). Nenhuma lógica de idempotência
+// é replicada aqui — só validação de formato (string não vazia).
 // ---------------------------------------------------------------------------
 async function handleCreateOrderWithPayment(req: Request): Promise<Response> {
   const operator = await resolveOperator(req);
@@ -361,6 +369,7 @@ async function handleCreateOrderWithPayment(req: Request): Promise<Response> {
     paymentCondition === "DEPOSIT"
       ? requireNumber(body.deposit_amount, "deposit_amount", { min: 0.01 })
       : null;
+  const idempotencyKey = optionalString(body.idempotency_key, "idempotency_key");
 
   const admin = getAdminClient();
   const { data, error } = await admin.rpc("create_order_with_payment", {
@@ -377,6 +386,7 @@ async function handleCreateOrderWithPayment(req: Request): Promise<Response> {
     p_payment_method: fields.paymentMethod,
     p_payment_condition: paymentCondition,
     p_deposit_amount: depositAmount,
+    p_idempotency_key: idempotencyKey,
   });
 
   if (error) throw mapPgError(error);

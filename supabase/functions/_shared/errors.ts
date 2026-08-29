@@ -299,6 +299,15 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
     "CUSTOMER_HAS_COMPANY:",
     (message) => new BusinessRuleError(message.replace(/^CUSTOMER_HAS_COMPANY:\s*/, "")),
   ],
+  // delete_customer (20260829140000, correção de auditoria — proteção
+  // absoluta e incondicional via customers.is_protected, nunca dependente
+  // de nome ou vínculo): verificado ANTES de CUSTOMER_HAS_ORDERS:/
+  // CUSTOMER_HAS_COMPANY: acima — um cliente protegido é rejeitado mesmo
+  // sem nenhum pedido/empresa vinculados.
+  [
+    "PROTECTED_CUSTOMER:",
+    (message) => new BusinessRuleError(message.replace(/^PROTECTED_CUSTOMER:\s*/, "")),
+  ],
   // delete_order (20260829141000): bloqueio de exclusão física por status,
   // pagamento, aprovação ou versão de item Personalizado vinculados.
   [

@@ -22,6 +22,18 @@
 -- escopo, só intenção documentada) — nada a checar além do que já é
 -- coberto abaixo.
 --
+-- REVISÃO OBRIGATÓRIA FUTURA (Incremento 6B — reserva/consumo automático de
+-- estoque, ainda não implementado, docs/05_ROADMAP_MODULOS.md §9b): quando
+-- reserva e/ou consumo automático de filamento/acessório/embalagem por
+-- pedido forem implementados, esta function DEVE ser revisada antes de
+-- qualquer aplicação da migration correspondente — um pedido com reserva
+-- ativa ou consumo já registrado (mesmo em QUOTE/CANCELLED, se a reserva
+-- sobreviver ao cancelamento) precisará de uma checagem de bloqueio nova,
+-- do mesmo padrão das quatro já existentes abaixo (payments/approvals/
+-- custom_versions/status), nunca silenciosamente ignorado. Esta nota é o
+-- lembrete formal exigido para essa revisão — delete_order nunca deve ser
+-- estendida "de passagem" junto de outra migration sem essa checagem.
+--
 -- REGRA DE EXCLUSÃO PROTEGIDA (pedido do usuário, literal):
 --   - status QUOTE ou CANCELLED apenas;
 --   - nenhum pagamento (payments.order_id);

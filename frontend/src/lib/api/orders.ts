@@ -110,6 +110,11 @@ export interface CreateOrderWithPaymentInput extends CreateOrderInput {
   // Obrigatório (e só usado) quando payment_condition = 'DEPOSIT' — ignorado
   // pela RPC nos outros dois casos.
   deposit_amount?: number | null
+  // Idempotência (2026-08-29) — gerada por OrderForm.tsx (useRef estável por
+  // "fingerprint" dos campos enviados, mesmo padrão de StockMovementForm.tsx)
+  // e reenviada em cada retry do MESMO envio lógico; retry com o mesmo valor
+  // nunca duplica pedido/pagamento (create_order_with_payment decide).
+  idempotency_key?: string
 }
 
 // PUT /orders/:id/full -> update_quote_order(). Edição completa atômica de

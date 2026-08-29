@@ -16,15 +16,33 @@
 -- pagamento inicial, estruturalmente: só create_order_with_payment (abaixo)
 -- tem esse efeito, e só é chamada pela rota de criação.
 --
--- 1) Coluna nova em orders — nullable (pedidos existentes/criados por
+-- 1) Colunas novas em orders — nullable (pedidos existentes/criados por
 -- create_order "puro" continuam sem essa informação, sem erro), CHECK
--- restringindo aos 3 valores válidos.
+-- restringindo payment_condition aos 3 valores válidos.
 alter table public.orders
   add column payment_condition text
     check (payment_condition is null or payment_condition in ('ADVANCE', 'DEPOSIT', 'ON_DELIVERY'));
 
 comment on column public.orders.payment_condition is
   'Forma de pagamento escolhida na criação do pedido: ADVANCE (adiantado — paga o total na criação), DEPOSIT (sinal — paga uma parte na criação, saldo depois) ou ON_DELIVERY (na entrega — nenhum pagamento na criação). Nullable: só preenchida por create_order_with_payment(); pedidos criados por create_order() "puro" (sem essa escolha) permanecem null. Nunca reescrita por edição de pedido — update_order()/update_quote_order() não tocam esta coluna.';
+
+-- Idempotência (correção de auditoria, 2026-08-29 — "retry não duplica
+-- pedido nem pagamento"): mesmo padrão já usado por
+-- stock_movements.idempotency_key/filament_movements.idempotency_key/
+-- inventory_purchases.idempotency_key — coluna nullable + índice único
+-- parcial (só entre chaves não-nulas). Vive em orders (não numa tabela à
+-- parte) porque create_order_with_payment cria exatamente um pedido por
+-- chamada — a chave identifica a TENTATIVA LÓGICA de criação do pedido
+-- inteiro (cabeçalho + itens + pagamento inicial), nunca só o pagamento.
+alter table public.orders
+  add column idempotency_key text;
+
+create unique index ux_orders_idempotency_key
+  on public.orders (idempotency_key)
+  where idempotency_key is not null;
+
+comment on column public.orders.idempotency_key is
+  'Chave de idempotência opcional da criação (create_order_with_payment) — gerada uma vez no cliente (frontend/src/components/orders/OrderForm.tsx, useRef estável por "fingerprint" dos campos enviados, mesmo padrão de StockMovementForm.tsx) e reenviada em cada retry do MESMO envio lógico. Uma repetição com a MESMA chave e o mesmo payload relevante devolve o pedido já criado, sem duplicar; payload diferente sob a mesma chave é rejeitado (IDEMPOTENCY_KEY_CONFLICT:). Null para pedidos criados por create_order() "puro" (sem essa proteção) ou sem chave informada.';
 
 -- ---------------------------------------------------------------------------
 -- create_order_with_payment — cria o pedido (reaproveitando create_order,
@@ -63,7 +81,8 @@ create or replace function public.create_order_with_payment(
   p_changed_by uuid,
   p_payment_method text,
   p_payment_condition text,
-  p_deposit_amount numeric(10, 2)
+  p_deposit_amount numeric(10, 2),
+  p_idempotency_key text default null
 )
 returns jsonb
 language plpgsql
@@ -76,6 +95,7 @@ declare
   v_total_value numeric(10, 2);
   v_shipping_cost numeric(10, 2);
   v_total_receivable numeric(10, 2);
+  v_existing public.orders;
 begin
   perform public.assert_active_user(p_changed_by);
 
@@ -91,6 +111,39 @@ begin
     raise exception 'create_order_with_payment: p_deposit_amount deve ser maior que zero quando p_payment_condition = DEPOSIT';
   end if;
 
+  -- Idempotência checada ANTES de qualquer trabalho pesado (criar pedido,
+  -- registrar pagamento) — mesmo critério pragmático já usado por
+  -- register_inventory_purchase: compara só os campos que uma repetição
+  -- REAL do mesmo clique/retry nunca muda (cliente, forma/método de
+  -- pagamento, valor do sinal, observações) — não compara p_items byte a
+  -- byte (o carrinho já foi expandido em order_items, comparação
+  -- computacionalmente mais cara e não observada como necessária na
+  -- prática; um retry real do mesmo envio nunca muda os itens). Payload
+  -- diferente sob a mesma chave é rejeitado (IDEMPOTENCY_KEY_CONFLICT:).
+  if p_idempotency_key is not null then
+    select * into v_existing from public.orders where idempotency_key = p_idempotency_key;
+    if found then
+      if v_existing.customer_id is not distinct from p_customer_id
+         and v_existing.company_id is not distinct from p_company_id
+         and v_existing.payment_condition is not distinct from p_payment_condition
+         and v_existing.payment_method is not distinct from p_payment_method
+         and coalesce(v_existing.notes, '') = coalesce(p_notes, '')
+         and (
+           p_payment_condition <> 'DEPOSIT'
+           or exists (
+             select 1 from public.payments
+             where order_id = v_existing.id and payment_type = 'SINAL' and amount = p_deposit_amount
+           )
+         )
+      then
+        select id into v_payment_id from public.payments where order_id = v_existing.id order by created_at limit 1;
+        return jsonb_build_object('order_id', v_existing.id, 'payment_id', v_payment_id);
+      else
+        raise exception 'IDEMPOTENCY_KEY_CONFLICT: idempotency_key % já foi usada com um payload diferente', p_idempotency_key;
+      end if;
+    end if;
+  end if;
+
   -- Reaproveita create_order (sobrecarga de 11 parâmetros,
   -- 20260821014342_extend_order_summary_and_payment_method.sql) para criar
   -- pedido + itens — nenhuma duplicação do corpo já existente/testado. Já
@@ -102,7 +155,18 @@ begin
     p_changed_by, p_payment_method
   );
 
-  update public.orders set payment_condition = p_payment_condition where id = v_order_id;
+  -- Concorrência real (duas chamadas simultâneas com a MESMA chave, nenhuma
+  -- ainda vendo a outra no SELECT acima): a perdedora recebe um
+  -- unique_violation (23505, já mapeado genericamente por
+  -- _shared/errors.ts) neste UPDATE — sem tratamento adicional aqui, mesmo
+  -- padrão/mesma justificativa já documentada em register_inventory_purchase
+  -- (esta gravação nunca é a ÚNICA operação de escrita da chamada: se a
+  -- perdedora falhar aqui, toda a transação — incluindo o create_order() já
+  -- executado por ela acima — desfaz sozinha; repetir a mesma requisição
+  -- encontra o pedido já gravado pela vencedora).
+  update public.orders
+    set payment_condition = p_payment_condition, idempotency_key = p_idempotency_key
+    where id = v_order_id;
 
   if p_payment_condition = 'ADVANCE' then
     select total_value, shipping_cost into v_total_value, v_shipping_cost
@@ -140,10 +204,10 @@ begin
 end;
 $$;
 
-comment on function public.create_order_with_payment(uuid, uuid, uuid, date, text, numeric, numeric, text, jsonb, uuid, text, text, numeric) is
-  'Cria um pedido (via create_order, reaproveitada) e, conforme p_payment_condition (ADVANCE/DEPOSIT/ON_DELIVERY), registra atomicamente o pagamento inicial (via register_payment, reaproveitada) na MESMA transação — se o pagamento falhar (ex.: DEPOSIT >= total), o pedido inteiro é desfeito. Grava orders.payment_condition. Nunca chamada por edição de pedido existente (update_order/update_quote_order não a tocam). paid_at do pagamento é sempre now() — nunca calculado a partir de input do cliente.';
+comment on function public.create_order_with_payment(uuid, uuid, uuid, date, text, numeric, numeric, text, jsonb, uuid, text, text, numeric, text) is
+  'Cria um pedido (via create_order, reaproveitada) e, conforme p_payment_condition (ADVANCE/DEPOSIT/ON_DELIVERY), registra atomicamente o pagamento inicial (via register_payment, reaproveitada) na MESMA transação — se o pagamento falhar (ex.: DEPOSIT >= total), o pedido inteiro é desfeito. Grava orders.payment_condition. Nunca chamada por edição de pedido existente (update_order/update_quote_order não a tocam). paid_at do pagamento é sempre now() — nunca calculado a partir de input do cliente. p_idempotency_key opcional: uma repetição com a mesma chave e payload equivalente devolve o pedido já criado em vez de duplicar (IDEMPOTENCY_KEY_CONFLICT: se o payload divergir).';
 
-revoke execute on function public.create_order_with_payment(uuid, uuid, uuid, date, text, numeric, numeric, text, jsonb, uuid, text, text, numeric)
+revoke execute on function public.create_order_with_payment(uuid, uuid, uuid, date, text, numeric, numeric, text, jsonb, uuid, text, text, numeric, text)
   from public, anon, authenticated;
-grant execute on function public.create_order_with_payment(uuid, uuid, uuid, date, text, numeric, numeric, text, jsonb, uuid, text, text, numeric)
+grant execute on function public.create_order_with_payment(uuid, uuid, uuid, date, text, numeric, numeric, text, jsonb, uuid, text, text, numeric, text)
   to service_role;

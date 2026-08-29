@@ -14,6 +14,7 @@ const customers: Customer[] = [
     acquisition_source_id: null,
     notes: null,
     is_active: true,
+    is_protected: false,
     created_at: '',
     updated_at: '',
   },
@@ -43,6 +44,7 @@ const inactiveCustomer: Customer = {
   acquisition_source_id: null,
   notes: null,
   is_active: false,
+  is_protected: false,
   created_at: '',
   updated_at: '',
 }
@@ -810,6 +812,98 @@ describe('OrderForm', () => {
     // discount_value é enviada por item nesta rodada.
     const submittedValue = onSubmit.mock.calls[0][0]
     expect('discount_value' in submittedValue.items[0]).toBe(false)
+  })
+
+  // ---------------------------------------------------------------------
+  // Idempotência (2026-08-29, migration 20260829142000): idempotency_key só
+  // em mode === 'create' (nunca em edição), chave estável no retry do MESMO
+  // envio, nova chave após qualquer mudança relevante — mesmo padrão já
+  // coberto por StockMovementForm.test.tsx.
+  // ---------------------------------------------------------------------
+
+  it('idempotência: envia idempotency_key (string não vazia) junto do payload em mode create', async () => {
+    const user = userEvent.setup()
+    const { onSubmit } = renderForm()
+
+    await fillMinimalValidOrder(user)
+    await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    const values = onSubmit.mock.calls[0][0]
+    expect(typeof values.idempotency_key).toBe('string')
+    expect(values.idempotency_key.length).toBeGreaterThan(0)
+  })
+
+  it('idempotência: nunca inclui idempotency_key em mode edit', async () => {
+    const user = userEvent.setup()
+    const { onSubmit } = renderForm({
+      mode: 'edit',
+      initialValues: {
+        customerId: 'c1',
+        companyId: null,
+        leadSourceId: null,
+        paymentMethod: null,
+        deliveryMethod: null,
+        shippingCost: null,
+        expectedDeliveryDate: null,
+        notes: null,
+        items: [{ productId: 'p1', quantity: 1, unitPrice: 25, personalizationFee: 0 }],
+      },
+    })
+
+    await user.click(screen.getByRole('button', { name: /salvar/i }))
+
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    const values = onSubmit.mock.calls[0][0]
+    expect('idempotency_key' in values).toBe(false)
+  })
+
+  it('idempotência: reenviar o MESMO payload (após um erro) reusa a mesma idempotency_key', async () => {
+    const user = userEvent.setup()
+    const { onSubmit } = renderForm()
+
+    await fillMinimalValidOrder(user)
+    await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+    const firstKey = onSubmit.mock.calls[0][0].idempotency_key
+
+    // Reenvia sem alterar nada — mesmo botão, mesmo payload (simula retry
+    // após falha de rede/timeout, dialog ainda aberto).
+    await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+    const secondKey = onSubmit.mock.calls[1][0].idempotency_key
+
+    expect(secondKey).toBe(firstKey)
+  })
+
+  it('idempotência: alterar a quantidade depois de um envio gera uma nova idempotency_key', async () => {
+    const user = userEvent.setup()
+    const { onSubmit } = renderForm()
+
+    await fillMinimalValidOrder(user)
+    await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+    const firstKey = onSubmit.mock.calls[0][0].idempotency_key
+
+    const quantityInput = screen.getByLabelText('Quantidade')
+    await user.clear(quantityInput)
+    await user.type(quantityInput, '3')
+    await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+    const secondKey = onSubmit.mock.calls[1][0].idempotency_key
+
+    expect(secondKey).not.toBe(firstKey)
+  })
+
+  it('idempotência: trocar a Forma de pagamento depois de um envio gera uma nova idempotency_key', async () => {
+    const user = userEvent.setup()
+    const { onSubmit } = renderForm()
+
+    await fillMinimalValidOrder(user)
+    await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+    const firstKey = onSubmit.mock.calls[0][0].idempotency_key
+
+    await clickRadio(user, 'Forma de pagamento', 'Adiantado')
+    await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+    const secondKey = onSubmit.mock.calls[1][0].idempotency_key
+
+    expect(secondKey).not.toBe(firstKey)
   })
 
   it('não envia e mostra erro quando a quantidade é 0', async () => {

@@ -45,6 +45,7 @@ const customer: Customer = {
   acquisition_source_id: 'l1',
   notes: null,
   is_active: true,
+  is_protected: false,
   created_at: '',
   updated_at: '',
 }
@@ -831,6 +832,7 @@ describe('CustomersPage', () => {
       acquisition_source_id: 'l-whatsapp',
       notes: 'Zebra note',
       is_active: true,
+      is_protected: false,
       created_at: '',
       updated_at: '',
     }
@@ -843,6 +845,7 @@ describe('CustomersPage', () => {
       acquisition_source_id: 'l-instagram',
       notes: 'Alpha note',
       is_active: false,
+      is_protected: false,
       created_at: '',
       updated_at: '',
     }
@@ -855,6 +858,7 @@ describe('CustomersPage', () => {
       acquisition_source_id: null,
       notes: null,
       is_active: true,
+      is_protected: false,
       created_at: '',
       updated_at: '',
     }
@@ -867,6 +871,7 @@ describe('CustomersPage', () => {
       acquisition_source_id: null,
       notes: 'Beta note',
       is_active: true,
+      is_protected: false,
       created_at: '',
       updated_at: '',
     }
@@ -1135,17 +1140,17 @@ describe('CustomersPage', () => {
       expect(screen.getByText('Ana')).toBeInTheDocument()
     })
 
-    it('Petlink (ou qualquer cliente oficial protegido pelo backend): mesmo mecanismo genérico bloqueia a exclusão e preserva o registro', async () => {
-      const petlink: Customer = { ...customer, id: 'petlink-1', name: 'Petlink' }
+    // Proteção absoluta (correção de auditoria, 2026-08-29): customers.is_protected
+    // é incondicional — verificada pela RPC ANTES de qualquer checagem de
+    // vínculo (empresa/pedido). O frontend não sabe nem precisa saber POR QUE
+    // um cliente está protegido; ele só exibe a mensagem real que a Edge
+    // Function devolve (PROTECTED_CUSTOMER:, mapeada por _shared/errors.ts
+    // para uma BusinessRuleError com a mensagem já amigável, sem o prefixo).
+    it('Petlink (ou qualquer cliente com is_protected=true) COM vínculos continua protegida — mensagem específica de proteção, não a de vínculo', async () => {
+      const petlink: Customer = { ...customer, id: 'petlink-1', name: 'Petlink', is_protected: true, company_id: 'c1' }
       const blockedRemove = vi
         .fn()
-        .mockRejectedValue(
-          new ApiError(
-            'business_rule',
-            409,
-            'Este cliente está vinculado a uma empresa e não pode ser excluído. Desative o cliente.',
-          ),
-        )
+        .mockRejectedValue(new ApiError('business_rule', 409, 'Este cliente é protegido e não pode ser excluído.'))
       mockCustomers([petlink], {}, createMock, updateMock, blockedRemove)
       const user = userEvent.setup()
       renderPage()
@@ -1154,8 +1159,37 @@ describe('CustomersPage', () => {
       await user.click(screen.getByRole('button', { name: /excluir definitivamente/i }))
 
       await waitFor(() => expect(blockedRemove).toHaveBeenCalledWith('petlink-1'))
-      expect(await screen.findByText(/não pode ser excluído/i)).toBeInTheDocument()
+      expect(await screen.findByText('Este cliente é protegido e não pode ser excluído.')).toBeInTheDocument()
       expect(screen.getByText('Petlink')).toBeInTheDocument()
+    })
+
+    it('Petlink (is_protected=true) SEM nenhum vínculo (sem empresa, sem pedido) ainda assim é rejeitada — a proteção nunca depende de vínculo', async () => {
+      const petlinkNoLinks: Customer = {
+        ...customer,
+        id: 'petlink-2',
+        name: 'Petlink Sem Vínculos',
+        is_protected: true,
+        company_id: null,
+        acquisition_source_id: null,
+      }
+      const blockedRemove = vi
+        .fn()
+        .mockRejectedValue(new ApiError('business_rule', 409, 'Este cliente é protegido e não pode ser excluído.'))
+      mockCustomers([petlinkNoLinks], {}, createMock, updateMock, blockedRemove)
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: 'Excluir cliente Petlink Sem Vínculos' }))
+      await user.click(screen.getByRole('button', { name: /excluir definitivamente/i }))
+
+      await waitFor(() => expect(blockedRemove).toHaveBeenCalledWith('petlink-2'))
+      // Mesmo sem company_id/pedidos, a mensagem é a de PROTEÇÃO — nunca
+      // "vinculado a uma empresa"/"possui pedido(s)" (que nem se aplicariam
+      // aqui, já que este cliente não tem nenhum dos dois).
+      expect(await screen.findByText('Este cliente é protegido e não pode ser excluído.')).toBeInTheDocument()
+      expect(screen.queryByText(/vinculado a uma empresa/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/possui pedido/i)).not.toBeInTheDocument()
+      expect(screen.getByText('Petlink Sem Vínculos')).toBeInTheDocument()
     })
 
     it('bloqueia duplo envio: o botão fica desabilitado durante a requisição', async () => {

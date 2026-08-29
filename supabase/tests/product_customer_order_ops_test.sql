@@ -257,6 +257,109 @@ begin
   end;
 end $$;
 
+-- ---------------------------------------------------------------------------
+-- 2.4/2.5 — Proteção absoluta (customers.is_protected) — correção de
+-- auditoria, 2026-08-29. A Petlink em si NÃO é criada por este script (ela
+-- não existe no banco hoje — confirmado por auditoria somente leitura antes
+-- desta migration; nenhum dado oficial é tocado aqui). Estes dois testes só
+-- provam o MECANISMO genérico de proteção com um cliente TESTE marcado
+-- is_protected=true — a mesma proteção que protegerá a Petlink assim que
+-- ela for oficialmente cadastrada (ação futura separada).
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_company_id uuid;
+  v_count integer;
+begin
+  select value::uuid into v_user_id from zz_ops_fixtures where key = 'user_id';
+
+  insert into public.companies (name, is_active) values ('TESTE OPS — Empresa (protegido)', true) returning id into v_company_id;
+  insert into public.customers (name, company_id, is_active, is_protected)
+    values ('TESTE OPS — Cliente protegido COM vínculo', v_company_id, true, true)
+    returning id into v_customer_id;
+
+  begin
+    perform public.delete_customer(v_customer_id, v_user_id);
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('2', '2.4 delete_customer REJEITA cliente is_protected=true COM vínculo (PROTECTED_CUSTOMER:, nunca CUSTOMER_HAS_COMPANY:)', 'FAIL', 'não levantou exceção');
+  exception when others then
+    select count(*) into v_count from public.customers where id = v_customer_id;
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('2', '2.4 delete_customer REJEITA cliente is_protected=true COM vínculo (PROTECTED_CUSTOMER:, nunca CUSTOMER_HAS_COMPANY:)',
+        case when sqlerrm like 'PROTECTED_CUSTOMER:%' and v_count = 1 then 'PASS' else 'FAIL' end,
+        sqlerrm || ' count=' || v_count);
+  end;
+end $$;
+
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_count integer;
+begin
+  select value::uuid into v_user_id from zz_ops_fixtures where key = 'user_id';
+
+  insert into public.customers (name, is_active, is_protected)
+    values ('TESTE OPS — Cliente protegido SEM vínculo', true, true)
+    returning id into v_customer_id;
+
+  begin
+    perform public.delete_customer(v_customer_id, v_user_id);
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('2', '2.5 delete_customer REJEITA cliente is_protected=true SEM nenhum vínculo (proteção nunca depende de vínculo)', 'FAIL', 'não levantou exceção');
+  exception when others then
+    select count(*) into v_count from public.customers where id = v_customer_id;
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('2', '2.5 delete_customer REJEITA cliente is_protected=true SEM nenhum vínculo (proteção nunca depende de vínculo)',
+        case when sqlerrm like 'PROTECTED_CUSTOMER:%' and v_count = 1 then 'PASS' else 'FAIL' end,
+        sqlerrm || ' count=' || v_count);
+  end;
+end $$;
+
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_count integer;
+begin
+  select value::uuid into v_user_id from zz_ops_fixtures where key = 'user_id';
+
+  insert into public.customers (name, is_active, is_protected)
+    values ('TESTE OPS — Cliente comum, não protegido', true, false)
+    returning id into v_customer_id;
+
+  begin
+    perform public.delete_customer(v_customer_id, v_user_id);
+    select count(*) into v_count from public.customers where id = v_customer_id;
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('2', '2.6 outro cliente (is_protected=false, sem vínculo) continua podendo ser excluído normalmente',
+        case when v_count = 0 then 'PASS' else 'FAIL' end, 'count=' || v_count);
+  exception when others then
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('2', '2.6 outro cliente (is_protected=false, sem vínculo) continua podendo ser excluído normalmente', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+do $$
+declare
+  v_column_default text;
+  v_authenticated_can_update boolean;
+begin
+  select column_default into v_column_default
+    from information_schema.columns
+    where table_schema = 'public' and table_name = 'customers' and column_name = 'is_protected';
+
+  select has_column_privilege('authenticated', 'public.customers', 'is_protected', 'UPDATE') into v_authenticated_can_update;
+
+  insert into zz_ops_test_results(section, test_name, status, details)
+    values ('2', '2.7 customers.is_protected: DEFAULT false e nunca editável por authenticated (não contorna a proteção via UPDATE direto)',
+      case when v_column_default like '%false%' and not v_authenticated_can_update then 'PASS' else 'FAIL' end,
+      'default=' || coalesce(v_column_default, 'null') || ' authenticated_can_update=' || v_authenticated_can_update);
+end $$;
+
 -- =============================================================================
 -- SEÇÃO 3 — delete_order
 -- =============================================================================
@@ -590,6 +693,292 @@ begin
       values ('4', '4.6 ADVANCE sem payment_method é REJEITADO',
         case when sqlerrm like '%p_payment_method é obrigatório%' then 'PASS' else 'FAIL' end, sqlerrm);
   end;
+end $$;
+
+-- 4.7/4.8 — DEPOSIT com valor zero/negativo: mesma checagem
+-- (p_deposit_amount is null or p_deposit_amount <= 0) rejeita os dois casos
+-- com a mesma mensagem; nenhum pedido fica órfão (create_order() ainda nem
+-- roda — a checagem acontece antes).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_orders_before integer;
+  v_orders_after integer;
+begin
+  select value::uuid into v_user_id from zz_ops_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ops_fixtures where key = 'customer_with_order_id';
+  select value::uuid into v_product_id from zz_ops_fixtures where key = 'product_id';
+  select count(*) into v_orders_before from public.orders where customer_id = v_customer_id;
+
+  begin
+    perform public.create_order_with_payment(
+      v_customer_id, null, null, null, null, 0, 0, 'DEPOSIT com valor zero (deve ser REJEITADO)',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item teste', 'quantity', 1, 'unit_price', 100
+      )),
+      v_user_id, 'PIX', 'DEPOSIT', 0
+    );
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('4', '4.7 DEPOSIT com valor zero é REJEITADO, nenhum pedido órfão', 'FAIL', 'não levantou exceção');
+  exception when others then
+    select count(*) into v_orders_after from public.orders where customer_id = v_customer_id;
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('4', '4.7 DEPOSIT com valor zero é REJEITADO, nenhum pedido órfão',
+        case when sqlerrm like '%p_deposit_amount deve ser maior que zero%' and v_orders_after = v_orders_before then 'PASS' else 'FAIL' end,
+        sqlerrm || ' orders_before=' || v_orders_before || ' orders_after=' || v_orders_after);
+  end;
+end $$;
+
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_orders_before integer;
+  v_orders_after integer;
+begin
+  select value::uuid into v_user_id from zz_ops_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ops_fixtures where key = 'customer_with_order_id';
+  select value::uuid into v_product_id from zz_ops_fixtures where key = 'product_id';
+  select count(*) into v_orders_before from public.orders where customer_id = v_customer_id;
+
+  begin
+    perform public.create_order_with_payment(
+      v_customer_id, null, null, null, null, 0, 0, 'DEPOSIT com valor negativo (deve ser REJEITADO)',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item teste', 'quantity', 1, 'unit_price', 100
+      )),
+      v_user_id, 'PIX', 'DEPOSIT', -10
+    );
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('4', '4.8 DEPOSIT com valor negativo é REJEITADO, nenhum pedido órfão', 'FAIL', 'não levantou exceção');
+  exception when others then
+    select count(*) into v_orders_after from public.orders where customer_id = v_customer_id;
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('4', '4.8 DEPOSIT com valor negativo é REJEITADO, nenhum pedido órfão',
+        case when sqlerrm like '%p_deposit_amount deve ser maior que zero%' and v_orders_after = v_orders_before then 'PASS' else 'FAIL' end,
+        sqlerrm || ' orders_before=' || v_orders_before || ' orders_after=' || v_orders_after);
+  end;
+end $$;
+
+-- 4.9 — Overpayment: register_payment() já recusa pagamento que ultrapassa o
+-- saldo devedor (proteção pré-existente, reaproveitada sem alteração aqui)
+-- — ADVANCE com um total_receivable que fica zero (desconto total) não se
+-- aplica; o cenário realista de "overpayment" nesta RPC é DEPOSIT >= total,
+-- já coberto por 4.3. Este teste cobre o caso de um p_deposit_amount que
+-- passa da checagem >= total mas seria excedente por outro motivo (aqui:
+-- exatamente igual ao total, fronteira exclusiva).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_orders_before integer;
+  v_orders_after integer;
+begin
+  select value::uuid into v_user_id from zz_ops_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ops_fixtures where key = 'customer_with_order_id';
+  select value::uuid into v_product_id from zz_ops_fixtures where key = 'product_id';
+  select count(*) into v_orders_before from public.orders where customer_id = v_customer_id;
+
+  begin
+    perform public.create_order_with_payment(
+      v_customer_id, null, null, null, null, 0, 0, 'DEPOSIT == total (fronteira exclusiva, deve ser REJEITADO)',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item teste', 'quantity', 1, 'unit_price', 100
+      )),
+      v_user_id, 'PIX', 'DEPOSIT', 100
+    );
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('4', '4.9 DEPOSIT igual ao total (fronteira exclusiva) é REJEITADO, nenhum pedido órfão', 'FAIL', 'não levantou exceção');
+  exception when others then
+    select count(*) into v_orders_after from public.orders where customer_id = v_customer_id;
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('4', '4.9 DEPOSIT igual ao total (fronteira exclusiva) é REJEITADO, nenhum pedido órfão',
+        case when sqlerrm like '%deve ser menor que o total do pedido%' and v_orders_after = v_orders_before then 'PASS' else 'FAIL' end,
+        sqlerrm || ' orders_before=' || v_orders_before || ' orders_after=' || v_orders_after);
+  end;
+end $$;
+
+-- =============================================================================
+-- SEÇÃO 5 — Idempotência de create_order_with_payment
+-- (20260829142000_add_order_payment_condition_and_atomic_creation.sql,
+-- correção de auditoria 2026-08-29)
+-- =============================================================================
+
+-- 5.1 — Retry com a MESMA chave + MESMO payload relevante: devolve o pedido
+-- já criado (mesmo order_id), sem duplicar pedido nem pagamento.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_key text := 'zz-teste-idempotency-' || gen_random_uuid()::text;
+  v_result1 jsonb;
+  v_result2 jsonb;
+  v_order_count integer;
+  v_payment_count integer;
+begin
+  select value::uuid into v_user_id from zz_ops_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ops_fixtures where key = 'customer_with_order_id';
+  select value::uuid into v_product_id from zz_ops_fixtures where key = 'product_id';
+
+  begin
+    v_result1 := public.create_order_with_payment(
+      v_customer_id, null, null, null, null, 0, 0, 'idempotência: primeira chamada',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item teste', 'quantity', 1, 'unit_price', 100
+      )),
+      v_user_id, 'PIX', 'ADVANCE', null, v_key
+    );
+    v_result2 := public.create_order_with_payment(
+      v_customer_id, null, null, null, null, 0, 0, 'idempotência: primeira chamada',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item teste', 'quantity', 1, 'unit_price', 100
+      )),
+      v_user_id, 'PIX', 'ADVANCE', null, v_key
+    );
+    select count(*) into v_order_count from public.orders where idempotency_key = v_key;
+    select count(*) into v_payment_count from public.payments where order_id = (v_result1 ->> 'order_id')::uuid;
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('5', '5.1 retry com a MESMA chave+payload devolve o MESMO order_id, sem duplicar pedido/pagamento',
+        case when (v_result1 ->> 'order_id') = (v_result2 ->> 'order_id')
+                and (v_result1 ->> 'payment_id') = (v_result2 ->> 'payment_id')
+                and v_order_count = 1 and v_payment_count = 1
+             then 'PASS' else 'FAIL' end,
+        'result1=' || v_result1::text || ' result2=' || v_result2::text ||
+        ' order_count=' || v_order_count || ' payment_count=' || v_payment_count);
+  exception when others then
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('5', '5.1 retry com a MESMA chave+payload devolve o MESMO order_id', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 5.2 — Mesma chave, payload DIFERENTE (customer_id trocado): rejeitado com
+-- IDEMPOTENCY_KEY_CONFLICT:, nenhum segundo pedido criado.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_other_customer_id uuid;
+  v_product_id uuid;
+  v_key text := 'zz-teste-idempotency-conflict-' || gen_random_uuid()::text;
+  v_result1 jsonb;
+  v_order_count integer;
+begin
+  select value::uuid into v_user_id from zz_ops_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ops_fixtures where key = 'customer_with_order_id';
+  select value::uuid into v_product_id from zz_ops_fixtures where key = 'product_id';
+
+  -- Cliente TESTE dedicado a este bloco (não reaproveita fixtures de outra
+  -- seção) — só existe para provar que um payload com customer_id diferente
+  -- sob a MESMA chave é rejeitado; nunca oficial, nunca fora deste script.
+  insert into public.customers (name, is_active)
+    values ('TESTE OPS — Cliente idempotência (payload diferente)', true)
+    returning id into v_other_customer_id;
+
+  begin
+    v_result1 := public.create_order_with_payment(
+      v_customer_id, null, null, null, null, 0, 0, 'idempotência: payload original',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item teste', 'quantity', 1, 'unit_price', 100
+      )),
+      v_user_id, 'PIX', 'ADVANCE', null, v_key
+    );
+    perform public.create_order_with_payment(
+      v_other_customer_id, null, null, null, null, 0, 0, 'idempotência: payload DIFERENTE (outro cliente)',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item teste', 'quantity', 1, 'unit_price', 100
+      )),
+      v_user_id, 'PIX', 'ADVANCE', null, v_key
+    );
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('5', '5.2 mesma chave + payload diferente é REJEITADO (IDEMPOTENCY_KEY_CONFLICT:)', 'FAIL', 'não levantou exceção');
+  exception when others then
+    select count(*) into v_order_count from public.orders where idempotency_key = v_key;
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('5', '5.2 mesma chave + payload diferente é REJEITADO (IDEMPOTENCY_KEY_CONFLICT:)',
+        case when sqlerrm like 'IDEMPOTENCY_KEY_CONFLICT:%' and v_order_count = 1 then 'PASS' else 'FAIL' end,
+        sqlerrm || ' order_count_com_essa_chave=' || v_order_count);
+  end;
+end $$;
+
+-- 5.3 — Sem chave (p_idempotency_key = null, comportamento padrão do
+-- frontend em qualquer chamada fora de "Novo Pedido"/retry): cada chamada
+-- cria um pedido novo, nunca é tratada como retry uma da outra.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_result1 jsonb;
+  v_result2 jsonb;
+begin
+  select value::uuid into v_user_id from zz_ops_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ops_fixtures where key = 'customer_with_order_id';
+  select value::uuid into v_product_id from zz_ops_fixtures where key = 'product_id';
+
+  begin
+    v_result1 := public.create_order_with_payment(
+      v_customer_id, null, null, null, null, 0, 0, 'sem chave: chamada 1',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item teste', 'quantity', 1, 'unit_price', 100
+      )),
+      v_user_id, null, 'ON_DELIVERY', null, null
+    );
+    v_result2 := public.create_order_with_payment(
+      v_customer_id, null, null, null, null, 0, 0, 'sem chave: chamada 1',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item teste', 'quantity', 1, 'unit_price', 100
+      )),
+      v_user_id, null, 'ON_DELIVERY', null, null
+    );
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('5', '5.3 sem idempotency_key: duas chamadas idênticas criam DOIS pedidos distintos (nunca tratadas como retry)',
+        case when (v_result1 ->> 'order_id') <> (v_result2 ->> 'order_id') then 'PASS' else 'FAIL' end,
+        'order_id1=' || (v_result1 ->> 'order_id') || ' order_id2=' || (v_result2 ->> 'order_id'));
+  exception when others then
+    insert into zz_ops_test_results(section, test_name, status, details)
+      values ('5', '5.3 sem idempotency_key: duas chamadas idênticas criam DOIS pedidos distintos', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 5.4 — Grants: create_order_with_payment/delete_order/delete_customer/
+-- update_product continuam exclusivos de service_role (nunca chamáveis
+-- diretamente por anon/authenticated via PostgREST) — checagem estrutural,
+-- não funcional.
+do $$
+declare
+  v_ok boolean;
+begin
+  select
+    not has_function_privilege('authenticated', 'public.create_order_with_payment(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid,text,text,numeric,text)', 'EXECUTE')
+    and not has_function_privilege('anon', 'public.create_order_with_payment(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid,text,text,numeric,text)', 'EXECUTE')
+    and has_function_privilege('service_role', 'public.create_order_with_payment(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid,text,text,numeric,text)', 'EXECUTE')
+    and not has_function_privilege('authenticated', 'public.delete_order(uuid,uuid)', 'EXECUTE')
+    and has_function_privilege('service_role', 'public.delete_order(uuid,uuid)', 'EXECUTE')
+    and not has_function_privilege('authenticated', 'public.delete_customer(uuid,uuid)', 'EXECUTE')
+    and has_function_privilege('service_role', 'public.delete_customer(uuid,uuid)', 'EXECUTE')
+    and not has_function_privilege('authenticated', 'public.update_product(uuid,jsonb,uuid)', 'EXECUTE')
+    and has_function_privilege('service_role', 'public.update_product(uuid,jsonb,uuid)', 'EXECUTE')
+  into v_ok;
+  insert into zz_ops_test_results(section, test_name, status, details)
+    values ('5', '5.4 EXECUTE das 4 novas RPCs é exclusivo de service_role (anon/authenticated sem acesso direto)',
+      case when v_ok then 'PASS' else 'FAIL' end, 'v_ok=' || v_ok);
+exception when others then
+  insert into zz_ops_test_results(section, test_name, status, details)
+    values ('5', '5.4 EXECUTE das 4 novas RPCs é exclusivo de service_role', 'FAIL', sqlerrm);
 end $$;
 
 -- =============================================================================

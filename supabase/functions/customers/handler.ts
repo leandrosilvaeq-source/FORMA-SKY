@@ -45,7 +45,9 @@ export async function handleRequest(req: Request): Promise<Response> {
 // ---------------------------------------------------------------------------
 // DELETE /customers/:id -> delete_customer(p_customer_id, p_changed_by)
 //
-// Exclusão física protegida: bloqueada quando o cliente tem pedido
+// Exclusão física protegida: bloqueada quando o cliente é um registro
+// permanente/protegido (is_protected, PROTECTED_CUSTOMER: — checado
+// primeiro, incondicional, independente de vínculos) ou quando tem pedido
 // (CUSTOMER_HAS_ORDERS:) ou empresa (CUSTOMER_HAS_COMPANY:) vinculados —
 // mensagens de negócio mapeadas por _shared/errors.ts (409). Nenhum corpo
 // de requisição é lido.

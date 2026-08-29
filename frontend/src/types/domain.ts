@@ -49,6 +49,11 @@ export interface Customer {
   acquisition_source_id: string | null
   notes: string | null
   is_active: boolean
+  // migration 20260829140000 (ainda não aplicada) — proteção absoluta e
+  // incondicional contra exclusão física (delete_customer), independente de
+  // nome ou vínculos. Nunca editável via updateCustomer() (fora da
+  // whitelist de UPDATE concedida a authenticated) — só leitura aqui.
+  is_protected: boolean
   created_at: string
   updated_at: string
 }

@@ -38,6 +38,7 @@ const editCustomer: Customer = {
   acquisition_source_id: null,
   notes: null,
   is_active: true,
+  is_protected: false,
   created_at: '',
   updated_at: '',
 }
