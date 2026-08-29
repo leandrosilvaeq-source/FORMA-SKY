@@ -87,11 +87,27 @@ describe('RegisterPaymentForm', () => {
     expect(screen.getByRole('radio', { name: 'Pix' })).toHaveAttribute('aria-checked', 'false')
   })
 
-  it('prefills the payment date with today', () => {
-    renderForm()
-
-    const today = new Date().toISOString().slice(0, 10)
-    expect(screen.getByLabelText(/data do pagamento/i)).toHaveValue(today)
+  it('prefills the payment date with today (relógio fixo, determinístico — nunca depende do horário real da máquina)', () => {
+    // Achado real desta auditoria (2026-08-28): a asserção antiga comparava
+    // a data LOCAL do componente (todayIsoDate() usa
+    // getFullYear/getMonth/getDate, partes locais) contra
+    // `new Date().toISOString()` (UTC) — diverge sempre que o horário local
+    // já passou da meia-noite UTC mas ainda não virou o dia local (ex.:
+    // America/Sao_Paulo, UTC-3, entre ~21h e 24h). Não é uma regressão de
+    // produção: o componente sempre usou (corretamente) a data local, nunca
+    // UTC, para um formulário de pagamento brasileiro — o teste é que
+    // comparava contra o fuso errado. Corrigido fixando o relógio (só
+    // `Date`, nunca os timers reais — userEvent não é usado aqui) num
+    // instante em que local e UTC caem em dias diferentes, para nunca mais
+    // regredir silenciosamente.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 7, 28, 21, 30, 0))
+    try {
+      renderForm()
+      expect(screen.getByLabelText(/data do pagamento/i)).toHaveValue('2026-08-28')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('shows the highlighted financial summary (total, já pago, saldo devedor)', () => {
@@ -125,24 +141,36 @@ describe('RegisterPaymentForm', () => {
     expect(amountInput).toHaveValue(formatCentsToBRL(15050))
   })
 
-  it('submits a valid SINAL payment with amount converted to number (never a formatted string)', async () => {
-    const user = userEvent.setup()
-    const { onSubmit } = renderForm()
+  it('submits a valid SINAL payment with amount converted to number (never a formatted string), com relógio fixo determinístico', async () => {
+    // Mesmo achado/correção da asserção "prefills the payment date with
+    // today" acima: `paid_at` enviado pelo formulário vem de todayIsoDate()
+    // (data LOCAL), e a asserção antiga comparava contra
+    // `new Date().toISOString()` (UTC) — corrigido fixando só `Date` (nunca
+    // os timers reais, para não interferir em userEvent) num instante em
+    // que local e UTC caem em dias diferentes.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 7, 28, 21, 30, 0))
+    try {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
 
-    await pickRadio(user, 'Tipo de pagamento', 'Sinal')
-    await pickRadio(user, 'Método de pagamento', 'Pix')
-    await user.click(screen.getByLabelText(AMOUNT_LABEL))
-    await user.keyboard('15050')
-    await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
+      await pickRadio(user, 'Tipo de pagamento', 'Sinal')
+      await pickRadio(user, 'Método de pagamento', 'Pix')
+      await user.click(screen.getByLabelText(AMOUNT_LABEL))
+      await user.keyboard('15050')
+      await user.click(screen.getByRole('button', { name: /registrar pagamento/i }))
 
-    expect(onSubmit).toHaveBeenCalledWith({
-      payment_type: 'SINAL',
-      payment_method: 'PIX',
-      amount: 150.5,
-      paid_at: new Date().toISOString().slice(0, 10),
-      notes: null,
-    })
-    expect(typeof onSubmit.mock.calls[0][0].amount).toBe('number')
+      expect(onSubmit).toHaveBeenCalledWith({
+        payment_type: 'SINAL',
+        payment_method: 'PIX',
+        amount: 150.5,
+        paid_at: '2026-08-28',
+        notes: null,
+      })
+      expect(typeof onSubmit.mock.calls[0][0].amount).toBe('number')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('rejects amount zero mesmo com tipo e método selecionados', async () => {

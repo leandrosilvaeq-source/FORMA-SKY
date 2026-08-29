@@ -141,8 +141,13 @@ begin
   select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
   select value::uuid into v_accessory_inactive_id from zz_fixtures where key = 'accessory_inactive_id';
   begin
+    -- Postgres não aceita a palavra-chave DEFAULT como argumento posicional
+    -- de chamada de função (só é válida em INSERT ... VALUES) — notação
+    -- nomeada, omitindo os parâmetros que devem usar o próprio default da
+    -- function.
     perform public.register_inventory_purchase(
-      'ACCESSORY', 1, 10, 0, v_user_id, default, default, default, v_accessory_inactive_id
+      p_category => 'ACCESSORY', p_quantity => 1, p_item_value => 10, p_freight_value => 0,
+      p_changed_by => v_user_id, p_item_id => v_accessory_inactive_id
     );
     insert into zz_test_results(section, test_name, status, details)
       values ('1', '1.2 compra bloqueada para acessório inativo', 'FAIL', 'não levantou exceção');
@@ -160,7 +165,8 @@ begin
   select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
   begin
     perform public.register_inventory_purchase(
-      'ACCESSORY', 1, 10, 0, v_user_id, default, default, default, gen_random_uuid()
+      p_category => 'ACCESSORY', p_quantity => 1, p_item_value => 10, p_freight_value => 0,
+      p_changed_by => v_user_id, p_item_id => gen_random_uuid()
     );
     insert into zz_test_results(section, test_name, status, details)
       values ('1', '1.3 compra bloqueada para acessório inexistente', 'FAIL', 'não levantou exceção');
@@ -179,7 +185,10 @@ begin
   select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
   select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_active_id';
   begin
-    perform public.register_inventory_purchase('ACCESSORY', 0, 10, 0, v_user_id, default, default, default, v_accessory_id);
+    perform public.register_inventory_purchase(
+      p_category => 'ACCESSORY', p_quantity => 0, p_item_value => 10, p_freight_value => 0,
+      p_changed_by => v_user_id, p_item_id => v_accessory_id
+    );
     insert into zz_test_results(section, test_name, status, details)
       values ('1', '1.4 quantity=0 rejeitado', 'FAIL', 'não levantou exceção');
   exception when others then
@@ -197,7 +206,10 @@ begin
   select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
   select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_active_id';
   begin
-    perform public.register_inventory_purchase('ACCESSORY', 1, -10, 0, v_user_id, default, default, default, v_accessory_id);
+    perform public.register_inventory_purchase(
+      p_category => 'ACCESSORY', p_quantity => 1, p_item_value => -10, p_freight_value => 0,
+      p_changed_by => v_user_id, p_item_id => v_accessory_id
+    );
     insert into zz_test_results(section, test_name, status, details)
       values ('1', '1.5 item_value negativo rejeitado', 'FAIL', 'não levantou exceção');
   exception when others then
@@ -215,7 +227,10 @@ begin
   select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
   select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_active_id';
   begin
-    perform public.register_inventory_purchase('ACCESSORY', 1, 10, -5, v_user_id, default, default, default, v_accessory_id);
+    perform public.register_inventory_purchase(
+      p_category => 'ACCESSORY', p_quantity => 1, p_item_value => 10, p_freight_value => -5,
+      p_changed_by => v_user_id, p_item_id => v_accessory_id
+    );
     insert into zz_test_results(section, test_name, status, details)
       values ('1', '1.6 freight_value negativo rejeitado', 'FAIL', 'não levantou exceção');
   exception when others then
@@ -242,7 +257,8 @@ begin
     select current_stock into v_stock_before from public.packaging where id = v_packaging_id;
 
     v_purchase := public.register_inventory_purchase(
-      'PACKAGING', 3, 30.00, 0, v_user_id, default, default, default, v_packaging_id
+      p_category => 'PACKAGING', p_quantity => 3, p_item_value => 30.00, p_freight_value => 0,
+      p_changed_by => v_user_id, p_item_id => v_packaging_id
     );
 
     insert into zz_test_results(section, test_name, status, details)
@@ -266,7 +282,10 @@ begin
   select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
   v_packaging_inactive_id := (public.create_packaging('TESTE COMPRAS — Embalagem inativa', null, null, null, false, v_user_id)).id;
   begin
-    perform public.register_inventory_purchase('PACKAGING', 1, 10, 0, v_user_id, default, default, default, v_packaging_inactive_id);
+    perform public.register_inventory_purchase(
+      p_category => 'PACKAGING', p_quantity => 1, p_item_value => 10, p_freight_value => 0,
+      p_changed_by => v_user_id, p_item_id => v_packaging_inactive_id
+    );
     insert into zz_test_results(section, test_name, status, details)
       values ('2', '2.2 compra bloqueada para embalagem inativa', 'FAIL', 'não levantou exceção');
   exception when others then
@@ -502,6 +521,28 @@ begin
   end;
 end $$;
 
+do $$
+declare
+  v_type_id uuid;
+begin
+  select value::uuid into v_type_id from zz_fixtures where key = 'filament_type_id';
+  begin
+    -- Defesa em profundidade na própria tabela (auditoria 2026-08-28):
+    -- mesmo contornando a RPC com um INSERT direto (só alcançável nesta
+    -- sessão porque roda com privilégios de owner/service via `db query`,
+    -- nunca por authenticated — sem grant de INSERT), a CHECK entre colunas
+    -- ainda bloqueia peso bruto <= peso nominal.
+    insert into public.filament_spools (code, filament_type_id, nominal_weight_grams, initial_gross_weight_grams)
+    values ('RL-TESTE-CHECK', v_type_id, 1000, 900);
+    insert into zz_test_results(section, test_name, status, details)
+      values ('6', '6.4 CHECK de tabela bloqueia initial_gross_weight_grams <= nominal_weight_grams mesmo via INSERT direto', 'FAIL', 'não levantou exceção');
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('6', '6.4 CHECK de tabela bloqueia initial_gross_weight_grams <= nominal_weight_grams mesmo via INSERT direto',
+        case when sqlstate = '23514' and sqlerrm like '%filament_spools_initial_gross_weight_exceeds_nominal%' then 'PASS' else 'FAIL' end, sqlerrm);
+  end;
+end $$;
+
 -- =============================================================================
 -- SEÇÃO 7 — Idempotência
 -- =============================================================================
@@ -519,12 +560,14 @@ begin
   select value::uuid into v_accessory_id from zz_fixtures where key = 'accessory_active_id';
   begin
     v_first := public.register_inventory_purchase(
-      'ACCESSORY', 2, 20, 0, v_user_id, default, default,
-      'teste-compras-idempotencia-1', v_accessory_id
+      p_category => 'ACCESSORY', p_quantity => 2, p_item_value => 20, p_freight_value => 0,
+      p_changed_by => v_user_id, p_idempotency_key => 'teste-compras-idempotencia-1',
+      p_item_id => v_accessory_id
     );
     v_second := public.register_inventory_purchase(
-      'ACCESSORY', 2, 20, 0, v_user_id, default, default,
-      'teste-compras-idempotencia-1', v_accessory_id
+      p_category => 'ACCESSORY', p_quantity => 2, p_item_value => 20, p_freight_value => 0,
+      p_changed_by => v_user_id, p_idempotency_key => 'teste-compras-idempotencia-1',
+      p_item_id => v_accessory_id
     );
 
     select count(*) into v_purchase_count from public.inventory_purchases where idempotency_key = 'teste-compras-idempotencia-1';
@@ -550,8 +593,9 @@ begin
   begin
     -- Mesma chave da 7.1, payload diferente (quantidade 9 em vez de 2).
     perform public.register_inventory_purchase(
-      'ACCESSORY', 9, 20, 0, v_user_id, default, default,
-      'teste-compras-idempotencia-1', v_accessory_id
+      p_category => 'ACCESSORY', p_quantity => 9, p_item_value => 20, p_freight_value => 0,
+      p_changed_by => v_user_id, p_idempotency_key => 'teste-compras-idempotencia-1',
+      p_item_id => v_accessory_id
     );
     insert into zz_test_results(section, test_name, status, details)
       values ('7', '7.2 reenviar a MESMA idempotency_key com payload DIFERENTE é rejeitado', 'FAIL', 'não levantou exceção');
@@ -604,8 +648,7 @@ begin
 
     perform public.register_inventory_purchase(
       p_category => 'FILAMENT', p_quantity => 2, p_item_value => 10, p_freight_value => 0,
-      p_changed_by => v_user_id, p_occurred_at => default, p_notes => default,
-      p_idempotency_key => 'teste-compras-atomicidade',
+      p_changed_by => v_user_id, p_idempotency_key => 'teste-compras-atomicidade',
       p_material => 'PLA', p_manufacturer => 'TESTE COMPRAS Atomicidade', p_line => 'Sólida',
       p_commercial_color => 'Verde', p_nominal_weight_grams => 1000, p_gross_weights_grams => array[1100, 1100]
     );

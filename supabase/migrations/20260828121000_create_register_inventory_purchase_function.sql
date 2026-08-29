@@ -77,8 +77,18 @@ alter table public.filament_spools
     check (initial_gross_weight_grams is null or initial_gross_weight_grams >= 0),
   add column purchase_id uuid references public.inventory_purchases (id) on delete restrict;
 
+-- Defesa em profundidade: register_inventory_purchase já valida "peso bruto
+-- > peso líquido nominal" antes de inserir (ver função abaixo), mas essa
+-- invariante também fica garantida na própria tabela — nunca só na regra de
+-- negócio de uma única function. CHECK entre colunas, adicionado à parte
+-- (ADD COLUMN não aceita uma CHECK que referencie outra coluna já
+-- existente na mesma cláusula em todas as versões suportadas).
+alter table public.filament_spools
+  add constraint filament_spools_initial_gross_weight_exceeds_nominal
+    check (initial_gross_weight_grams is null or initial_gross_weight_grams > nominal_weight_grams);
+
 comment on column public.filament_spools.initial_gross_weight_grams is
-  'Peso bruto (filamento + carretel) medido no momento da compra, quando o rolo foi criado por register_inventory_purchase — nullable (null para todo rolo criado manualmente antes deste incremento, ou fora do fluxo de Compras). Não é o peso bruto atual (esse é sempre obtido por uma nova pesagem, register_filament_weighing) — é só o valor de referência inicial.';
+  'Peso bruto (filamento + carretel) medido no momento da compra, quando o rolo foi criado por register_inventory_purchase — nullable (null para todo rolo criado manualmente antes deste incremento, ou fora do fluxo de Compras). Não é o peso bruto atual (esse é sempre obtido por uma nova pesagem, register_filament_weighing) — é só o valor de referência inicial. Sempre maior que nominal_weight_grams quando informado (filament_spools_initial_gross_weight_exceeds_nominal).';
 
 comment on column public.filament_spools.purchase_id is
   'Vincula o rolo à compra que o originou (inventory_purchases.id), quando criado por register_inventory_purchase — null para todo rolo criado manualmente (fluxo de "Novo rolo" em FilamentTypeDrawer, inalterado por este incremento).';

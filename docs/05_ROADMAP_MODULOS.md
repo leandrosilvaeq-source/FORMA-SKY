@@ -1061,6 +1061,81 @@ NÃO concluído** — regras operacionais do MVP continuam sujeitas a validaçã
 nova funcionalidade, ainda não realizada. Percentual macro **não alterado**. Checkpoint local:
 commit `feat: add inventory purchase workflow`, sem push.
 
+## Incremento 5 — auditoria, correção de falhas de suíte e aplicação remota (2026-08-28/29)
+
+Auditoria integral solicitada pelo usuário sobre os 20 arquivos do commit `feat: add inventory
+purchase workflow`, seguida — só se tudo aprovado — de aplicação das migrations de Compras e
+publicação da Edge Function correspondente.
+
+**Duas falhas da suíte, causa raiz confirmada**: não eram regressão do commit de Compras (nenhum dos
+dois arquivos afetados — `RegisterPaymentForm.tsx`/`.test.tsx` — foi tocado por aquele commit). Causa
+real: os dois testes calculavam "hoje" via `new Date().toISOString().slice(0,10)` (data em **UTC**)
+para comparar contra `todayIsoDate()` do componente, que usa `getFullYear/getMonth/getDate` (data
+**local**) — correto para um formulário de pagamento brasileiro. Como a máquina desta sessão roda em
+`America/Sao_Paulo` (UTC-3) e a suíte foi executada às 21h44 (hora local) — já 00h44 em UTC, ou seja,
+já virou o dia em UTC mas ainda não localmente —, a comparação divergia. Não é uma condição rara de
+todo: acontece em qualquer execução real entre ~21h e 24h nesse fuso. **Corrigido tornando os dois
+testes determinísticos**: `vi.useFakeTimers({ toFake: ['Date'] })` + `vi.setSystemTime(...)` fixam só
+`Date` (nunca os timers reais, para não interferir em `userEvent`) num instante em que data local e
+UTC caem em dias diferentes — mesma regra funcional preservada, nenhuma expectativa enfraquecida,
+nenhum teste ignorado, nenhuma mudança em produção (o componente já estava correto).
+
+**Auditoria do backend**: aprovada, com uma inconsistência real encontrada e corrigida antes de
+qualquer aplicação remota — a coluna `filament_spools.initial_gross_weight_grams` só tinha `CHECK (>=
+0)`, faltando a defesa em profundidade "> peso líquido nominal" já pretendida na migration original
+(a RPC já validava isso antes de inserir, mas a tabela em si não). Adicionado
+`filament_spools_initial_gross_weight_exceeds_nominal` (CHECK entre colunas) à migration
+`20260828121000` (ainda não aplicada em nenhum ambiente neste ponto — reforço, não edição de
+migration já aplicada) + um teste novo (6.4) confirmando que a CHECK bloqueia mesmo um INSERT direto
+que contorne a RPC. Restante da auditoria (RLS/grants — `authenticated` só tem SELECT em
+`inventory_purchases`, EXECUTE de `register_inventory_purchase` só para `service_role`; atomicidade —
+uma única transação PL/pgSQL; idempotência — checada antes de qualquer trabalho pesado; find-or-create
+de tipo normalizado; nunca reativa tipo inativo; ABS rejeitado; frontend nunca escreve saldo
+diretamente; nenhum segredo no diff) **aprovado sem outra ressalva**.
+
+**Teste de integração SQL executado pela primeira vez contra o remoto** (dentro de
+`BEGIN...ROLLBACK`) revelou um segundo problema real, desta vez só no próprio script de teste: 10 dos
+26 casos usavam a palavra-chave `DEFAULT` como argumento posicional numa chamada de função — sintaxe
+que o Postgres não aceita fora de `INSERT ... VALUES` (não é um recurso de chamada de função). **Não
+era um bug da RPC** — confirmado porque os casos que já usavam notação nomeada (`p_x => valor`)
+passaram desde a primeira execução. Corrigido convertendo as 10 chamadas para notação nomeada,
+omitindo os parâmetros que devem usar o próprio default da function (nunca `DEFAULT` literal).
+Reexecutado: **26 PASS, 0 FAIL, 0 SKIP** — incluindo o teste de atomicidade real (falha forçada no
+segundo rolo de uma compra de 2 desfaz também o primeiro rolo e o próprio registro da compra, contagens
+idênticas antes/depois), idempotência (mesma chave+payload devolve a mesma compra sem duplicar; chave
+reusada com payload diferente é rejeitada), bloqueio de tipo só-inativo, e a nova CHECK de defesa em
+profundidade. `ROLLBACK` confirmado — zero resíduo (`TESTE COMPRAS%`, tipo de filamento de teste,
+rolo `RL-TESTE-CHECK`: todos 0 depois; contagens oficiais idênticas antes/depois: 3 acessórios, 3
+embalagens, 5 tipos de filamento, 9 rolos, 0 compras).
+
+**Migrations aplicadas ao projeto Supabase remoto `tjhacqreupfqefntjevf`** via `npx supabase db push
+--linked` — exclusivamente `20260828120000_create_inventory_purchases_table.sql` e
+`20260828121000_create_register_inventory_purchase_function.sql`; as 35 migrations anteriores
+permaneceram alinhadas, dry-run prévio mostrou exatamente essas duas (nenhum DROP/DELETE/TRUNCATE em
+nenhuma delas), 37/37 sincronizadas depois. Verificação somente leitura pós-aplicação confirmou:
+colunas/tipos de `inventory_purchases` e das duas novas colunas de `filament_spools` corretos;
+`authenticated` com só SELECT em `inventory_purchases` (sem INSERT/UPDATE/DELETE); `EXECUTE` de
+`register_inventory_purchase` só para `service_role` (e o owner); a nova CHECK
+`filament_spools_initial_gross_weight_exceeds_nominal` presente; nenhum dado existente alterado
+(mesmas contagens de antes). **Edge Function `inventory-purchases` publicada** (única — as 11 já
+existentes preservaram `updated_at` idêntico, nenhuma redeployada) — `OPTIONS` → 204 com CORS
+correto; `POST` sem autenticação → 401 (`Header Authorization ausente.`), confirmado sem criar
+nenhuma compra real (contagem de `inventory_purchases` continuou 0 depois do smoke test).
+
+Suíte completa do frontend reexecutada após as correções: **1390/1390, 100% passando** (as duas
+falhas anteriores agora corrigidas e determinísticas). Lint 0 erros, `tsc -b`/`vite build` sem erros,
+`git diff --check` limpo, scan de segredos sem ocorrências reais. Testes Deno **não executados** —
+ambiente sem Deno instalado nesta sessão (não instalado, por instrução explícita de não trazer
+ferramentas de origem desconhecida).
+
+**Nenhum push realizado. Nenhum deploy de frontend. Nenhuma alteração em Petlink ou dado oficial —
+todas as contagens de dados reais permaneceram idênticas antes/depois de toda a rodada.** O backend
+de Compras (migrations + RPC + Edge Function) está agora aplicado e validado por teste automatizado
+real contra produção, mas **nenhuma validação manual do usuário ainda ocorreu pela interface** —
+Módulo 3 continua **NÃO concluído**; composição de Produtos e consumo automático de filamento
+continuam sem nenhuma linha de código. Percentual macro **não alterado** — critério já estabelecido
+exige backend + interface + validação manual do usuário juntos.
+
 ---
 
 # 10. Histórico de atualizações deste roadmap
@@ -1094,3 +1169,4 @@ commit `feat: add inventory purchase workflow`, sem push.
 | 2026-08-28 | Segundo reteste manual do usuário: passos 1-6/9-10 aprovados; passo 7 (rolagem horizontal em "Rolos do tipo" mesmo em resolução normal de notebook) e passo 8 (texto de Tipo truncado no histórico) ainda pendentes; passos 11/12 (arquivamento de rolo com histórico e filtro "Mostrar arquivados") não aprovados. Diagnóstico (leitura integral do código + auditoria somente leitura dos rolos `TESTE%` do reteste anterior, `updated_at` confirmado inalterado antes/depois) encontrou a causa real: o fluxo da rodada anterior tentava a exclusão física primeiro e só decidia arquivar depois de capturar um erro de negócio — nenhum dos rolos com histórico testados terminou de fato arquivado. View/RPCs reconfirmadas corretas (`is_active=false` já excluído de `vw_filament_type_summary`) — nenhuma migration necessária. **Corrigido**: novo campo derivado `FilamentSpool.has_movement_history` (calculado por uma segunda consulta de leitura em `filament_movements`, já concedida a `authenticated` — nenhuma migration nova) decide Excluir vs. Arquivar **antes** de qualquer confirmação, nunca por texto de erro; menu "Mais ações" de cada rolo já mostra o rótulo certo diretamente; `delete_filament_spool` continua como defesa em profundidade, só chamada quando já se sabe que não há histórico. Indicador visual "Arquivado" adicionado; filtro "Mostrar arquivados" persiste entre atualizações do drawer; rolo arquivado mantém histórico acessível (painel abre normalmente, só oculta os formulários). Rolagem horizontal (passo 7) corrigida: tabela reduzida de 8 para 7 colunas (peso nominal/disponível/% restante mesclados), ações secundárias movidas para um menu compacto (`DropdownMenu`, já usado em `SortableColumnHeader.tsx`), `min-width` fixo removido, apresentação em cartões (`Card`, já usado em `OrderManagementPanel.tsx`) adicionada para telas pequenas. Texto de Tipo truncado (passo 8) corrigido: coluna Tipo do histórico não usa mais `truncate`, permite quebra de linha (`whitespace-normal break-words`) — Data manteve `truncate`, não relatada como problema. Suíte completa 1350 → **1358 testes, todos passando**; lint 0 erros; `tsc -b`/`vite build` sem erros; `git diff --check` limpo; scan de segredos sem ocorrências reais. **Nenhuma migration aplicada, nenhuma Edge Function publicada, nenhum objeto remoto alterado, nenhum registro `TESTE` modificado pela auditoria, nenhum push, nenhum deploy de frontend, nenhuma alteração em Petlink/dado oficial.** Validação final dos passos 7, 8, 11 e 12 continua pendente. Consumo automático de filamento por pedido continua sem nenhuma linha de código. Percentual macro **não alterado**. Checkpoint local: commit `fix: complete filament inventory usability`, sem push. |
 | 2026-08-28 | Terceiro reteste manual do usuário: passo 1 ainda falhava — rolagem horizontal e botão "Movimentar / Pesar" sobreposto ao botão "Mais ações" em "Rolos do tipo", num diálogo de ~720px de largura (resolução normal de notebook). Causa raiz: a tabela de 7 colunas da rodada anterior ainda tinha duas células de ação separadas, e um `<button>` não trunca como texto — quando a largura da célula ficava menor que a largura natural do botão, ele vazava sobre a célula vizinha. **Corrigido**: tabela reduzida para 5 colunas (Identificador/Peso/Status/Abertura/Ações) — coluna "Ativo" eliminada (status ativo/arquivado passa a ser um badge junto ao Status); as duas ações secundárias viraram "Gerenciar" (botão compacto) + "Mais ações" (só ícone, nome acessível "Mais ações para o rolo [código]") num único flex com `gap`, nunca sobrepostos; Ativar/Desativar virou item do menu (funcionalidade preservada, só deixou de ser coluna própria); `overflow-x-auto` removido do wrapper da tabela. Suíte 1358 → **1363 testes, todos passando**; lint 0 erros; `tsc -b`/`vite build` sem erros; `git diff --check` limpo. Checkpoint local: commit `fix: make filament spool list responsive`, sem push. Em seguida, **o usuário aprovou integralmente o MVP manual de filamentos** — os quatro pontos em aberto desde os retestes anteriores (saldo consolidado, exclusão/arquivamento com histórico, filtro "Mostrar arquivados", e agora o layout da relação de rolos) ficam todos validados na prática. As regras operacionais do MVP continuam, mesmo assim, hipóteses documentadas sujeitas a revisão. Nenhuma migration aplicada, nenhuma Edge Function publicada, nenhum push, nenhum deploy, nenhuma alteração em Petlink/dado oficial. Percentual macro **não alterado**. |
 | 2026-08-28 | Com o MVP de filamentos aprovado, **Incremento 5 do Módulo 3 implementado localmente**: fluxo centralizado de Compras (Filamentos/Acessórios/Embalagens) — ver detalhamento completo em §9b. Resumo: campo "Código da cor" removido dos diálogos de tipo de filamento (já era opcional em toda a pilha; só a interface exigia/exibia — nenhuma migration, nenhum backfill, compatibilidade total com registros antigos); nova tabela `inventory_purchases` (ledger financeiro imutável, `total_value` gerado pelo Postgres como `item_value + freight_value`); migration complementar acrescenta `initial_gross_weight_grams`/`purchase_id` a `filament_spools` (nullable, `null` para rolo criado manualmente); RPC `register_inventory_purchase` (única escrita, transação única — qualquer falha desfaz tudo, inclusive em N rolos de uma mesma compra de filamento; reaproveita `register_stock_movement`/`register_filament_movement`/`create_filament_type` já existentes e validados, nunca duplica lógica de saldo; localiza ou cria o tipo de filamento por combinação normalizada material+marca+acabamento+cor, nunca reativa um tipo inativo em silêncio); Edge Function `inventory-purchases` (não publicada); diálogo "Registrar compra" (`PurchaseDialog.tsx`) com botão único reaproveitando `InventoryPageShell.tsx`, seleção de categoria por action buttons (Filamento/Acessório/Embalagem), campos por categoria na ordem pedida (Filamento: Material/Peso líquido/Quantidade/Peso bruto por rolo/Marca/Cor/Acabamento/Valor/Frete; Acessório/Embalagem: item ativo via busca/Quantidade/Valor/Frete), resumo com total/custo médio/custo por kg, e refetch seletivo por categoria após sucesso. 2 migrations SQL, Edge Function com 34 testes de validação estrutural (Deno não instalado, não executados), teste de integração SQL completo (`inventory_purchases_test.sql`, 10 seções incluindo atomicidade real de uma falha forçada no meio de uma compra de filamento — não executado, sem Postgres local/aplicação remota), e 21 testes novos de frontend (`PurchaseDialog.test.tsx`) + adições em `InventoryPage.test.tsx`/`FilamentsInventoryPage.test.tsx`. Suíte completa do frontend 1363 → **1390 testes** (1388 passando; 2 falhas pré-existentes e não relacionadas a esta rodada em `RegisterPaymentForm.test.tsx`, sensíveis à data real do sistema — arquivo não tocado aqui); lint 0 erros; `tsc -b`/`vite build` sem erros; `git diff --check` limpo; scan de segredos sem ocorrências reais; `.env.local` confirmado ignorado. **Nenhuma migration aplicada ao Supabase remoto, nenhuma Edge Function publicada, nenhum deploy de frontend, nenhum dado oficial/Petlink alterado, nenhum push.** Composição de Produtos e consumo automático de filamento continuam sem nenhuma linha de código (fora de escopo, adiado explicitamente pelo usuário); histórico de compras (tela dedicada) não implementado. Módulo 3 continua **NÃO concluído** — validação manual desta nova funcionalidade ainda não realizada. Percentual macro **não alterado**. Checkpoint local: commit `feat: add inventory purchase workflow`, sem push. |
+| 2026-08-28/29 | Auditoria integral do commit `feat: add inventory purchase workflow` (20 arquivos), seguida de aplicação remota — ver detalhamento completo em §9b. Resumo: as 2 falhas de `RegisterPaymentForm.test.tsx` reportadas na entrada anterior **não eram regressão** desse commit (arquivo não tocado por ele) — causa real era comparação de data local (componente) contra `toISOString()` UTC (teste), divergente sempre que a execução acontece entre ~21h e 24h em `America/Sao_Paulo`; corrigido com relógio fixo determinístico (`vi.useFakeTimers({toFake:['Date']})`), regra funcional preservada. Auditoria do backend encontrou 1 inconsistência real (CHECK entre colunas faltando em `filament_spools.initial_gross_weight_grams`) — corrigida na migration ainda não aplicada, com teste novo confirmando o bloqueio mesmo via INSERT direto. Primeira execução real do teste de integração SQL contra o remoto (dentro de `BEGIN...ROLLBACK`) revelou 10 casos usando sintaxe inválida (`DEFAULT` como argumento posicional de função, não suportado pelo Postgres fora de `INSERT`) — bug do próprio script de teste, não da RPC (confirmado pelos casos com notação nomeada, que já passavam); corrigido, reexecutado: **26 PASS, 0 FAIL, 0 SKIP**, `ROLLBACK` confirmado, zero resíduo, contagens oficiais idênticas antes/depois. Suíte completa do frontend **1390/1390, 100% verde**; lint/`tsc`/build sem erros; `git diff --check` limpo. **Migrations `20260828120000`/`20260828121000` aplicadas ao Supabase remoto `tjhacqreupfqefntjevf`** (37/37 sincronizadas, dry-run prévio sem operação inesperada, nenhuma migration antiga reaplicada) — verificação somente leitura confirmou schema/grants/RLS exatamente como pretendido. **Edge Function `inventory-purchases` publicada** (única — as 11 já existentes preservaram `updated_at`); smoke tests reais: `OPTIONS` → 204 com CORS correto, `POST` sem autenticação → 401, nenhuma compra real criada. Testes Deno não executados (Deno não instalado, não instalado por instrução explícita). **Nenhum push, nenhum deploy de frontend, nenhuma alteração em Petlink/dado oficial** — todas as contagens de dados reais permaneceram idênticas do início ao fim da rodada. Backend de Compras agora aplicado e validado por teste automatizado real contra produção; validação manual do usuário pela interface **ainda não ocorreu** — Módulo 3 continua **NÃO concluído**; composição de Produtos e consumo automático de filamento continuam sem nenhuma linha de código. Percentual macro **não alterado**. Checkpoint local: commit de correções (ver mensagem no histórico Git), sem push. |
