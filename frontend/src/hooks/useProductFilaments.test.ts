@@ -2,14 +2,12 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/errors'
 
-const { listProductFilamentsMock, updateProductFilamentsMock } = vi.hoisted(() => ({
+const { listProductFilamentsMock } = vi.hoisted(() => ({
   listProductFilamentsMock: vi.fn(),
-  updateProductFilamentsMock: vi.fn(),
 }))
 
 vi.mock('@/lib/api/productFilaments', () => ({
   listProductFilaments: listProductFilamentsMock,
-  updateProductFilaments: updateProductFilamentsMock,
 }))
 
 import { useProductFilaments } from './useProductFilaments'
@@ -33,7 +31,6 @@ function createDeferred<T>(): Deferred<T> {
 describe('useProductFilaments', () => {
   beforeEach(() => {
     listProductFilamentsMock.mockReset()
-    updateProductFilamentsMock.mockReset()
   })
 
   it('starts idle and fetches nothing when productId is null', () => {
@@ -69,22 +66,6 @@ describe('useProductFilaments', () => {
     expect(result.current.error).toBeInstanceOf(ApiError)
     expect(result.current.error?.message).toBe('falhou')
     expect(result.current.filaments).toEqual([])
-  })
-
-  it('save() calls updateProductFilaments with the given productId', async () => {
-    listProductFilamentsMock.mockResolvedValue([])
-    updateProductFilamentsMock.mockResolvedValue({ success: true })
-
-    const { result } = renderHook(() => useProductFilaments('p1'))
-    await waitFor(() => expect(result.current.status).toBe('success'))
-
-    await act(async () => {
-      await result.current.save({ filaments: [{ id: 'ft1', theoretical_weight_grams: 12.5 }] })
-    })
-
-    expect(updateProductFilamentsMock).toHaveBeenCalledWith('p1', {
-      filaments: [{ id: 'ft1', theoretical_weight_grams: 12.5 }],
-    })
   })
 
   it('a late response for a previous productId does not override the current productId state', async () => {

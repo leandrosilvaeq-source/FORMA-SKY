@@ -1,17 +1,23 @@
 import { useCallback, useEffect, useState } from 'react'
-import {
-  listProductFilaments,
-  updateProductFilaments,
-  type UpdateProductFilamentsInput,
-} from '@/lib/api/productFilaments'
+import { listProductFilaments } from '@/lib/api/productFilaments'
 import { ApiError } from '@/lib/api/errors'
 import type { ProductFilament } from '@/types/domain'
 
 // Espelha useProductComposition.ts (Acessórios/Embalagens, NUNCA alterado
-// por este incremento) na estrutura, mas é um hook NOVO e independente —
-// mesma separação/atomicidade já decidida no banco (set_product_filaments é
-// uma RPC própria) preservada até aqui: salvar filamentos nunca dispara
-// nem depende de nenhuma chamada de Acessórios/Embalagens.
+// por este incremento) na estrutura, mas é um hook independente.
+//
+// SOMENTE LEITURA a partir da limpeza de código órfão de 2026-08-29: este
+// hook perdeu `save` (chamava updateProductFilaments -> PATCH
+// /products/:id/filaments -> RPC set_product_filaments) por não ter mais
+// nenhum consumidor de UI — o antigo diálogo "Composição de filamentos"
+// (FilamentCompositionForm.tsx) que o chamava foi removido numa rodada
+// anterior, e a própria migration pendente revoga o EXECUTE de
+// service_role dessa RPC. product_filaments é dado LEGADO — a estrutura
+// autoritativa de produção é product_plates/product_plate_filaments
+// (migration 20260829160000_add_product_plates_structure.sql). Este hook
+// continua existindo só como leitura — usado como fallback transitório de
+// compatibilidade por ProductsPage.tsx/ProductDetailPage.tsx para Produtos
+// que ainda não têm nenhum plate.
 
 export type ProductFilamentsStatus = 'idle' | 'loading' | 'error' | 'success'
 
@@ -21,7 +27,6 @@ interface UseProductFilamentsResult {
   isLoading: boolean
   error: ApiError | null
   retry: () => void
-  save: (input: UpdateProductFilamentsInput) => Promise<void>
 }
 
 interface LoadResult {
@@ -36,7 +41,7 @@ function toApiError(err: unknown): ApiError {
 }
 
 // productId nulo (dialog fechado) não dispara nenhuma requisição — carrega
-// só quando um produto é selecionado para editar a composição.
+// só quando um produto é selecionado.
 export function useProductFilaments(productId: string | null): UseProductFilamentsResult {
   const [trackedProductId, setTrackedProductId] = useState(productId)
   const [result, setResult] = useState<LoadResult | null>(null)
@@ -90,13 +95,5 @@ export function useProductFilaments(productId: string | null): UseProductFilamen
     setRetryToken((count) => count + 1)
   }, [])
 
-  const save = useCallback(
-    async (input: UpdateProductFilamentsInput) => {
-      if (!productId) return
-      await updateProductFilaments(productId, input)
-    },
-    [productId],
-  )
-
-  return { status, filaments, isLoading: status === 'loading', error, retry, save }
+  return { status, filaments, isLoading: status === 'loading', error, retry }
 }

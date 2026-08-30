@@ -119,8 +119,11 @@ export function ProductsPage() {
   // as duas telas nunca mostrem uma composição diferente para o mesmo
   // Produto. O antigo diálogo "Composição de filamentos"
   // (FilamentCompositionForm, escrita direta e independente em
-  // product_filaments) foi removido: mantê-lo abriria exatamente o caminho
-  // de duas fontes divergentes que esta rodada corrige.
+  // product_filaments) foi desligado desta página numa rodada anterior e
+  // fisicamente removido do repositório na limpeza de código órfão de
+  // 2026-08-29 (zero consumidores confirmados) — mantê-lo teria aberto
+  // exatamente o caminho de duas fontes divergentes que aquela rodada
+  // corrigiu.
   //
   // IMPORTANTE — este fallback é uma proteção TRANSITÓRIA, não o fluxo
   // normal: depois que a migration 20260829160000 for aplicada, o backfill

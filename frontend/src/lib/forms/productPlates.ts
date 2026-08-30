@@ -1,28 +1,67 @@
 // Funções puras usadas por ProductForm.tsx (seção "Composição" — estrutura
-// produtiva por plates, 2026-08-29) — mesmo critério de
-// lib/forms/productFilamentComposition.ts (arquivo companheiro, para a
-// composição FLAT antiga, NUNCA alterado por esta migration): extraídas
-// para cá para eliminar o warning react-refresh/only-export-components.
+// produtiva por plates, 2026-08-29) — extraídas para cá para eliminar o
+// warning react-refresh/only-export-components.
 //
-// Reaproveita os seletores de tipo de filamento (filterSelectableFilamentTypes/
-// filamentTypeLabel/findFilamentTypeById) de productFilamentComposition.ts
-// diretamente — mesma regra de "só tipos ativos, tipo já vinculado nunca
-// some sozinho" — só a estrutura de linhas (agora aninhada em plates) é
-// nova. Duplicidade de filamento é impedida DENTRO do mesmo plate apenas —
-// o mesmo filamento em plates DIFERENTES é permitido (cada plate tem sua
-// própria composição independente).
+// Os 4 seletores de tipo de filamento abaixo (filterSelectableFilamentTypes/
+// filamentTypeLabel/findFilamentTypeById/isFilamentTypeRowInactive) viviam
+// em lib/forms/productFilamentComposition.ts, companheiro de
+// FilamentCompositionForm.tsx (diálogo antigo de composição "flat",
+// escrita direta em product_filaments). Esses dois arquivos foram removidos
+// na rodada de limpeza de código órfão de 2026-08-29 (RPC set_product_filaments
+// já sem nenhum consumidor de escrita desde a rodada anterior) — os 4
+// seletores, que este arquivo (o único consumidor restante) já reaproveitava,
+// foram trazidos para cá em vez de deixados num arquivo companheiro morto.
+// Testes correspondentes movidos para productPlates.test.ts (novo).
+//
+// Mesma regra de sempre: "só tipos ativos, tipo já vinculado nunca some
+// sozinho". Duplicidade de filamento é impedida DENTRO do mesmo plate
+// apenas — o mesmo filamento em plates DIFERENTES é permitido (cada plate
+// tem sua própria composição independente).
 
 import { parseDurationToSeconds, formatSecondsToHHMM } from '@/lib/forms/durationField'
 import { parseNumberField } from '@/lib/forms/numberField'
-import {
-  filamentTypeLabel,
-  filterSelectableFilamentTypes,
-  findFilamentTypeById,
-  isFilamentRowInactive as isFilamentTypeRowInactive,
-} from '@/lib/forms/productFilamentComposition'
 import type { FilamentTypeSummary, ProductFilament, ProductPlate, ProductPlateFilament } from '@/types/domain'
 
-export { filamentTypeLabel, filterSelectableFilamentTypes, findFilamentTypeById }
+// Mesma lógica de filterSelectableItems (productComposition.ts, Acessórios/
+// Embalagens), adaptada ao formato de FilamentTypeSummary (chave primária é
+// filament_type_id, não id) — o tipo já selecionado NAQUELA linha é sempre
+// mantido mesmo inativo (nunca some da tela por desativação posterior);
+// tipos já escolhidos em OUTRAS linhas do MESMO plate são excluídos
+// (impede duplicidade); qualquer outro tipo inativo é excluído das opções
+// para uma seleção NOVA, já que set_product_production sempre rejeita
+// filament_type_id inativo.
+export function filterSelectableFilamentTypes(
+  types: FilamentTypeSummary[],
+  chosenElsewhere: Set<string>,
+  currentFilamentTypeId: string | null,
+): FilamentTypeSummary[] {
+  return types.filter((type) => {
+    if (type.filament_type_id === currentFilamentTypeId) return true
+    if (chosenElsewhere.has(type.filament_type_id)) return false
+    return type.is_active
+  })
+}
+
+// Mesmo formato "material · fabricante · linha · cor" já usado em
+// FilamentTypeDrawer.tsx (typeLabel) — marca visivelmente um tipo inativo
+// já vinculado, mesmo idioma de itemLabel (productComposition.ts).
+export function filamentTypeLabel(type: FilamentTypeSummary): string {
+  const base = `${type.material} · ${type.manufacturer} · ${type.line} · ${type.commercial_color}`
+  return type.is_active ? base : `${base} (inativo)`
+}
+
+export function findFilamentTypeById(
+  types: FilamentTypeSummary[],
+  filamentTypeId: string | null,
+): FilamentTypeSummary | undefined {
+  if (filamentTypeId === null) return undefined
+  return types.find((type) => type.filament_type_id === filamentTypeId)
+}
+
+function isFilamentTypeRowInactive(row: PlateFilamentRow, types: FilamentTypeSummary[]): boolean {
+  const type = findFilamentTypeById(types, row.filamentTypeId)
+  return type ? !type.is_active : false
+}
 
 export interface PlateFilamentRow {
   key: string

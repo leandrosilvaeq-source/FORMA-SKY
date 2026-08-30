@@ -1,12 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { fromMock } = vi.hoisted(() => ({ fromMock: vi.fn() }))
-const { callEdgeFunctionMock } = vi.hoisted(() => ({ callEdgeFunctionMock: vi.fn() }))
 
 vi.mock('@/lib/supabase', () => ({ supabase: { from: fromMock } }))
-vi.mock('./edgeFunctionClient', () => ({ callEdgeFunction: callEdgeFunctionMock }))
 
-import { listProductFilaments, updateProductFilaments } from './productFilaments'
+import { listProductFilaments } from './productFilaments'
 
 interface QueryResult {
   data: unknown
@@ -22,10 +20,17 @@ function chainableResult(result: QueryResult) {
   return builder
 }
 
+// Somente leitura desde a limpeza de código órfão de 2026-08-29 —
+// updateProductFilaments (escrita via PATCH /products/:id/filaments) foi
+// removida junto com o diálogo que era seu único consumidor
+// (FilamentCompositionForm.tsx, já removido numa rodada anterior); a RPC
+// que ela chamava também perde o EXECUTE de service_role na migration
+// pendente. Nenhuma cobertura de comportamento operacional foi perdida —
+// o teste removido só provava uma chamada de rota que não tinha mais
+// nenhum chamador real.
 describe('productFilaments api', () => {
   beforeEach(() => {
     fromMock.mockReset()
-    callEdgeFunctionMock.mockReset()
   })
 
   it('listProductFilaments reads product_filaments filtered by product_id', async () => {
@@ -37,30 +42,6 @@ describe('productFilaments api', () => {
 
     expect(fromMock).toHaveBeenCalledWith('product_filaments')
     expect(builder.eq).toHaveBeenCalledWith('product_id', 'p1')
-    expect(callEdgeFunctionMock).not.toHaveBeenCalled()
     expect(result).toEqual(rows)
-  })
-
-  it('updateProductFilaments writes through the products Edge Function with PATCH /:id/filaments', async () => {
-    callEdgeFunctionMock.mockResolvedValue({ success: true })
-
-    const result = await updateProductFilaments('p1', {
-      filaments: [{ id: 'ft1', theoretical_weight_grams: 12.5 }],
-    })
-
-    expect(callEdgeFunctionMock).toHaveBeenCalledWith('products', '/p1/filaments', 'PATCH', {
-      filaments: [{ id: 'ft1', theoretical_weight_grams: 12.5 }],
-    })
-    expect(fromMock).not.toHaveBeenCalled()
-    expect(result).toEqual({ success: true })
-  })
-
-  it('updateProductFilaments nunca chama a rota /composition (independência de Acessórios/Embalagens)', async () => {
-    callEdgeFunctionMock.mockResolvedValue({ success: true })
-
-    await updateProductFilaments('p1', { filaments: [] })
-
-    const calledPath = callEdgeFunctionMock.mock.calls[0][1]
-    expect(calledPath).not.toContain('composition')
   })
 })

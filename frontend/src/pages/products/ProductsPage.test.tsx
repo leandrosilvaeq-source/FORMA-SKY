@@ -211,7 +211,6 @@ describe('ProductsPage', () => {
   let updateFullMock: ReturnType<typeof vi.fn>
   let refetchMock: ReturnType<typeof vi.fn>
   let saveCompositionMock: ReturnType<typeof vi.fn>
-  let saveFilamentsMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     createMock = vi.fn().mockResolvedValue(undefined)
@@ -220,7 +219,6 @@ describe('ProductsPage', () => {
     updateFullMock = vi.fn().mockResolvedValue(product)
     refetchMock = vi.fn()
     saveCompositionMock = vi.fn().mockResolvedValue(undefined)
-    saveFilamentsMock = vi.fn().mockResolvedValue(undefined)
 
     useAuthMock.mockReturnValue({ session: { user: { email: 'op@formasky.com' } }, signOut: vi.fn() })
     useProductsMock.mockReturnValue({
@@ -267,7 +265,6 @@ describe('ProductsPage', () => {
       isLoading: false,
       error: null,
       retry: vi.fn(),
-      save: saveFilamentsMock,
     })
     // Padrão: o Produto já tem 1 plate real (product_plates é a fonte
     // autoritativa) — os testes de fallback legado abaixo sobrescrevem para
@@ -759,7 +756,6 @@ describe('ProductsPage', () => {
         isLoading: false,
         error: null,
         retry: vi.fn(),
-        save: saveFilamentsMock,
       })
       const user = userEvent.setup()
       renderPage()
@@ -926,9 +922,10 @@ describe('ProductsPage', () => {
     // (set_product_composition), nunca a mesma chamada.
     expect(saveCompositionMock).not.toHaveBeenCalled()
     // product_filaments (legado) nunca é escrito por nenhum caminho desta
-    // página — a única leitura restante (useProductFilaments) é o fallback
-    // de compatibilidade para Produtos sem plates, nunca uma escrita.
-    expect(saveFilamentsMock).not.toHaveBeenCalled()
+    // página — useProductFilaments não tem mais nenhum método de escrita
+    // desde a limpeza de código órfão de 2026-08-29 (removido junto com o
+    // diálogo que era seu único chamador); a única leitura restante é o
+    // fallback de compatibilidade para Produtos sem plates.
     // O link para a Ficha Técnica continua intacto (mesmo href de sempre).
     expect(screen.getByRole('link', { name: 'Chaveiro' })).toHaveAttribute('href', '/produtos/1')
   })
@@ -1046,7 +1043,7 @@ describe('ProductsPage', () => {
     expect(screen.queryByRole('button', { name: /^adicionar filamento$/i })).not.toBeInTheDocument()
   })
 
-  it('salvar Acessórios/Embalagens no diálogo rápido nunca chama nenhuma escrita em product_filaments (save legado nunca é montado)', async () => {
+  it('salvar Acessórios/Embalagens no diálogo rápido chama só saveComposition, nenhuma outra escrita', async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -1054,7 +1051,6 @@ describe('ProductsPage', () => {
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
     await waitFor(() => expect(saveCompositionMock).toHaveBeenCalled())
-    expect(saveFilamentsMock).not.toHaveBeenCalled()
   })
 
   it('shows an inline error with a retry action when the list fails to load', async () => {

@@ -166,7 +166,6 @@ describe('ProductDetailPage', () => {
       isLoading: false,
       error: null,
       retry: vi.fn(),
-      save: vi.fn(),
     })
     // Estrutura produtiva por plates (2026-08-29; rodada corretiva) — fonte
     // autoritativa de Filamentos nesta Ficha. Padrão: plates: [] (Produto
@@ -741,7 +740,6 @@ describe('ProductDetailPage', () => {
         isLoading: false,
         error: null,
         retry: vi.fn(),
-        save: vi.fn(),
       })
       renderPage()
 
@@ -767,7 +765,6 @@ describe('ProductDetailPage', () => {
         isLoading: false,
         error: null,
         retry: vi.fn(),
-        save: vi.fn(),
       })
       renderPage()
 
@@ -790,7 +787,6 @@ describe('ProductDetailPage', () => {
         isLoading: false,
         error: new ApiError('database', 500, 'Falha ao carregar filamentos.'),
         retry: filamentsRetryMock,
-        save: vi.fn(),
       })
       renderPage()
 
@@ -834,7 +830,6 @@ describe('ProductDetailPage', () => {
         isLoading: false,
         error: null,
         retry: vi.fn(),
-        save: vi.fn(),
       })
       renderPage()
 
@@ -895,7 +890,6 @@ describe('ProductDetailPage', () => {
         isLoading: false,
         error: null,
         retry: vi.fn(),
-        save: vi.fn(),
       })
       renderPage()
 
