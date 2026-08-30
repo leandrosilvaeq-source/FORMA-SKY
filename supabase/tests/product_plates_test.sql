@@ -25,6 +25,28 @@
 --
 -- Execução (quando a migration estiver aplicada):
 --   npx supabase db query --linked --file supabase/tests/product_plates_test.sql
+--
+-- PENDÊNCIA REGISTRADA (2026-08-29/30, migration
+-- 20260829180000_add_categories_plate_weight_and_order_colors.sql) — este
+-- arquivo ficou ESTRUTURALMENTE DEFASADO nas Seções 1 e 2: essa migration
+-- seguinte troca a assinatura de create_product_with_plates (p_category
+-- text -> p_categories jsonb, DROP+CREATE) e de update_product_full (ganha
+-- p_categories), e muda o formato de p_plates de
+-- {production_time_seconds, filaments:[...]} para
+-- {production_time_seconds, weight_grams} — as chamadas posicionais deste
+-- arquivo (assinatura antiga) deixam de existir no banco assim que essa
+-- migration for aplicada, e passam a falhar com "function does not exist".
+-- A Seção 3 (validate_catalog_composition_for_creation) e a Seção 4
+-- (set_product_filaments desativada) continuam válidas — nenhuma das duas
+-- funções que testam foi alterada por essa migration seguinte.
+-- Cobertura equivalente e ATUALIZADA para os novos contratos (categorias
+-- múltiplas, peso direto do plate sem filamentos) vive em
+-- supabase/tests/product_categories_plate_weight_order_colors_test.sql —
+-- este arquivo não foi reescrito nesta rodada (custo desproporcional ao
+-- ganho frente ao novo arquivo dedicado); mantido como registro histórico
+-- de quando 20260829160000 foi validada, com esta nota para que ninguém o
+-- execute às cegas depois de 20260829180000 esperando que ainda reflita o
+-- contrato vigente.
 
 begin;
 
