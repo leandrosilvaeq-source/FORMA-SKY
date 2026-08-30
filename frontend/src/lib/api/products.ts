@@ -14,7 +14,7 @@ import { callEdgeFunction } from './edgeFunctionClient'
 // por lib/api/productComposition.ts ({id, quantity}) — não redeclarado
 // aqui, só referenciado nos tipos abaixo para não duplicar a forma.
 import type { ProductCompositionItemInput } from './productComposition'
-import type { Product, ProductPriceHistory, ProductType } from '@/types/domain'
+import type { Product, ProductCategory, ProductPriceHistory, ProductType } from '@/types/domain'
 
 // units_per_plate deliberadamente ausente deste contrato: removido da
 // interface de "Novo produto" (decisão aprovada) — o backend continua
@@ -64,30 +64,31 @@ export interface UpdateProductDetailsInput {
   allows_personalization?: boolean
 }
 
-// Estrutura produtiva por plates (migration 20260829160000, ainda não
-// aplicada) — payload de um plate + suas linhas de filamento. A posição no
-// array (índice) define o número do plate (Plate 1, Plate 2, ...), nunca um
-// campo separado aqui — mesmo contrato de PlateInput em
-// supabase/functions/products/handler.ts.
-export interface PlateFilamentItemInput {
-  filament_type_id: string
+// Estrutura produtiva por plates — migration
+// 20260829180000_add_categories_plate_weight_and_order_colors.sql (ainda não
+// aplicada) retirou toda composição de filamento do plate do Produto:
+// weight_grams passa a ser informado diretamente (não mais somado de
+// PlateFilamentItemInput[], removido). A posição no array (índice) define o
+// número do plate (Plate 1, Plate 2, ...), nunca um campo separado aqui —
+// mesmo contrato de PlateInput em supabase/functions/products/handler.ts.
+export interface PlateInput {
+  production_time_seconds: number
   weight_grams: number
 }
 
-export interface PlateInput {
-  production_time_seconds: number
-  filaments: PlateFilamentItemInput[]
-}
-
-// POST /products/with-plates -> create_product_with_plates (NOVA,
-// 2026-08-29). manual_weight_override_grams/manual_time_override_seconds
-// são independentes um do outro — cada um pode estar ausente/null enquanto
-// o outro está presente (ver comentário da coluna na migration).
+// POST /products/with-plates -> create_product_with_plates. category (string
+// única) substituído por categories (array de strings, N por Produto) pela
+// migration 20260829180000 (ainda não aplicada) — nunca os dois ao mesmo
+// tempo; products.category continua existindo só como espelho DERIVADO,
+// nunca aceito neste contrato. manual_weight_override_grams/
+// manual_time_override_seconds são independentes um do outro — cada um pode
+// estar ausente/null enquanto o outro está presente (ver comentário da
+// coluna na migration).
 export interface CreateProductWithPlatesInput {
   name: string
   product_type: ProductType
   default_price: number
-  category?: string | null
+  categories: string[]
   description?: string | null
   default_file_id?: string | null
   allows_personalization?: boolean | null
@@ -98,18 +99,21 @@ export interface CreateProductWithPlatesInput {
   packaging: ProductCompositionItemInput[]
 }
 
-// PATCH /products/:id/full -> update_product_full (NOVA, 2026-08-29). Os
-// campos descritivos (name..allows_personalization) são opcionais como um
-// todo — omitir todos preserva os dados descritivos atuais do produto,
-// sem exigir reenviar o que não mudou; plates/accessories/packaging
-// continuam SEMPRE substituição completa (o formulário sempre envia o
-// estado inteiro atual dessas 3 seções a cada salvar).
+// PATCH /products/:id/full -> update_product_full. Os campos descritivos
+// (name/description/default_file_id/allows_personalization) são opcionais
+// como um todo — omitir todos preserva os dados descritivos atuais do
+// produto, sem exigir reenviar o que não mudou; categories/plates/
+// accessories/packaging continuam SEMPRE substituição completa (o
+// formulário sempre envia o estado inteiro atual dessas seções a cada
+// salvar). category (singular) nunca é aceito nesta rota — só
+// PATCH /products/:id (updateProductDetails, abaixo) ainda aceita a chave
+// legada "category", que segue existindo só como espelho derivado.
 export interface UpdateProductFullInput {
   name?: string
-  category?: string | null
   description?: string | null
   default_file_id?: string | null
   allows_personalization?: boolean
+  categories: string[]
   plates: PlateInput[]
   manual_weight_override_grams?: number | null
   manual_time_override_seconds?: number | null
@@ -194,4 +198,34 @@ export async function createProductWithPlates(input: CreateProductWithPlatesInpu
 // RETURNING *), mesmo padrão de updateProductDetails.
 export async function updateProductFull(productId: string, input: UpdateProductFullInput): Promise<Product> {
   return callEdgeFunction<Product>('products', `/${productId}/full`, 'PATCH', input)
+}
+
+// Leitura direta via supabase-js: public.product_categories concede só
+// SELECT a authenticated (migration 20260829180000, ainda não aplicada) —
+// mesmo padrão de listProductPriceHistory. position asc reproduz a ordem de
+// exibição definida por set_product_categories() (1 = categoria "principal",
+// espelhada em products.category).
+export async function listProductCategoriesForProduct(productId: string): Promise<ProductCategory[]> {
+  const { data, error } = await supabase
+    .from('product_categories')
+    .select('*')
+    .eq('product_id', productId)
+    .order('position', { ascending: true })
+
+  if (error) throw mapSupabaseError(error)
+  return data as ProductCategory[]
+}
+
+// Busca em lote de TODAS as categorias de TODOS os produtos — usada por
+// ProductsPage.tsx para filtrar/exibir por categoria sem 1 consulta por
+// linha da listagem (mesmo padrão de outras telas que agregam no cliente em
+// vez de repetir round-trips).
+export async function listAllProductCategories(): Promise<ProductCategory[]> {
+  const { data, error } = await supabase
+    .from('product_categories')
+    .select('*')
+    .order('position', { ascending: true })
+
+  if (error) throw mapSupabaseError(error)
+  return data as ProductCategory[]
 }

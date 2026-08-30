@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -105,6 +105,14 @@ describe('AppLayout', () => {
     for (const label of ['Clientes', 'Produtos', 'Empresas', 'Pedidos', 'Estoque']) {
       expect(screen.getByRole('link', { name: label })).not.toHaveAttribute('aria-current')
     }
+  })
+
+  it('ordem oficial dos módulos: Clientes, Empresas, Produtos, Pedidos, Estoque', () => {
+    renderAt('/produtos')
+
+    const nav = screen.getByRole('navigation', { name: 'Navegação principal' })
+    const links = within(nav).getAllByRole('link')
+    expect(links.map((link) => link.textContent)).toEqual(['Clientes', 'Empresas', 'Produtos', 'Pedidos', 'Estoque'])
   })
 
   it('renderiza o conteúdo filho e o e-mail da sessão', () => {

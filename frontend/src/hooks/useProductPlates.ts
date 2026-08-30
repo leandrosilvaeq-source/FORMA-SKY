@@ -1,20 +1,23 @@
 import { useCallback, useEffect, useState } from 'react'
-import { listProductPlateFilaments, listProductPlates } from '@/lib/api/productPlates'
+import { listProductPlates } from '@/lib/api/productPlates'
 import { ApiError } from '@/lib/api/errors'
-import type { ProductPlate, ProductPlateFilament } from '@/types/domain'
+import type { ProductPlate } from '@/types/domain'
 
 // Espelha useProductComposition.ts na estrutura — leitura só (nenhum
 // `save`: toda escrita de plates passa por updateProductFull/
-// createProductWithPlates, nunca por uma chamada isolada daqui, para que
-// product_plates/product_plate_filaments nunca sejam alterados fora da
-// transação atômica única do Produto inteiro).
+// createProductWithPlates, nunca por uma chamada isolada daqui).
+//
+// A partir da migration 20260829180000_add_categories_plate_weight_and_order_colors.sql
+// (ainda não aplicada), product_plates.weight_grams é uma coluna DIRETA —
+// este hook não busca mais product_plate_filaments (composição de
+// filamento saiu do Produto; a escolha agora acontece no Pedido). `select('*')`
+// em listProductPlates já traz weight_grams assim que a coluna existir.
 
 export type ProductPlatesStatus = 'idle' | 'loading' | 'error' | 'success'
 
 interface UseProductPlatesResult {
   status: ProductPlatesStatus
   plates: ProductPlate[]
-  filamentsByPlateId: Map<string, ProductPlateFilament[]>
   isLoading: boolean
   error: ApiError | null
   retry: () => void
@@ -24,7 +27,6 @@ interface LoadResult {
   productId: string
   status: 'success' | 'error'
   plates: ProductPlate[]
-  filamentsByPlateId: Map<string, ProductPlateFilament[]>
   error: ApiError | null
 }
 
@@ -48,20 +50,13 @@ export function useProductPlates(productId: string | null): UseProductPlatesResu
     let cancelled = false
 
     listProductPlates(productId)
-      .then(async (plates) => {
-        const filaments = await listProductPlateFilaments(plates.map((plate) => plate.id))
+      .then((plates) => {
         if (cancelled) return
-        const filamentsByPlateId = new Map<string, ProductPlateFilament[]>()
-        for (const filament of filaments) {
-          const current = filamentsByPlateId.get(filament.plate_id) ?? []
-          current.push(filament)
-          filamentsByPlateId.set(filament.plate_id, current)
-        }
-        setResult({ productId, status: 'success', plates, filamentsByPlateId, error: null })
+        setResult({ productId, status: 'success', plates, error: null })
       })
       .catch((err: unknown) => {
         if (cancelled) return
-        setResult({ productId, status: 'error', plates: [], filamentsByPlateId: new Map(), error: toApiError(err) })
+        setResult({ productId, status: 'error', plates: [], error: toApiError(err) })
       })
 
     return () => {
@@ -71,7 +66,6 @@ export function useProductPlates(productId: string | null): UseProductPlatesResu
 
   let status: ProductPlatesStatus
   let plates: ProductPlate[] = []
-  let filamentsByPlateId = new Map<string, ProductPlateFilament[]>()
   let error: ApiError | null = null
 
   if (!productId) {
@@ -81,7 +75,6 @@ export function useProductPlates(productId: string | null): UseProductPlatesResu
   } else if (result.status === 'success') {
     status = 'success'
     plates = result.plates
-    filamentsByPlateId = result.filamentsByPlateId
   } else {
     status = 'error'
     error = result.error
@@ -92,5 +85,5 @@ export function useProductPlates(productId: string | null): UseProductPlatesResu
     setRetryToken((count) => count + 1)
   }, [])
 
-  return { status, plates, filamentsByPlateId, isLoading: status === 'loading', error, retry }
+  return { status, plates, isLoading: status === 'loading', error, retry }
 }

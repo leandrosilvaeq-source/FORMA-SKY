@@ -15,17 +15,17 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useAccessories } from '@/hooks/useAccessories'
-import { useFilamentTypes } from '@/hooks/useFilamentTypes'
+import { useAllProductCategories } from '@/hooks/useAllProductCategories'
 import { usePackaging } from '@/hooks/usePackaging'
+import { useProductCategories } from '@/hooks/useProductCategories'
 import { useProductComposition } from '@/hooks/useProductComposition'
-import { useProductFilaments } from '@/hooks/useProductFilaments'
 import { useProductPlates } from '@/hooks/useProductPlates'
 import { useProductPriceHistory } from '@/hooks/useProductPriceHistory'
 import { useProducts } from '@/hooks/useProducts'
 import { ApiError } from '@/lib/api/errors'
 import { formatSecondsToHHMMSS } from '@/lib/forms/durationField'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
-import { plateRowsFrom, plateRowsFromLegacyFilaments } from '@/lib/forms/productPlates'
+import { plateRowsFrom, plateRowsFromLegacyWeight } from '@/lib/forms/productPlates'
 import type { UpdateProductCompositionInput } from '@/lib/api/productComposition'
 import type { UpdateProductPriceInput } from '@/lib/api/products'
 import type { Product, ProductType } from '@/types/domain'
@@ -68,14 +68,29 @@ const PRODUCT_NAME_LINK_CLASSNAME =
 // presente (products.default_price nunca é null no contrato).
 type ProductSortColumn = 'name' | 'product_type' | 'category' | 'print_time' | 'weight' | 'price' | 'is_active'
 
-function getProductSortValue(product: Product, column: ProductSortColumn): string | number | boolean | null {
+// Categoria: a partir da migration 20260829180000 (múltiplas categorias,
+// ainda não aplicada) um Produto pode ter N categorias — a ordenação usa a
+// junção ordenada alfabeticamente (nunca a ordem de inserção, que não seria
+// determinística entre execuções) das categorias vinculadas, lidas de
+// categoriesByProductId (useAllProductCategories) — nunca mais só
+// product.category (espelho de position=1, insuficiente para representar
+// todas as categorias na coluna).
+function joinedCategoriesText(categories: string[]): string {
+  return categories.slice().sort((a, b) => a.localeCompare(b, 'pt-BR')).join(', ')
+}
+
+function getProductSortValue(
+  product: Product,
+  column: ProductSortColumn,
+  categoriesByProductId: Map<string, string[]>,
+): string | number | boolean | null {
   switch (column) {
     case 'name':
       return product.name
     case 'product_type':
       return PRODUCT_TYPE_LABELS[product.product_type]
     case 'category':
-      return product.category
+      return joinedCategoriesText(categoriesByProductId.get(product.id) ?? [])
     case 'print_time':
       return product.default_print_time_seconds
     case 'weight':
@@ -91,7 +106,7 @@ export function ProductsPage() {
   const { products, isLoading, error, refetch, createWithPlates, changePrice, update, updateFull } = useProducts()
   const { accessories } = useAccessories()
   const { packaging } = usePackaging()
-  const filamentTypesHook = useFilamentTypes()
+  const allCategories = useAllProductCategories()
 
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
@@ -102,87 +117,66 @@ export function ProductsPage() {
 
   // "Editar produto" — três seções independentes no mesmo diálogo: o
   // formulário completo por plates (ProductForm mode="edit" ->
-  // update_product_full, NOVO nesta rodada corretiva — substitui
-  // ProductEditDetailsForm), Preço (ProductPriceForm/update_product_price,
-  // inalterado — nunca enviado por update_product_full, ver comentário em
-  // ProductForm.tsx) e Histórico de preços (somente leitura,
-  // useProductPriceHistory). Cada seção tem seu próprio estado de
+  // update_product_full) e categorias (useProductCategories,
+  // set_product_categories dentro da mesma RPC), Preço (ProductPriceForm/
+  // update_product_price, inalterado — nunca enviado por update_product_full,
+  // ver comentário em ProductForm.tsx) e Histórico de preços (somente
+  // leitura, useProductPriceHistory). Cada seção tem seu próprio estado de
   // submitting/erro — nunca a mesma chamada/transação entre elas.
   //
-  // Fonte autoritativa da composição de produção (achado da auditoria desta
-  // rodada): product_plates/product_plate_filaments. product_filaments
-  // (legado) NUNCA é mais editado de forma independente por esta página —
-  // só lido (useProductFilaments abaixo) como fallback de compatibilidade
-  // para Produtos que ainda não têm nenhum plate (backfill pendente da
-  // migration, ainda não aplicada no remoto) — mesma função
-  // (plateRowsFromLegacyFilaments) usada por ProductDetailPage.tsx, para que
-  // as duas telas nunca mostrem uma composição diferente para o mesmo
-  // Produto. O antigo diálogo "Composição de filamentos"
-  // (FilamentCompositionForm, escrita direta e independente em
-  // product_filaments) foi desligado desta página numa rodada anterior e
-  // fisicamente removido do repositório na limpeza de código órfão de
-  // 2026-08-29 (zero consumidores confirmados) — mantê-lo teria aberto
-  // exatamente o caminho de duas fontes divergentes que aquela rodada
-  // corrigiu.
-  //
-  // IMPORTANTE — este fallback é uma proteção TRANSITÓRIA, não o fluxo
-  // normal: depois que a migration 20260829160000 for aplicada, o backfill
-  // garante que todo Produto com composição/peso/tempo legados já nasce
-  // com Plate 1 preenchido — editPlates.plates.length === 0 deixa de
-  // acontecer para qualquer Produto que já tinha alguma produção
-  // cadastrada, e este ramo (editUsingLegacyFallback) só continua
-  // relevante para um Produto genuinamente novo, sem nenhuma composição
-  // ainda. Não reintroduza nenhum diálogo/formulário que escreva em
-  // product_filaments — a RPC set_product_filaments também perde o
-  // EXECUTE de service_role nessa mesma migration (ver
-  // supabase/functions/products/handler.ts).
+  // Fonte autoritativa da composição de produção: product_plates
+  // (weight_grams direto — migration 20260829180000, ainda não aplicada,
+  // retirou toda composição de filamento do plate do Produto). Fallback
+  // (plateRowsFromLegacyWeight) só cobre o caso de borda de um Produto sem
+  // NENHUMA linha em product_plates ao carregar a edição — não deveria
+  // acontecer após o backfill dessa migration (que cobre todo Produto
+  // existente), mas evita abrir a edição com uma composição vazia e apagar
+  // silenciosamente peso/tempo que só estavam em default_weight_grams/
+  // default_print_time_seconds.
   const [editDialogProduct, setEditDialogProduct] = useState<Product | null>(null)
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
   const editPlates = useProductPlates(editDialogProduct?.id ?? null)
-  const editLegacyFilaments = useProductFilaments(editDialogProduct?.id ?? null)
+  const editCategories = useProductCategories(editDialogProduct?.id ?? null)
   const editComposition = useProductComposition(editDialogProduct?.id ?? null)
   const [isSubmittingPrice, setIsSubmittingPrice] = useState(false)
   const [priceError, setPriceError] = useState<string | null>(null)
   const priceHistory = useProductPriceHistory(editDialogProduct?.id ?? null)
 
-  const editUsingLegacyFallback = editPlates.status === 'success' && editPlates.plates.length === 0
-  const editDataLoading =
-    editPlates.isLoading ||
-    editComposition.isLoading ||
-    filamentTypesHook.isLoading ||
-    (editUsingLegacyFallback && editLegacyFilaments.isLoading)
+  const editDataLoading = editPlates.isLoading || editCategories.isLoading || editComposition.isLoading
   const editDataError =
     editPlates.status === 'error'
       ? editPlates.error
-      : editComposition.status === 'error'
-        ? editComposition.error
-        : filamentTypesHook.error
-          ? filamentTypesHook.error
-          : editUsingLegacyFallback && editLegacyFilaments.status === 'error'
-            ? editLegacyFilaments.error
-            : null
+      : editCategories.status === 'error'
+        ? editCategories.error
+        : editComposition.status === 'error'
+          ? editComposition.error
+          : null
 
   function retryEditData() {
     editPlates.retry()
+    editCategories.retry()
     editComposition.retry()
-    editLegacyFilaments.retry()
-    filamentTypesHook.refetch()
   }
 
   const editInitialValues: ProductFormInitialValues | null =
-    editDialogProduct && !editDataLoading && !editDataError && editPlates.status === 'success' && editComposition.status === 'success'
+    editDialogProduct &&
+    !editDataLoading &&
+    !editDataError &&
+    editPlates.status === 'success' &&
+    editCategories.status === 'success' &&
+    editComposition.status === 'success'
       ? {
           name: editDialogProduct.name,
-          category: editDialogProduct.category,
+          categories: editCategories.categories.map((item) => item.category),
           description: editDialogProduct.description,
           defaultPrice: editDialogProduct.default_price,
           allowsPersonalization: editDialogProduct.allows_personalization,
           productType: editDialogProduct.product_type,
           plates:
             editPlates.plates.length > 0
-              ? plateRowsFrom(editPlates.plates, editPlates.filamentsByPlateId)
-              : plateRowsFromLegacyFilaments(editLegacyFilaments.filaments, editDialogProduct.default_print_time_seconds),
+              ? plateRowsFrom(editPlates.plates)
+              : plateRowsFromLegacyWeight(editDialogProduct.default_weight_grams, editDialogProduct.default_print_time_seconds),
           manualWeightOverrideGrams: editDialogProduct.production_weight_manual_override_grams,
           manualTimeOverrideSeconds: editDialogProduct.production_time_manual_override_seconds,
           accessories: editComposition.accessories.map((item) => ({ id: item.accessory_id, quantity: item.quantity })),
@@ -195,21 +189,30 @@ export function ProductsPage() {
   const [compositionError, setCompositionError] = useState<string | null>(null)
   const composition = useProductComposition(compositionDialogProduct?.id ?? null)
 
-  // Busca: só pelo nome (product.name), local sobre `products` já
-  // carregados — nenhuma nova chamada a useProducts/API a cada tecla
+  // Busca: pelo nome (product.name) OU por QUALQUER categoria vinculada
+  // (múltiplas por Produto, migration 20260829180000, ainda não aplicada) —
+  // nunca só a categoria espelhada (position=1). Local sobre `products`/
+  // `allCategories` já carregados — nenhuma nova chamada a API a cada tecla
   // digitada.
   const filteredProducts = useMemo(() => {
     const term = normalizeForSearch(searchTerm)
     if (!term) return products
-    return products.filter((product) => normalizeForSearch(product.name).includes(term))
-  }, [products, searchTerm])
+    return products.filter((product) => {
+      if (normalizeForSearch(product.name).includes(term)) return true
+      const categories = allCategories.categoriesByProductId.get(product.id) ?? []
+      return categories.some((category) => normalizeForSearch(category).includes(term))
+    })
+  }, [products, searchTerm, allCategories.categoriesByProductId])
 
   // Ordenação aplicada DEPOIS do filtro de busca (filtra primeiro, ordena o
   // resultado filtrado em seguida). Nunca muta `products` (o array vindo
   // do hook) — sortByColumn sempre retorna uma cópia nova.
   const sortedProducts = useMemo(
-    () => sortByColumn(filteredProducts, sort, getProductSortValue),
-    [filteredProducts, sort],
+    () =>
+      sortByColumn(filteredProducts, sort, (product, column) =>
+        getProductSortValue(product, column, allCategories.categoriesByProductId),
+      ),
+    [filteredProducts, sort, allCategories.categoriesByProductId],
   )
 
   // Sugestões do autocomplete: mesma lista já filtrada+ordenada que a
@@ -266,7 +269,7 @@ export function ProductsPage() {
         name: values.name,
         product_type: values.product_type,
         default_price: values.default_price,
-        category: values.category,
+        categories: values.categories,
         description: values.description,
         allows_personalization: values.allows_personalization,
         plates: values.plates,
@@ -324,7 +327,7 @@ export function ProductsPage() {
     try {
       await updateFull(editDialogProduct.id, {
         name: values.name,
-        category: values.category,
+        categories: values.categories,
         description: values.description,
         allows_personalization: values.allows_personalization,
         plates: values.plates,
@@ -489,6 +492,7 @@ export function ProductsPage() {
                 {sortedProducts.map((product) => {
                   const printTimeText = formatPrintTime(product.default_print_time_seconds)
                   const weightText = formatWeight(product.default_weight_grams)
+                  const categoriesText = joinedCategoriesText(allCategories.categoriesByProductId.get(product.id) ?? [])
                   return (
                     <TableRow
                       key={product.id}
@@ -505,8 +509,8 @@ export function ProductsPage() {
                         </Link>
                       </TableCell>
                       <TableCell className="truncate">{PRODUCT_TYPE_LABELS[product.product_type]}</TableCell>
-                      <TableCell className="truncate" title={product.category ?? undefined}>
-                        {product.category ?? '—'}
+                      <TableCell className="truncate" title={categoriesText || undefined}>
+                        {categoriesText || '—'}
                       </TableCell>
                       <TableCell className="truncate" title={printTimeText}>
                         {printTimeText}
@@ -553,14 +557,17 @@ export function ProductsPage() {
         )}
       </div>
 
+      {/* Largura próxima de 95vw (decisão aprovada 2026-08-29, layout de
+          Novo/Editar Produto) — o grid de 2 colunas dos plates (ProductForm)
+          só ganha espaço real de sobra num diálogo largo; max-w-[1400px]
+          evita um formulário absurdamente esticado em monitores ultra-wide. */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[95vw] max-w-[1400px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Novo produto</DialogTitle>
             <DialogDescription>Preencha os dados para cadastrar um produto de Catálogo.</DialogDescription>
           </DialogHeader>
           <ProductForm
-            filamentTypes={filamentTypesHook.types}
             accessoriesList={accessories}
             packagingList={packaging}
             isSubmitting={isSubmittingCreate}
@@ -577,7 +584,7 @@ export function ProductsPage() {
           if (!open) setEditDialogProduct(null)
         }}
       >
-        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[95vw] max-w-[1400px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Editar produto</DialogTitle>
             <DialogDescription>
@@ -592,12 +599,12 @@ export function ProductsPage() {
             </DialogDescription>
           </DialogHeader>
 
-          {/* Formulário completo (Dados Gerais + Composição por plates +
-              Acessórios/Embalagens) — carrega plates/filamentos/composição/
-              tipos de filamento antes de montar o formulário: nunca abre
-              vazio durante o carregamento (skeleton abaixo), nunca perde
-              dado real de um Produto legado sem plates (fallback para
-              product_filaments, plateRowsFromLegacyFilaments). */}
+          {/* Formulário completo (Dados Gerais + Categorias + Composição por
+              plates + Acessórios/Embalagens) — carrega plates/categorias/
+              composição antes de montar o formulário: nunca abre vazio
+              durante o carregamento (skeleton abaixo), nunca perde dado real
+              de um Produto sem nenhum plate (fallback para
+              plateRowsFromLegacyWeight). */}
           {editDialogProduct && editDataError && (
             <div className="border-destructive/50 bg-destructive/10 flex items-center justify-between rounded-lg border p-3 text-sm">
               <span>{toErrorMessage(editDataError)}</span>
@@ -618,7 +625,6 @@ export function ProductsPage() {
               key={editDialogProduct.id}
               mode="edit"
               initialValues={editInitialValues}
-              filamentTypes={filamentTypesHook.types}
               accessoriesList={accessories}
               packagingList={packaging}
               isSubmitting={isSubmittingEdit}

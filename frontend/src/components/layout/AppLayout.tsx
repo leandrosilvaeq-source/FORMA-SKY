@@ -4,10 +4,14 @@ import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
+// Ordem oficial dos módulos (decisão aprovada 2026-08-29, reorganização de
+// navegação): Clientes, Empresas, Produtos, Pedidos, Estoque — nunca
+// alterar sem decisão explícita nova. Rotas/permissões inalteradas, só a
+// ordem de exibição nesta lista.
 const NAV_ITEMS = [
   { to: '/clientes', label: 'Clientes' },
-  { to: '/produtos', label: 'Produtos' },
   { to: '/empresas', label: 'Empresas' },
+  { to: '/produtos', label: 'Produtos' },
   { to: '/pedidos', label: 'Pedidos' },
   { to: '/estoque', label: 'Estoque' },
 ]

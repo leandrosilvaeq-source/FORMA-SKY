@@ -85,6 +85,20 @@ export interface ModelSource {
   is_active: boolean
 }
 
+// supabase/migrations/20260829180000_add_categories_plate_weight_and_order_colors.sql
+// (ainda não aplicada) — product_categories é a fonte AUTORITATIVA de
+// categorias (múltiplas por produto, posição 1..N define ordem de exibição);
+// products.category (abaixo) é só um espelho derivado, sempre escrito por
+// set_product_categories() como categories[0] — nunca uma segunda fonte
+// independente.
+export interface ProductCategory {
+  id: string
+  product_id: string
+  category: string
+  position: number
+  created_at: string
+}
+
 // supabase/migrations/20260813205942_create_products_table.sql
 export interface Product {
   id: string
@@ -93,6 +107,10 @@ export interface Product {
   // (ainda não aplicada), NOT NULL DEFAULT 'CATALOG'. Só CATALOG está
   // habilitado nos fluxos de Pedidos por enquanto.
   product_type: ProductType
+  // Espelho derivado de product_categories (posição 1) — migration
+  // 20260829180000 (ainda não aplicada). NUNCA editável diretamente: sempre
+  // escrito por set_product_categories(). Ver ProductCategory acima para a
+  // lista completa (múltiplas categorias).
   category: string | null
   description: string | null
   default_price: number
@@ -227,6 +245,35 @@ export interface OrderItem {
   notes: string | null
   created_at: string
   updated_at: string
+}
+
+// supabase/migrations/20260829180000_add_categories_plate_weight_and_order_colors.sql
+// (ainda não aplicada) — snapshot IMUTÁVEL da estrutura de plates do
+// Produto (product_plates.plate_number/weight_grams/production_time_seconds)
+// no exato momento em que o order_item CATALOG foi criado. Editar o Produto
+// depois nunca altera pedidos já existentes — só um novo item criado a
+// partir dele (ou um replace completo via update_quote_order) gera um novo
+// snapshot.
+export interface OrderItemPlate {
+  id: string
+  order_item_id: string
+  plate_number: number
+  weight_grams: number
+  production_time_seconds: number
+  created_at: string
+}
+
+// Seleção de cor por UNIDADE e por PLATE — permite múltiplas cores no mesmo
+// plate (várias linhas com o mesmo order_item_plate_id/unit_number,
+// filament_type_id diferente), a mesma cor em unidades diferentes, e cores
+// diferentes por unidade. unit_number é 1..quantity do order_item (validado
+// na RPC, nunca uma FK — não há coluna para isso em nenhuma tabela).
+export interface OrderItemUnitPlateFilament {
+  id: string
+  order_item_plate_id: string
+  unit_number: number
+  filament_type_id: string
+  created_at: string
 }
 
 // supabase/migrations/20260814040037_create_order_summary_views.sql (vw_order_item_approval_status)
@@ -495,19 +542,31 @@ export interface ProductFilament {
   created_at: string
 }
 
-// supabase/migrations/20260829160000_add_product_plates_structure.sql
-// (ainda não aplicada) — estrutura produtiva por plates. Peso do plate NÃO
-// é uma coluna própria — é sempre a soma de ProductPlateFilament[] daquele
-// plate_id, recalculada pelo frontend quando precisa exibi-la.
+// supabase/migrations/20260829160000_add_product_plates_structure.sql,
+// coluna weight_grams adicionada por
+// supabase/migrations/20260829180000_add_categories_plate_weight_and_order_colors.sql
+// (ainda não aplicada) — estrutura produtiva por plates. weight_grams agora
+// é uma coluna DIRETA (peso informado explicitamente no cadastro do
+// Produto), não mais derivada de ProductPlateFilament[]. O Produto NÃO tem
+// mais composição de filamento própria — a escolha de filamento/cor
+// aconteceu, a partir desta migration, no Pedido (ver OrderItemPlate/
+// OrderItemUnitPlateFilament abaixo), nunca no cadastro do Produto.
 export interface ProductPlate {
   id: string
   product_id: string
   plate_number: number
   production_time_seconds: number
+  weight_grams: number
   created_at: string
   updated_at: string
 }
 
+// Legado: tabela preservada no banco (product_plate_filaments), mas sem
+// nenhum consumidor de escrita a partir de products.category ser um
+// espelho derivado — set_product_production() (migration 20260829180000)
+// não grava mais nesta tabela. Mantida aqui só porque a tabela e seus dados
+// legados continuam existindo (nunca apagados em massa); não é mais
+// referenciada por ProductForm.tsx.
 export interface ProductPlateFilament {
   id: string
   plate_id: string

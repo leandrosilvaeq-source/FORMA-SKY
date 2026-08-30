@@ -1,35 +1,34 @@
 // Funções puras usadas por ProductForm.tsx (seção "Composição" — estrutura
-// produtiva por plates, 2026-08-29) — extraídas para cá para eliminar o
-// warning react-refresh/only-export-components.
+// produtiva por plates) e por OrderForm.tsx (seção "Cores e filamentos" —
+// seleção de filamento por unidade+plate de um item CATALOG).
 //
-// Os 4 seletores de tipo de filamento abaixo (filterSelectableFilamentTypes/
-// filamentTypeLabel/findFilamentTypeById/isFilamentTypeRowInactive) viviam
-// em lib/forms/productFilamentComposition.ts, companheiro de
-// FilamentCompositionForm.tsx (diálogo antigo de composição "flat",
-// escrita direta em product_filaments). Esses dois arquivos foram removidos
-// na rodada de limpeza de código órfão de 2026-08-29 (RPC set_product_filaments
-// já sem nenhum consumidor de escrita desde a rodada anterior) — os 4
-// seletores, que este arquivo (o único consumidor restante) já reaproveitava,
-// foram trazidos para cá em vez de deixados num arquivo companheiro morto.
-// Testes correspondentes movidos para productPlates.test.ts (novo).
+// Migration 20260829180000_add_categories_plate_weight_and_order_colors.sql
+// (ainda não aplicada) retirou TODA composição de filamento do cadastro do
+// Produto: product_plates.weight_grams passa a ser uma coluna DIRETA
+// (informada no formulário, nunca mais somada de linhas de filamento por
+// plate) e a escolha de filamento/cor migrou inteiramente para o Pedido
+// (order_item_unit_plate_filaments). Por isso PlateRow abaixo perdeu o
+// campo `filaments` que tinha antes desta migration — ProductForm.tsx não
+// seleciona mais nenhum filamento.
 //
-// Mesma regra de sempre: "só tipos ativos, tipo já vinculado nunca some
-// sozinho". Duplicidade de filamento é impedida DENTRO do mesmo plate
-// apenas — o mesmo filamento em plates DIFERENTES é permitido (cada plate
-// tem sua própria composição independente).
+// Os 3 seletores de tipo de filamento abaixo (filterSelectableFilamentTypes/
+// filamentTypeLabel/findFilamentTypeById) continuam existindo porque
+// OrderForm.tsx passa a ser o único consumidor a partir desta migration —
+// mesma regra de sempre: "só tipos ativos para uma seleção NOVA, tipo já
+// vinculado nunca some sozinho por ter ficado inativo depois".
 
 import { parseDurationToSeconds, formatSecondsToHHMM } from '@/lib/forms/durationField'
 import { parseNumberField } from '@/lib/forms/numberField'
-import type { FilamentTypeSummary, ProductFilament, ProductPlate, ProductPlateFilament } from '@/types/domain'
+import type { FilamentTypeSummary, ProductPlate } from '@/types/domain'
 
 // Mesma lógica de filterSelectableItems (productComposition.ts, Acessórios/
 // Embalagens), adaptada ao formato de FilamentTypeSummary (chave primária é
-// filament_type_id, não id) — o tipo já selecionado NAQUELA linha é sempre
+// filament_type_id, não id) — o tipo já selecionado NAQUELA seleção é sempre
 // mantido mesmo inativo (nunca some da tela por desativação posterior);
-// tipos já escolhidos em OUTRAS linhas do MESMO plate são excluídos
-// (impede duplicidade); qualquer outro tipo inativo é excluído das opções
-// para uma seleção NOVA, já que set_product_production sempre rejeita
-// filament_type_id inativo.
+// tipos já escolhidos em OUTRAS seleções do MESMO escopo (ex.: mesma unidade
+// e plate, em OrderForm.tsx) podem ser excluídos pelo chamador via
+// `chosenElsewhere`; qualquer outro tipo inativo é excluído das opções para
+// uma seleção NOVA.
 export function filterSelectableFilamentTypes(
   types: FilamentTypeSummary[],
   chosenElsewhere: Set<string>,
@@ -58,17 +57,6 @@ export function findFilamentTypeById(
   return types.find((type) => type.filament_type_id === filamentTypeId)
 }
 
-function isFilamentTypeRowInactive(row: PlateFilamentRow, types: FilamentTypeSummary[]): boolean {
-  const type = findFilamentTypeById(types, row.filamentTypeId)
-  return type ? !type.is_active : false
-}
-
-export interface PlateFilamentRow {
-  key: string
-  filamentTypeId: string | null
-  weight: string
-}
-
 export interface PlateRow {
   key: string
   // hh:mm (ProductForm exibe/edita só horas:minutos para o tempo de cada
@@ -77,7 +65,9 @@ export interface PlateRow {
   // foco, mesmo padrão de handleDurationBlur já usado no campo de preço/
   // tempo antigo).
   timeInput: string
-  filaments: PlateFilamentRow[]
+  // Peso direto do plate (g) — texto livre, validado no submit. Substitui a
+  // soma de linhas de filamento que existia antes desta migration.
+  weightInput: string
 }
 
 let plateKeySeq = 0
@@ -86,106 +76,51 @@ export function nextPlateRowKey(): string {
   return `plate-row-${plateKeySeq}`
 }
 
-let plateFilamentKeySeq = 0
-export function nextPlateFilamentRowKey(): string {
-  plateFilamentKeySeq += 1
-  return `plate-filament-row-${plateFilamentKeySeq}`
-}
-
-export function emptyPlateFilamentRow(): PlateFilamentRow {
-  return { key: nextPlateFilamentRowKey(), filamentTypeId: null, weight: '' }
-}
-
-// Todo plate novo já nasce com 1 linha de filamento sugerida (nunca
-// obrigatória no backend — set_product_production aceita 0 linhas — mas a
-// UI sempre sugere ao menos uma, para não abrir um plate visualmente vazio
-// por padrão).
 export function emptyPlateRow(): PlateRow {
-  return { key: nextPlateRowKey(), timeInput: '', filaments: [emptyPlateFilamentRow()] }
+  return { key: nextPlateRowKey(), timeInput: '', weightInput: '' }
 }
 
-export function plateRowsFrom(
-  plates: ProductPlate[],
-  filamentsByPlateId: Map<string, ProductPlateFilament[]>,
-): PlateRow[] {
-  return plates.map((plate) => ({
-    key: nextPlateRowKey(),
-    timeInput: formatSecondsToHHMM(plate.production_time_seconds),
-    filaments: (filamentsByPlateId.get(plate.id) ?? []).map((filament) => ({
-      key: nextPlateFilamentRowKey(),
-      filamentTypeId: filament.filament_type_id,
-      weight: String(filament.weight_grams),
-    })),
-  }))
+export function plateRowsFrom(plates: ProductPlate[]): PlateRow[] {
+  return plates
+    .slice()
+    .sort((a, b) => a.plate_number - b.plate_number)
+    .map((plate) => ({
+      key: nextPlateRowKey(),
+      timeInput: formatSecondsToHHMM(plate.production_time_seconds),
+      weightInput: String(plate.weight_grams),
+    }))
 }
 
-// Compatibilidade com Produtos legados (2026-08-29, ampliado na rodada
-// corretiva do mesmo dia): product_plates é a ÚNICA estrutura AUTORITATIVA
-// de produção a partir desta migration — em escrita (set_product_production)
-// E, a partir desta rodada corretiva, também na validação de composição de
-// Pedidos. product_filaments (tabela antiga) continua existindo só como
-// PROJEÇÃO DE LEITURA de compatibilidade — a RPC set_product_filaments foi
-// descontinuada para escrita operacional (perde o EXECUTE de service_role
-// na mesma migration) — mantida por compatibilidade até que o backfill da
-// migration rode no remoto. Enquanto isso não acontece, um Produto existente ainda não tem
-// nenhuma linha em product_plates — se ProductForm abrisse a edição desse
-// Produto com `plates: []`, o usuário veria uma composição vazia e, ao
-// salvar, apagaria silenciosamente o peso/tempo/filamentos que na verdade
-// só estavam guardados em product_filaments/default_weight_grams/
-// default_print_time_seconds. Esta função replica no cliente exatamente a
-// mesma regra do backfill da migration (`20260829160000...`, bloco "Plate
-// 1"): se não há nenhuma linha em product_plates mas o Produto tem peso,
-// tempo ou ao menos uma linha em product_filaments, sintetiza um único
-// PlateRow ("Plate 1") a partir desses dados legados — nunca perde
-// composição existente, nunca inventa um plate vazio quando havia dado
-// real. Só chamada pelo carregamento da edição (ProductsPage.tsx) quando
+// Compatibilidade com Produtos legados que, por algum motivo, ainda não têm
+// nenhuma linha em product_plates ao carregar a edição (não deveria
+// acontecer após o backfill da migration 20260829180000, que cobre todo
+// Produto existente — ver Seção 16 dessa migration — mas esta função evita
+// que ProductForm abra a edição com uma composição vazia e apague
+// silenciosamente peso/tempo que só estavam em default_weight_grams/
+// default_print_time_seconds, caso algum caso de borda escape do backfill).
+// Só chamada pelo carregamento da edição (ProductsPage.tsx) quando
 // plates.length === 0; nunca durante a criação (initialValues não existe).
-export function plateRowsFromLegacyFilaments(
-  filaments: ProductFilament[],
+export function plateRowsFromLegacyWeight(
+  defaultWeightGrams: number | null,
   defaultTimeSeconds: number | null,
 ): PlateRow[] {
-  if (filaments.length === 0 && defaultTimeSeconds === null) return []
+  if (defaultWeightGrams === null && defaultTimeSeconds === null) return []
 
   return [
     {
       key: nextPlateRowKey(),
       timeInput: defaultTimeSeconds !== null ? formatSecondsToHHMM(defaultTimeSeconds) : '',
-      filaments:
-        filaments.length > 0
-          ? filaments.map((filament) => ({
-              key: nextPlateFilamentRowKey(),
-              filamentTypeId: filament.filament_type_id,
-              weight: String(filament.theoretical_weight_grams),
-            }))
-          : [emptyPlateFilamentRow()],
+      weightInput: defaultWeightGrams !== null ? String(defaultWeightGrams) : '',
     },
   ]
 }
 
-// Filamentos já escolhidos NESTE MESMO plate (exclui a própria linha
-// atual) — escopo de duplicidade é só dentro do plate, nunca entre plates.
-export function chosenFilamentTypeIdsInPlate(plate: PlateRow, excludingRowKey: string): Set<string> {
-  return new Set(
-    plate.filaments
-      .filter((row) => row.key !== excludingRowKey)
-      .map((row) => row.filamentTypeId)
-      .filter((id): id is string => id !== null),
-  )
-}
-
-export function hasInactiveFilamentSelectionInPlates(plates: PlateRow[], types: FilamentTypeSummary[]): boolean {
-  return plates.some((plate) => plate.filaments.some((row) => isFilamentTypeRowInactive(row, types)))
-}
-
-// Peso automático de UM plate — soma best-effort dos pesos já válidos das
-// linhas (linhas vazias/inválidas contam como 0 nesta soma "ao vivo" de
-// pré-visualização — a validação real e estrita só acontece no submit,
-// ver validatePlateRows abaixo).
+// Peso (g) de UM plate — best-effort, linha inválida/vazia conta como 0
+// nesta soma "ao vivo" de pré-visualização (a validação real e estrita só
+// acontece no submit, ver validatePlateRows abaixo).
 export function autoPlateWeightGrams(plate: PlateRow): number {
-  return plate.filaments.reduce((total, row) => {
-    const parsed = parseNumberField(row.weight, 'peso', { min: 0 })
-    return total + (parsed.value ?? 0)
-  }, 0)
+  const parsed = parseNumberField(plate.weightInput, 'peso', { min: 0 })
+  return parsed.value ?? 0
 }
 
 // Tempo (segundos) de UM plate — best-effort, mesmo critério do peso.
@@ -202,41 +137,31 @@ export function autoTotalTimeSeconds(plates: PlateRow[]): number {
   return plates.reduce((total, plate) => total + autoPlateTimeSeconds(plate), 0)
 }
 
-export interface ValidatedPlateFilament {
-  filament_type_id: string
-  weight_grams: number
-}
-
 export interface ValidatedPlate {
   production_time_seconds: number
-  filaments: ValidatedPlateFilament[]
+  weight_grams: number
 }
 
 export interface ValidatedPlates {
   items: ValidatedPlate[]
   // Erro de tempo do plate, indexado por plate.key.
   timeErrors: Record<string, string>
-  // Erro de uma linha de filamento, indexado por
-  // `${plate.key}:${filament.key}`.
-  filamentErrors: Record<string, string>
+  // Erro de peso do plate, indexado por plate.key.
+  weightErrors: Record<string, string>
 }
 
-// Valida TODOS os plates/filamentos antes de qualquer submit — nenhum
-// plate exige ao menos 1 linha de filamento (0 é aceito, mesma decisão do
-// backend), mas toda linha PRESENTE precisa ter tipo selecionado e peso >
-// 0; tempo de cada plate é obrigatório (>= 0, nunca vazio — um plate sem
-// tempo informado ainda não está pronto para ser salvo).
+// Valida TODOS os plates antes de qualquer submit — tempo é opcional (em
+// branco = 0, mesmo comportamento que "Tempo de Produção" já tinha no
+// formulário antigo, já que products.default_print_time_seconds é
+// nullable), mas peso é OBRIGATÓRIO e deve ser > 0 (um plate sem peso
+// informado nunca é um plate válido — diferente do tempo, que pode ser
+// preenchido depois).
 export function validatePlateRows(plates: PlateRow[]): ValidatedPlates {
   const timeErrors: Record<string, string> = {}
-  const filamentErrors: Record<string, string> = {}
+  const weightErrors: Record<string, string> = {}
   const items: ValidatedPlate[] = []
 
   for (const plate of plates) {
-    // Tempo em branco = 0 (plate ainda sem tempo definido) — nunca
-    // obrigatório, mesmo comportamento opcional que "Tempo de Produção" já
-    // tinha no formulário antigo (products.default_print_time_seconds é
-    // nullable). Só um texto realmente inválido (não reconhecido por
-    // parseDurationToSeconds) bloqueia o salvamento.
     const durationResult = parseDurationToSeconds(plate.timeInput)
     let productionTimeSeconds = 0
     if (!durationResult.ok) {
@@ -245,39 +170,16 @@ export function validatePlateRows(plates: PlateRow[]): ValidatedPlates {
       productionTimeSeconds = durationResult.seconds ?? 0
     }
 
-    const seen = new Set<string>()
-    const filaments: ValidatedPlateFilament[] = []
-    for (const row of plate.filaments) {
-      // Linha totalmente vazia (nunca tocada) é ignorada silenciosamente
-      // só quando é a ÚNICA linha do plate — permite um plate "só com
-      // tempo, sem composição ainda" sem forçar o usuário a remover a
-      // linha sugerida por padrão manualmente.
-      if (!row.filamentTypeId && !row.weight.trim() && plate.filaments.length === 1) {
-        continue
-      }
-
-      if (!row.filamentTypeId) {
-        filamentErrors[`${plate.key}:${row.key}`] = 'Selecione um tipo de filamento.'
-        continue
-      }
-      if (seen.has(row.filamentTypeId)) {
-        filamentErrors[`${plate.key}:${row.key}`] =
-          'Este tipo de filamento já está neste plate — remova a linha duplicada.'
-        continue
-      }
-
-      const weight = parseNumberField(row.weight, 'o peso', { required: true, min: 0.01 })
-      if (weight.error) {
-        filamentErrors[`${plate.key}:${row.key}`] = weight.error
-        continue
-      }
-
-      seen.add(row.filamentTypeId)
-      filaments.push({ filament_type_id: row.filamentTypeId, weight_grams: weight.value as number })
+    const weightResult = parseNumberField(plate.weightInput, 'o peso do plate', { required: true, min: 0.01 })
+    let weightGrams = 0
+    if (weightResult.error) {
+      weightErrors[plate.key] = weightResult.error
+    } else {
+      weightGrams = weightResult.value as number
     }
 
-    items.push({ production_time_seconds: productionTimeSeconds, filaments })
+    items.push({ production_time_seconds: productionTimeSeconds, weight_grams: weightGrams })
   }
 
-  return { items, timeErrors, filamentErrors }
+  return { items, timeErrors, weightErrors }
 }

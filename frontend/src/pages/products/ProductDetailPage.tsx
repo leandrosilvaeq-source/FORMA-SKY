@@ -5,11 +5,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useAccessories } from '@/hooks/useAccessories'
-import { useFilamentTypes } from '@/hooks/useFilamentTypes'
 import { usePackaging } from '@/hooks/usePackaging'
 import { useProduct } from '@/hooks/useProduct'
+import { useProductCategories } from '@/hooks/useProductCategories'
 import { useProductComposition } from '@/hooks/useProductComposition'
-import { useProductFilaments } from '@/hooks/useProductFilaments'
 import { useProductPlates } from '@/hooks/useProductPlates'
 import { ApiError } from '@/lib/api/errors'
 import { formatSecondsToHHMMSS } from '@/lib/forms/durationField'
@@ -21,7 +20,6 @@ import {
   type ComponentsSubtotal,
   type ResolvedCompositionLine,
 } from '@/lib/products/productCosts'
-import { resolveFilamentLines, type ResolvedFilamentLine } from '@/lib/products/productFilamentLines'
 import type { Product } from '@/types/domain'
 
 const BACK_LINK_CLASSNAME =
@@ -141,39 +139,35 @@ function ComponentsTable({
   )
 }
 
-// Filamentos (Módulo 3, Incremento 6A) — somente leitura, mesmo padrão
-// visual de ComponentsTable acima, mas sem colunas de custo (filament_types
-// não tem unit_cost cadastrado — fora do "Subtotal de componentes"
-// existente, que continua considerando só Acessórios/Embalagens; nenhuma
-// alteração nele por esta seção).
-function FilamentComponentsTable({ title, lines }: { title: string; lines: ResolvedFilamentLine[] }) {
+// Plates (migration 20260829180000_add_categories_plate_weight_and_order_colors.sql,
+// ainda não aplicada) — substitui a antiga tabela de Filamentos por plate:
+// o Produto não tem mais composição de filamento própria (retirada do
+// cadastro, ver docs/05_ROADMAP_MODULOS.md); cada plate mostra só seu peso
+// e tempo de produção, informados diretamente no formulário.
+function PlatesTable({ plates }: { plates: Array<{ key: string; plateNumber: number; weightGrams: number; productionTimeSeconds: number }> }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
+        <CardTitle>Plates</CardTitle>
       </CardHeader>
       <CardContent>
-        {lines.length === 0 ? (
-          <p className="text-muted-foreground text-sm">Nenhum filamento vinculado.</p>
+        {plates.length === 0 ? (
+          <p className="text-muted-foreground text-sm">Nenhum plate cadastrado.</p>
         ) : (
           <Table className="table-fixed text-sm">
             <TableHeader>
               <TableRow>
-                <TableHead className="h-auto w-[60%] py-2 whitespace-normal">Tipo de filamento</TableHead>
-                <TableHead className="h-auto w-[20%] py-2 whitespace-normal">Situação</TableHead>
-                <TableHead className="h-auto w-[20%] py-2 text-right whitespace-normal">Peso teórico</TableHead>
+                <TableHead className="h-auto w-[40%] py-2 whitespace-normal">Plate</TableHead>
+                <TableHead className="h-auto w-[30%] py-2 text-right whitespace-normal">Peso (g)</TableHead>
+                <TableHead className="h-auto w-[30%] py-2 text-right whitespace-normal">Tempo de produção</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {lines.map((line) => (
-                <TableRow key={line.key}>
-                  <TableCell className="truncate" title={line.name}>
-                    {line.name}
-                  </TableCell>
-                  <TableCell>
-                    <LineStatusBadge status={line.status} />
-                  </TableCell>
-                  <TableCell className="text-right">{formatGrams(line.weightGrams, 2)}</TableCell>
+              {plates.map((plate) => (
+                <TableRow key={plate.key}>
+                  <TableCell>Plate {plate.plateNumber}</TableCell>
+                  <TableCell className="text-right">{formatGrams(plate.weightGrams, 2)}</TableCell>
+                  <TableCell className="text-right">{formatSecondsToHHMMSS(plate.productionTimeSeconds)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -249,80 +243,24 @@ function ProductDetailContent({ product }: { product: Product }) {
     : []
   const subtotal = calculateComponentsSubtotal(accessoryLines, packagingLines)
 
-  // Filamentos (Módulo 3, Incremento 6A; estrutura por plates, 2026-08-29)
-  // — bloco de leitura totalmente independente do de Acessórios/Embalagens
-  // acima (própria fonte, carregamento, erro e retry) — nenhuma variável de
-  // componentsLoading/componentsErrorInfo/componentsReady é reaproveitada
-  // ou alterada.
-  //
-  // Fonte autoritativa: product_plates/product_plate_filaments — a MESMA
-  // que ProductForm.tsx usa para editar. Mostrar esta Ficha com uma fonte
-  // diferente da usada na edição já causou o achado de auditoria desta
-  // rodada (composição divergente entre telas); useProductFilaments
-  // (legado) só é lido aqui como projeção de compatibilidade — exatamente
-  // igual a plateRowsFromLegacyFilaments em ProductForm.tsx — quando o
-  // Produto ainda não tem nenhum plate (backfill não rodou no remoto
-  // ainda). Nunca escrito por esta página (somente leitura).
-  //
-  // IMPORTANTE — este fallback é uma proteção TRANSITÓRIA, não o fluxo
-  // normal: depois que a migration 20260829160000 for aplicada, o backfill
-  // garante Plate 1 para todo Produto com composição/peso/tempo legados —
-  // usingLegacyFilamentsFallback deixa de ser alcançado para qualquer
-  // Produto que já tinha produção cadastrada. product_filaments
-  // (tabela) e set_product_filaments (RPC) continuam existindo só como
-  // dado histórico/leitura de compatibilidade — a RPC perde o EXECUTE de
-  // service_role na mesma migration (supabase/functions/products/handler.ts).
+  // Categorias (múltiplas por Produto — migration 20260829180000, ainda não
+  // aplicada) — bloco de leitura independente, própria fonte/carregamento/
+  // erro/retry.
+  const categoriesHook = useProductCategories(product.id)
+
+  // Plates — a mesma migration retirou toda composição de filamento do
+  // plate do Produto: weight_grams passa a ser uma coluna direta, sem
+  // nenhuma leitura de product_plate_filaments/filament_types aqui.
   const productPlates = useProductPlates(product.id)
-  const legacyFilaments = useProductFilaments(product.id)
-  const filamentTypesHook = useFilamentTypes()
-
-  const platesResolved = productPlates.status === 'success'
-  const usingLegacyFilamentsFallback = platesResolved && productPlates.plates.length === 0
-
-  const filamentsLoading =
-    productPlates.isLoading ||
-    filamentTypesHook.isLoading ||
-    (usingLegacyFilamentsFallback && legacyFilaments.isLoading)
-  const filamentsErrorInfo =
-    productPlates.status === 'error'
-      ? { message: toErrorMessage(productPlates.error), retry: productPlates.retry }
-      : filamentTypesHook.error
-        ? { message: toErrorMessage(filamentTypesHook.error), retry: filamentTypesHook.refetch }
-        : usingLegacyFilamentsFallback && legacyFilaments.status === 'error'
-          ? { message: toErrorMessage(legacyFilaments.error), retry: legacyFilaments.retry }
-          : null
-  const filamentsReady = !filamentsLoading && !filamentsErrorInfo && platesResolved
-
-  // Um grupo por plate (nunca uma tabela única com todos os plates
-  // misturados — o mesmo tipo de filamento pode aparecer em mais de um
-  // plate, então uma key só por filament_type_id colidiria).
-  const plateFilamentGroups: Array<{ key: string; title: string; lines: ResolvedFilamentLine[] }> = !filamentsReady
-    ? []
-    : usingLegacyFilamentsFallback
-      ? [
-          {
-            key: 'legacy-plate-1',
-            title: 'Filamentos — Plate 1',
-            lines: resolveFilamentLines(
-              legacyFilaments.filaments.map((filament) => ({
-                filament_type_id: filament.filament_type_id,
-                theoretical_weight_grams: filament.theoretical_weight_grams,
-              })),
-              filamentTypesHook.types,
-            ),
-          },
-        ]
-      : productPlates.plates.map((plate) => ({
+  const plateRows =
+    productPlates.status === 'success'
+      ? productPlates.plates.map((plate) => ({
           key: plate.id,
-          title: `Filamentos — Plate ${plate.plate_number}`,
-          lines: resolveFilamentLines(
-            (productPlates.filamentsByPlateId.get(plate.id) ?? []).map((filament) => ({
-              filament_type_id: filament.filament_type_id,
-              theoretical_weight_grams: filament.weight_grams,
-            })),
-            filamentTypesHook.types,
-          ),
+          plateNumber: plate.plate_number,
+          weightGrams: plate.weight_grams,
+          productionTimeSeconds: plate.production_time_seconds,
         }))
+      : []
 
   return (
     <div className="mt-4 flex flex-col gap-4">
@@ -332,7 +270,18 @@ function ProductDetailContent({ product }: { product: Product }) {
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
           <Field label="Nome" value={product.name} />
-          <Field label="Categoria" value={product.category ?? 'Não informada'} />
+          <Field
+            label="Categorias"
+            value={
+              categoriesHook.status === 'loading'
+                ? 'Carregando...'
+                : categoriesHook.status === 'error'
+                  ? 'Não foi possível carregar'
+                  : categoriesHook.categories.length > 0
+                    ? categoriesHook.categories.map((item) => item.category).join(', ')
+                    : 'Não informada'
+            }
+          />
           <Field label="Descrição" value={product.description ?? 'Não informada'} />
           <Field label="Preço atual" value={formatBRL(product.default_price)} />
           <Field label="Permite personalização" value={product.allows_personalization ? 'Sim' : 'Não'} />
@@ -362,10 +311,10 @@ function ProductDetailContent({ product }: { product: Product }) {
         </CardContent>
       </Card>
 
-      {filamentsLoading && (
+      {productPlates.isLoading && (
         <Card>
           <CardHeader>
-            <CardTitle>Filamentos</CardTitle>
+            <CardTitle>Plates</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             <Skeleton className="h-8 w-full" />
@@ -374,23 +323,16 @@ function ProductDetailContent({ product }: { product: Product }) {
         </Card>
       )}
 
-      {!filamentsLoading && filamentsErrorInfo && (
+      {productPlates.status === 'error' && (
         <div className="border-destructive/50 bg-destructive/10 flex items-center justify-between rounded-lg border p-3 text-sm">
-          <span>{filamentsErrorInfo.message}</span>
-          <Button variant="outline" size="sm" onClick={filamentsErrorInfo.retry}>
+          <span>{toErrorMessage(productPlates.error)}</span>
+          <Button variant="outline" size="sm" onClick={productPlates.retry}>
             Tentar novamente
           </Button>
         </div>
       )}
 
-      {filamentsReady && plateFilamentGroups.length === 0 && (
-        <FilamentComponentsTable title="Filamentos" lines={[]} />
-      )}
-
-      {filamentsReady &&
-        plateFilamentGroups.map((group) => (
-          <FilamentComponentsTable key={group.key} title={group.title} lines={group.lines} />
-        ))}
+      {productPlates.status === 'success' && <PlatesTable plates={plateRows} />}
 
       {componentsLoading && (
         <Card>

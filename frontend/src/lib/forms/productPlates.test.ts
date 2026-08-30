@@ -1,18 +1,26 @@
 import { describe, expect, it } from 'vitest'
 import {
+  autoTotalTimeSeconds,
+  autoTotalWeightGrams,
+  emptyPlateRow,
   filamentTypeLabel,
   filterSelectableFilamentTypes,
   findFilamentTypeById,
-  hasInactiveFilamentSelectionInPlates,
+  plateRowsFromLegacyWeight,
+  validatePlateRows,
+  type PlateRow,
 } from './productPlates'
 import type { FilamentTypeSummary } from '@/types/domain'
 
 // Testes dos seletores de tipo de filamento trazidos de
 // productFilamentComposition.ts (removido na limpeza de código órfão de
 // 2026-08-29 — companheiro do diálogo antigo FilamentCompositionForm.tsx,
-// sem nenhum consumidor de escrita restante) para productPlates.ts, seu
-// único consumidor real hoje. Mesmos casos de teste, movidos junto com o
-// código — nenhum comportamento novo, nenhuma cobertura perdida.
+// sem nenhum consumidor de escrita restante) para productPlates.ts. A
+// partir da migration 20260829180000_add_categories_plate_weight_and_order_colors.sql
+// (ainda não aplicada) estes 3 seletores passam a ser consumidos por
+// OrderForm.tsx (seção "Cores e filamentos"), não mais por ProductForm.tsx
+// (que perdeu toda composição de filamento) — mesmos casos de teste,
+// comportamento inalterado.
 
 function typeFixture(overrides: Partial<FilamentTypeSummary> = {}): FilamentTypeSummary {
   return {
@@ -78,35 +86,68 @@ describe('findFilamentTypeById', () => {
   })
 })
 
-describe('hasInactiveFilamentSelectionInPlates (via isFilamentTypeRowInactive interno)', () => {
-  // isFilamentTypeRowInactive não é exportado (só usado internamente por
-  // hasInactiveFilamentSelectionInPlates) — testado indiretamente aqui,
-  // igual a como já era usado dentro de ProductForm.test.tsx antes desta
-  // limpeza; os casos abaixo isolam especificamente o comportamento por
-  // linha/tipo que antes tinha um teste próprio em
-  // productFilamentComposition.test.ts (removido).
-  const types = [typeFixture({ filament_type_id: 'ft1' }), typeFixture({ filament_type_id: 'ft2', is_active: false })]
+// Peso direto do plate (2026-08-29, migration 20260829180000) — substitui a
+// antiga composição por linhas de filamento. emptyPlateRow/validatePlateRows/
+// autoTotal* cobrem o novo formato {key, timeInput, weightInput}.
 
-  it('plate sem nenhuma linha com tipo selecionado não é considerado inativo', () => {
-    const plates = [{ key: 'p1', timeInput: '', filaments: [{ key: 'r1', filamentTypeId: null, weight: '' }] }]
-    expect(hasInactiveFilamentSelectionInPlates(plates, types)).toBe(false)
+describe('emptyPlateRow', () => {
+  it('nasce sem tempo nem peso preenchidos (nenhuma composição sugerida por padrão)', () => {
+    const row = emptyPlateRow()
+    expect(row.timeInput).toBe('')
+    expect(row.weightInput).toBe('')
   })
+})
 
-  it('plate com uma linha de tipo ativo não é considerado inativo', () => {
-    const plates = [{ key: 'p1', timeInput: '', filaments: [{ key: 'r1', filamentTypeId: 'ft1', weight: '10' }] }]
-    expect(hasInactiveFilamentSelectionInPlates(plates, types)).toBe(false)
-  })
-
-  it('plate com uma linha de tipo inativo é considerado inativo', () => {
-    const plates = [{ key: 'p1', timeInput: '', filaments: [{ key: 'r1', filamentTypeId: 'ft2', weight: '10' }] }]
-    expect(hasInactiveFilamentSelectionInPlates(plates, types)).toBe(true)
-  })
-
-  it('é true se QUALQUER plate tiver QUALQUER linha com tipo inativo', () => {
-    const plates = [
-      { key: 'p1', timeInput: '', filaments: [{ key: 'r1', filamentTypeId: 'ft1', weight: '10' }] },
-      { key: 'p2', timeInput: '', filaments: [{ key: 'r2', filamentTypeId: 'ft2', weight: '5' }] },
+describe('autoTotalWeightGrams / autoTotalTimeSeconds', () => {
+  it('soma peso e tempo de todos os plates informados', () => {
+    const plates: PlateRow[] = [
+      { key: 'p1', timeInput: '01:00', weightInput: '100' },
+      { key: 'p2', timeInput: '00:30', weightInput: '50.5' },
     ]
-    expect(hasInactiveFilamentSelectionInPlates(plates, types)).toBe(true)
+    expect(autoTotalWeightGrams(plates)).toBeCloseTo(150.5)
+    expect(autoTotalTimeSeconds(plates)).toBe(3600 + 1800)
+  })
+
+  it('trata peso/tempo inválidos ou vazios como 0 (pré-visualização best-effort)', () => {
+    const plates: PlateRow[] = [{ key: 'p1', timeInput: '', weightInput: '' }]
+    expect(autoTotalWeightGrams(plates)).toBe(0)
+    expect(autoTotalTimeSeconds(plates)).toBe(0)
+  })
+})
+
+describe('validatePlateRows', () => {
+  it('exige peso > 0 para cada plate — plate sem peso gera erro em weightErrors', () => {
+    const plates: PlateRow[] = [{ key: 'p1', timeInput: '01:00', weightInput: '' }]
+    const result = validatePlateRows(plates)
+    expect(result.weightErrors.p1).toBeTruthy()
+    expect(result.items[0].weight_grams).toBe(0)
+  })
+
+  it('tempo em branco é aceito como 0 (nunca obrigatório)', () => {
+    const plates: PlateRow[] = [{ key: 'p1', timeInput: '', weightInput: '100' }]
+    const result = validatePlateRows(plates)
+    expect(result.timeErrors.p1).toBeUndefined()
+    expect(result.items[0]).toEqual({ production_time_seconds: 0, weight_grams: 100 })
+  })
+
+  it('plate totalmente válido não gera nenhum erro', () => {
+    const plates: PlateRow[] = [{ key: 'p1', timeInput: '02:15', weightInput: '35.2' }]
+    const result = validatePlateRows(plates)
+    expect(result.timeErrors).toEqual({})
+    expect(result.weightErrors).toEqual({})
+    expect(result.items).toEqual([{ production_time_seconds: 8100, weight_grams: 35.2 }])
+  })
+})
+
+describe('plateRowsFromLegacyWeight', () => {
+  it('devolve array vazio quando não há peso nem tempo legado', () => {
+    expect(plateRowsFromLegacyWeight(null, null)).toEqual([])
+  })
+
+  it('sintetiza um único Plate 1 a partir de peso/tempo legados', () => {
+    const rows = plateRowsFromLegacyWeight(120, 3600)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].weightInput).toBe('120')
+    expect(rows[0].timeInput).toBe('01:00')
   })
 })

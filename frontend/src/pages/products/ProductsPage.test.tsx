@@ -10,8 +10,8 @@ const {
   useAccessoriesMock,
   usePackagingMock,
   useProductCompositionMock,
-  useFilamentTypesMock,
-  useProductFilamentsMock,
+  useAllProductCategoriesMock,
+  useProductCategoriesMock,
   useProductPlatesMock,
   useProductPriceHistoryMock,
   toastMock,
@@ -21,8 +21,8 @@ const {
   useAccessoriesMock: vi.fn(),
   usePackagingMock: vi.fn(),
   useProductCompositionMock: vi.fn(),
-  useFilamentTypesMock: vi.fn(),
-  useProductFilamentsMock: vi.fn(),
+  useAllProductCategoriesMock: vi.fn(),
+  useProductCategoriesMock: vi.fn(),
   useProductPlatesMock: vi.fn(),
   useProductPriceHistoryMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
@@ -33,8 +33,8 @@ vi.mock('@/hooks/useProducts', () => ({ useProducts: useProductsMock }))
 vi.mock('@/hooks/useAccessories', () => ({ useAccessories: useAccessoriesMock }))
 vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
 vi.mock('@/hooks/useProductComposition', () => ({ useProductComposition: useProductCompositionMock }))
-vi.mock('@/hooks/useFilamentTypes', () => ({ useFilamentTypes: useFilamentTypesMock }))
-vi.mock('@/hooks/useProductFilaments', () => ({ useProductFilaments: useProductFilamentsMock }))
+vi.mock('@/hooks/useAllProductCategories', () => ({ useAllProductCategories: useAllProductCategoriesMock }))
+vi.mock('@/hooks/useProductCategories', () => ({ useProductCategories: useProductCategoriesMock }))
 vi.mock('@/hooks/useProductPlates', () => ({ useProductPlates: useProductPlatesMock }))
 vi.mock('@/hooks/useProductPriceHistory', () => ({ useProductPriceHistory: useProductPriceHistoryMock }))
 vi.mock('sonner', () => ({ toast: toastMock }))
@@ -91,49 +91,21 @@ const packagingItem = {
 
 const productAccessoryRow = { id: 'pa1', product_id: '1', accessory_id: 'a1', quantity: 2, created_at: '' }
 
-const filamentType = {
-  filament_type_id: 'ft1',
-  material: 'PLA' as const,
-  manufacturer: 'Voolt3D',
-  line: 'Sólida',
-  commercial_color: 'Preto',
-  color_code: null,
-  minimum_stock_grams: null,
-  is_active: true,
-  total_available_grams: 1000,
-  usable_spool_count: 1,
-  total_spool_count: 1,
-}
-
-const productFilamentRow = {
-  id: 'pf1',
-  product_id: '1',
-  filament_type_id: 'ft1',
-  theoretical_weight_grams: 12.5,
-  created_at: '',
-}
-
-// Estrutura produtiva por plates (2026-08-29, rodada corretiva) — fixture
-// "já migrada": o Produto tem 1 plate real com 1 filamento — usada como
-// padrão em beforeEach para que a maioria dos testes de "Editar produto"
-// exercite o caminho autoritativo (product_plates), não o fallback legado.
-// Os testes de fallback legado abaixo sobrescrevem useProductPlatesMock
-// explicitamente para plates: [].
+// Estrutura produtiva por plates (migration 20260829180000, ainda não
+// aplicada) — fixture "já migrada": o Produto tem 1 plate real com
+// weight_grams direto (sem filamento) — usada como padrão em beforeEach
+// para que a maioria dos testes de "Editar produto" exercite o caminho
+// autoritativo (product_plates), não o fallback legado. Os testes de
+// fallback legado abaixo sobrescrevem useProductPlatesMock explicitamente
+// para plates: [].
 const productPlateRow = {
   id: 'pp1',
   product_id: '1',
   plate_number: 1,
   production_time_seconds: 3600,
-  created_at: '',
-  updated_at: '',
-}
-
-const productPlateFilamentRow = {
-  id: 'ppf1',
-  plate_id: 'pp1',
-  filament_type_id: 'ft1',
   weight_grams: 40,
   created_at: '',
+  updated_at: '',
 }
 
 function renderPage() {
@@ -250,29 +222,36 @@ describe('ProductsPage', () => {
       retry: vi.fn(),
       save: saveCompositionMock,
     })
-    useFilamentTypesMock.mockReturnValue({
-      types: [filamentType],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-      create: vi.fn(),
-      update: vi.fn(),
-      delete: vi.fn(),
+    // Categorias (múltiplas por Produto, migration 20260829180000, ainda
+    // não aplicada) — useAllProductCategoriesMock (listagem/busca/ordenação)
+    // é derivado DINAMICAMENTE do `products` configurado em useProductsMock
+    // a cada teste (mesma regra de "1 categoria" que product.category já
+    // representava), para não exigir repetir esse mock em toda chamada
+    // avulsa de useProductsMock.mockReturnValue espalhada neste arquivo.
+    useAllProductCategoriesMock.mockImplementation(() => {
+      const { products: currentProducts } = useProductsMock() as { products: Product[] }
+      const categoriesByProductId = new Map<string, string[]>()
+      for (const item of currentProducts) {
+        if (item.category) categoriesByProductId.set(item.id, [item.category])
+      }
+      return { categoriesByProductId, isLoading: false, error: null, retry: vi.fn() }
     })
-    useProductFilamentsMock.mockReturnValue({
+    // useProductCategoriesMock (diálogo "Editar produto", um único Produto)
+    // — todos os testes deste arquivo editam o Produto id '1' (categoria
+    // "Decoração"), então um valor estático padrão basta.
+    useProductCategoriesMock.mockReturnValue({
       status: 'success',
-      filaments: [productFilamentRow],
+      categories: [{ id: 'pc1', product_id: '1', category: 'Decoração', position: 1, created_at: '' }],
       isLoading: false,
       error: null,
       retry: vi.fn(),
     })
     // Padrão: o Produto já tem 1 plate real (product_plates é a fonte
-    // autoritativa) — os testes de fallback legado abaixo sobrescrevem para
-    // plates: [] explicitamente.
+    // autoritativa, weight_grams direto) — os testes de fallback legado
+    // abaixo sobrescrevem para plates: [] explicitamente.
     useProductPlatesMock.mockReturnValue({
       status: 'success',
       plates: [productPlateRow],
-      filamentsByPlateId: new Map([['pp1', [productPlateFilamentRow]]]),
       isLoading: false,
       error: null,
       retry: vi.fn(),
@@ -543,6 +522,10 @@ describe('ProductsPage', () => {
     // "2500" -> R$ 25,00 (ver ProductForm.test.tsx para a cobertura
     // completa de digitação/Backspace/colagem).
     await user.type(screen.getByLabelText(/^preço$/i), '2500')
+    // Categoria e peso do plate são obrigatórios (migration 20260829180000,
+    // ainda não aplicada) — ver cobertura completa em ProductForm.test.tsx.
+    await user.click(screen.getByRole('checkbox', { name: 'Decoração' }))
+    await user.type(screen.getAllByLabelText(/^peso \(g\)$/i)[0], '10')
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
     // Permite personalização nasce ativado por padrão na criação — sem
@@ -576,6 +559,8 @@ describe('ProductsPage', () => {
     await user.click(screen.getByRole('button', { name: /novo produto/i }))
     await user.type(screen.getByLabelText(/^nome$/i), 'Vaso')
     await user.type(screen.getByLabelText(/^preço$/i), '2500')
+    await user.click(screen.getByRole('checkbox', { name: 'Decoração' }))
+    await user.type(screen.getAllByLabelText(/^peso \(g\)$/i)[0], '10')
     await user.type(screen.getByRole('textbox', { name: /tempo de produção/i }), '1h30min')
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
@@ -622,19 +607,16 @@ describe('ProductsPage', () => {
     await waitFor(() => expect(changePriceMock).toHaveBeenCalledWith('1', { new_price: 15.5, reason: null }))
   })
 
-  describe('Editar produto — formulário completo por plates (rodada corretiva 2026-08-29)', () => {
-    it('abre pré-preenchido com os dados atuais do produto, plates/filamentos e acessórios/embalagens já carregados', async () => {
+  describe('Editar produto — formulário completo por plates', () => {
+    it('abre pré-preenchido com os dados atuais do produto, categorias/plates e acessórios/embalagens já carregados', async () => {
       const user = userEvent.setup()
       renderPage()
 
       await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
 
       expect(screen.getByLabelText('Nome')).toHaveValue('Chaveiro')
-      expect(screen.getByRole('radio', { name: 'Decoração' })).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByRole('checkbox', { name: 'Decoração' })).toHaveAttribute('aria-checked', 'true')
       expect(screen.getByText('Plate 1')).toBeInTheDocument()
-      expect(screen.getByRole('combobox', { name: 'Tipo de filamento' })).toHaveTextContent(
-        'PLA · Voolt3D · Sólida · Preto',
-      )
       expect(screen.getAllByLabelText('Peso (g)')[0]).toHaveValue('40')
       expect(screen.getByText(/Ímã 6x2 · Acessório · Qtd\. 2/)).toBeInTheDocument()
     })
@@ -667,7 +649,8 @@ describe('ProductsPage', () => {
           '1',
           expect.objectContaining({
             name: 'Chaveiro Grande',
-            plates: [{ production_time_seconds: 3600, filaments: [{ filament_type_id: 'ft1', weight_grams: 40 }] }],
+            categories: ['Decoração'],
+            plates: [{ production_time_seconds: 3600, weight_grams: 40 }],
             accessories: [{ id: 'a1', quantity: 2 }],
             packaging: [],
           }),
@@ -683,7 +666,6 @@ describe('ProductsPage', () => {
       useProductPlatesMock.mockReturnValue({
         status: 'loading',
         plates: [],
-        filamentsByPlateId: new Map(),
         isLoading: true,
         error: null,
         retry: vi.fn(),
@@ -703,7 +685,6 @@ describe('ProductsPage', () => {
       useProductPlatesMock.mockReturnValue({
         status: 'error',
         plates: [],
-        filamentsByPlateId: new Map(),
         isLoading: false,
         error: new ApiError('database', 500, 'Falha ao carregar plates.'),
         retry: retryMock,
@@ -720,11 +701,21 @@ describe('ProductsPage', () => {
       expect(retryMock).toHaveBeenCalled()
     })
 
-    it('Produto sem nenhum plate ainda (backfill pendente): usa product_filaments legado como Plate 1, sem perder a composição existente', async () => {
+    it('Produto sem nenhum plate ainda: usa peso/tempo legados (default_weight_grams/default_print_time_seconds) como Plate 1', async () => {
+      useProductsMock.mockReturnValue({
+        products: [{ ...product, default_weight_grams: 12.5, default_print_time_seconds: 600 }],
+        isLoading: false,
+        error: null,
+        refetch: refetchMock,
+        create: createMock,
+        createWithPlates: createMock,
+        changePrice: changePriceMock,
+        update: updateMock,
+        updateFull: updateFullMock,
+      })
       useProductPlatesMock.mockReturnValue({
         status: 'success',
         plates: [],
-        filamentsByPlateId: new Map(),
         isLoading: false,
         error: null,
         retry: vi.fn(),
@@ -735,24 +726,13 @@ describe('ProductsPage', () => {
       await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
 
       expect(screen.getByText('Plate 1')).toBeInTheDocument()
-      expect(screen.getByRole('combobox', { name: 'Tipo de filamento' })).toHaveTextContent(
-        'PLA · Voolt3D · Sólida · Preto',
-      )
       expect(screen.getAllByLabelText('Peso (g)')[0]).toHaveValue('12.5')
     })
 
-    it('Produto sem plates e sem nenhuma composição legada: nasce com 1 plate vazio, nunca some/erra', async () => {
+    it('Produto sem plates e sem nenhum peso/tempo legado: nasce com 1 plate vazio, nunca some/erra', async () => {
       useProductPlatesMock.mockReturnValue({
         status: 'success',
         plates: [],
-        filamentsByPlateId: new Map(),
-        isLoading: false,
-        error: null,
-        retry: vi.fn(),
-      })
-      useProductFilamentsMock.mockReturnValue({
-        status: 'success',
-        filaments: [],
         isLoading: false,
         error: null,
         retry: vi.fn(),
@@ -766,14 +746,13 @@ describe('ProductsPage', () => {
       expect(screen.getByLabelText('Nome')).toHaveValue('Chaveiro')
     })
 
-    it('carrega múltiplos plates, cada um com sua composição própria de filamentos', async () => {
+    it('carrega múltiplos plates, cada um com seu peso/tempo próprios', async () => {
       useProductPlatesMock.mockReturnValue({
         status: 'success',
-        plates: [productPlateRow, { ...productPlateRow, id: 'pp2', plate_number: 2, production_time_seconds: 1800 }],
-        filamentsByPlateId: new Map([
-          ['pp1', [productPlateFilamentRow]],
-          ['pp2', [{ ...productPlateFilamentRow, id: 'ppf2', plate_id: 'pp2', filament_type_id: 'ft1', weight_grams: 10 }]],
-        ]),
+        plates: [
+          productPlateRow,
+          { ...productPlateRow, id: 'pp2', plate_number: 2, production_time_seconds: 1800, weight_grams: 10 },
+        ],
         isLoading: false,
         error: null,
         retry: vi.fn(),
@@ -806,30 +785,6 @@ describe('ProductsPage', () => {
 
       expect(screen.getByText('55 g')).toBeInTheDocument()
       expect(screen.getByText(/ajustado manualmente/i)).toBeInTheDocument()
-    })
-
-    it('um filamento inativo já vinculado ao plate permanece visível na edição e bloqueia o salvamento até ser removido', async () => {
-      useFilamentTypesMock.mockReturnValue({
-        types: [{ ...filamentType, is_active: false }],
-        isLoading: false,
-        error: null,
-        refetch: vi.fn(),
-        create: vi.fn(),
-        update: vi.fn(),
-        delete: vi.fn(),
-      })
-      const user = userEvent.setup()
-      renderPage()
-
-      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
-
-      expect(screen.getByRole('combobox', { name: 'Tipo de filamento' })).toHaveTextContent(
-        'PLA · Voolt3D · Sólida · Preto (inativo)',
-      )
-      await user.click(screen.getByRole('button', { name: /^salvar alterações$/i }))
-
-      expect(await screen.findByText(/remova os filamentos inativos/i)).toBeInTheDocument()
-      expect(updateFullMock).not.toHaveBeenCalled()
     })
   })
 
@@ -921,11 +876,6 @@ describe('ProductsPage', () => {
     // caminhos de escrita coerentes com a MESMA tabela/RPC
     // (set_product_composition), nunca a mesma chamada.
     expect(saveCompositionMock).not.toHaveBeenCalled()
-    // product_filaments (legado) nunca é escrito por nenhum caminho desta
-    // página — useProductFilaments não tem mais nenhum método de escrita
-    // desde a limpeza de código órfão de 2026-08-29 (removido junto com o
-    // diálogo que era seu único chamador); a única leitura restante é o
-    // fallback de compatibilidade para Produtos sem plates.
     // O link para a Ficha Técnica continua intacto (mesmo href de sempre).
     expect(screen.getByRole('link', { name: 'Chaveiro' })).toHaveAttribute('href', '/produtos/1')
   })
@@ -1186,15 +1136,18 @@ describe('ProductsPage', () => {
       expect(screen.queryByText('Nenhum produto cadastrado.')).not.toBeInTheDocument()
     })
 
-    it('não considera tipo, categoria, preço ou outros campos — só o nome', async () => {
+    it('não considera tipo ou preço — só nome e categorias vinculadas (múltiplas por Produto, migration 20260829180000, ainda não aplicada)', async () => {
       mockProducts([{ ...vaso, category: 'Decorativos Especiais' }, suporte, luminaria])
       const user = userEvent.setup()
       renderPage()
 
-      // "especiais" só bate na categoria de Vaso, nunca no nome.
+      // "especiais" bate na categoria de Vaso (busca por nome OU por
+      // qualquer categoria vinculada) — decisão desta rodada, nunca mais
+      // "só o nome".
       await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'especiais')
 
-      expect(screen.getByText('Nenhum produto encontrado para esta busca.')).toBeInTheDocument()
+      expect(within(getTable()).getByText('Vaso Decorativo')).toBeInTheDocument()
+      expect(within(getTable()).queryByText('Suporte de Celular')).not.toBeInTheDocument()
     })
 
     it('limpar busca restaura todos os produtos', async () => {

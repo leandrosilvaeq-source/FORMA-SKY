@@ -9,8 +9,7 @@ const {
   useProductCompositionMock,
   useAccessoriesMock,
   usePackagingMock,
-  useFilamentTypesMock,
-  useProductFilamentsMock,
+  useProductCategoriesMock,
   useProductPlatesMock,
   useAuthMock,
 } = vi.hoisted(() => ({
@@ -18,8 +17,7 @@ const {
   useProductCompositionMock: vi.fn(),
   useAccessoriesMock: vi.fn(),
   usePackagingMock: vi.fn(),
-  useFilamentTypesMock: vi.fn(),
-  useProductFilamentsMock: vi.fn(),
+  useProductCategoriesMock: vi.fn(),
   useProductPlatesMock: vi.fn(),
   useAuthMock: vi.fn(),
 }))
@@ -28,8 +26,7 @@ vi.mock('@/hooks/useProduct', () => ({ useProduct: useProductMock }))
 vi.mock('@/hooks/useProductComposition', () => ({ useProductComposition: useProductCompositionMock }))
 vi.mock('@/hooks/useAccessories', () => ({ useAccessories: useAccessoriesMock }))
 vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
-vi.mock('@/hooks/useFilamentTypes', () => ({ useFilamentTypes: useFilamentTypesMock }))
-vi.mock('@/hooks/useProductFilaments', () => ({ useProductFilaments: useProductFilamentsMock }))
+vi.mock('@/hooks/useProductCategories', () => ({ useProductCategories: useProductCategoriesMock }))
 vi.mock('@/hooks/useProductPlates', () => ({ useProductPlates: useProductPlatesMock }))
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
 
@@ -88,28 +85,6 @@ const packagingWithCost = {
 const inactivePackaging = { ...packagingWithCost, id: 'k2', name: 'Ziplock PP', unit_cost: 0.5, is_active: false }
 const packagingWithoutCost = { ...packagingWithCost, id: 'k3', name: 'Sacola Kraft', unit_cost: null }
 
-const filamentType = {
-  filament_type_id: 'ft1',
-  material: 'PLA' as const,
-  manufacturer: 'Voolt3D',
-  line: 'Sólida',
-  commercial_color: 'Preto',
-  color_code: null,
-  minimum_stock_grams: null,
-  is_active: true,
-  total_available_grams: 1000,
-  usable_spool_count: 1,
-  total_spool_count: 1,
-}
-
-const productFilamentRow = {
-  id: 'pf1',
-  product_id: 'p1',
-  filament_type_id: 'ft1',
-  theoretical_weight_grams: 12.5,
-  created_at: '',
-}
-
 function renderPage(path = '/produtos/p1') {
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -134,9 +109,9 @@ describe('ProductDetailPage', () => {
     packagingRefetchMock.mockReset()
 
     // Padrão: composição/acessórios/embalagens vazios e bem-sucedidos — os
-    // testes do Incremento 1 (Identificação/Produção) não dependem disso,
-    // mas precisam de um estado consistente para as três fontes novas não
-    // ficarem "loading" para sempre.
+    // testes de Identificação/Produção não dependem disso, mas precisam de
+    // um estado consistente para as fontes não ficarem "loading" para
+    // sempre.
     useProductCompositionMock.mockReturnValue({
       status: 'success',
       accessories: [],
@@ -149,36 +124,20 @@ describe('ProductDetailPage', () => {
     useAccessoriesMock.mockReturnValue({ accessories: [], isLoading: false, error: null, refetch: accessoriesRefetchMock })
     usePackagingMock.mockReturnValue({ packaging: [], isLoading: false, error: null, refetch: packagingRefetchMock })
 
-    // Filamentos (Módulo 3, Incremento 6A) — mesma ressalva: padrão vazio e
-    // bem-sucedido, independente das três fontes acima.
-    useFilamentTypesMock.mockReturnValue({
-      types: [],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-      create: vi.fn(),
-      update: vi.fn(),
-      delete: vi.fn(),
-    })
-    useProductFilamentsMock.mockReturnValue({
+    // Categorias (múltiplas por Produto, migration 20260829180000, ainda
+    // não aplicada) — padrão vazio e bem-sucedido.
+    useProductCategoriesMock.mockReturnValue({
       status: 'success',
-      filaments: [],
+      categories: [],
       isLoading: false,
       error: null,
       retry: vi.fn(),
     })
-    // Estrutura produtiva por plates (2026-08-29; rodada corretiva) — fonte
-    // autoritativa de Filamentos nesta Ficha. Padrão: plates: [] (Produto
-    // ainda sem backfill, mesmo estado real de hoje com a migration não
-    // aplicada) — ativa o fallback de compatibilidade para
-    // useProductFilamentsMock (legado), preservando integralmente o
-    // comportamento dos testes de Filamentos já existentes abaixo. Testes
-    // que exercitam a fonte autoritativa (product_plates com dado real)
-    // sobrescrevem este mock explicitamente.
+    // Plates (mesma migration — weight_grams direto, sem filamento) —
+    // padrão vazio e bem-sucedido.
     useProductPlatesMock.mockReturnValue({
       status: 'success',
       plates: [],
-      filamentsByPlateId: new Map(),
       isLoading: false,
       error: null,
       retry: vi.fn(),
@@ -227,7 +186,14 @@ describe('ProductDetailPage', () => {
       useProductMock.mockReturnValue({ status: 'success', product, error: null, retry: retryMock })
     })
 
-    it('renderiza o produto correto: nome, categoria, descrição, preço em Real e situação', () => {
+    it('renderiza o produto correto: nome, categorias, descrição, preço em Real e situação', () => {
+      useProductCategoriesMock.mockReturnValue({
+        status: 'success',
+        categories: [{ id: 'pc1', product_id: 'p1', category: 'Decoração', position: 1, created_at: '' }],
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+      })
       renderPage()
 
       expect(screen.getAllByText('Chaveiro Gatinho').length).toBeGreaterThan(0)
@@ -236,6 +202,22 @@ describe('ProductDetailPage', () => {
       expect(screen.getByText(/R\$\s*25,50/)).toBeInTheDocument()
       expect(screen.getByText('Sim')).toBeInTheDocument()
       expect(screen.getAllByText('Ativo').length).toBeGreaterThan(0)
+    })
+
+    it('múltiplas categorias vinculadas são exibidas juntas, separadas por vírgula', () => {
+      useProductCategoriesMock.mockReturnValue({
+        status: 'success',
+        categories: [
+          { id: 'pc1', product_id: 'p1', category: 'Decoração', position: 1, created_at: '' },
+          { id: 'pc2', product_id: 'p1', category: 'Pet', position: 2, created_at: '' },
+        ],
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+      })
+      renderPage()
+
+      expect(screen.getByText('Decoração, Pet')).toBeInTheDocument()
     })
 
     it('renderiza "Peso total (g)" e "Tempo de Produção" formatado como HH:MM:SS, sem as nomenclaturas antigas', () => {
@@ -260,7 +242,6 @@ describe('ProductDetailPage', () => {
       renderPage()
 
       expect(screen.queryByText(/unidades por pla/i)).not.toBeInTheDocument()
-      expect(screen.queryByText(/peso do plate/i)).not.toBeInTheDocument()
       expect(screen.queryByText(/tempo de impressão do plate/i)).not.toBeInTheDocument()
       expect(screen.queryByText(/estimado por unidade/i)).not.toBeInTheDocument()
       expect(screen.queryByText(/\(estimado\)/i)).not.toBeInTheDocument()
@@ -312,7 +293,7 @@ describe('ProductDetailPage', () => {
       units_per_plate: null,
     }
 
-    it('categoria e descrição nulas mostram "Não informada"', () => {
+    it('categorias vazias e descrição nula mostram "Não informada"', () => {
       useProductMock.mockReturnValue({ status: 'success', product: productWithNulls, error: null, retry: retryMock })
       renderPage()
 
@@ -713,139 +694,68 @@ describe('ProductDetailPage', () => {
   })
 
   // ---------------------------------------------------------------------------
-  // Filamentos (Módulo 3, Incremento 6A) — somente leitura, bloco
-  // inteiramente independente do de Acessórios/Embalagens acima (própria
-  // fonte/carregamento/erro/retry; nenhuma alteração no Subtotal de
-  // componentes, que continua só Acessórios/Embalagens).
+  // Plates (migration 20260829180000_add_categories_plate_weight_and_order_colors.sql,
+  // ainda não aplicada) — substitui o antigo bloco "Filamentos": o Produto
+  // não tem mais composição de filamento própria, cada plate mostra só seu
+  // peso (weight_grams direto) e tempo de produção. Bloco inteiramente
+  // independente do de Acessórios/Embalagens (própria fonte/carregamento/
+  // erro/retry; nenhuma alteração no Subtotal de componentes).
   // ---------------------------------------------------------------------------
 
-  describe('Filamentos', () => {
+  describe('Plates', () => {
     beforeEach(() => {
       useProductMock.mockReturnValue({ status: 'success', product, error: null, retry: retryMock })
     })
 
-    it('exibe o tipo de filamento, situação e peso teórico', () => {
-      useFilamentTypesMock.mockReturnValue({
-        types: [filamentType],
-        isLoading: false,
-        error: null,
-        refetch: vi.fn(),
-        create: vi.fn(),
-        update: vi.fn(),
-        delete: vi.fn(),
-      })
-      useProductFilamentsMock.mockReturnValue({
-        status: 'success',
-        filaments: [productFilamentRow],
-        isLoading: false,
-        error: null,
-        retry: vi.fn(),
-      })
-      renderPage()
-
-      const row = screen.getByText('PLA · Voolt3D · Sólida · Preto').closest('tr')
-      if (!row) throw new Error('linha da tabela de Filamentos não encontrada')
-      expect(within(row).getByText('Ativo')).toBeInTheDocument()
-      expect(within(row).getByText('12,50 g')).toBeInTheDocument()
-    })
-
-    it('marca um tipo de filamento inativo como "Inativo", nunca esconde a linha', () => {
-      useFilamentTypesMock.mockReturnValue({
-        types: [{ ...filamentType, is_active: false }],
-        isLoading: false,
-        error: null,
-        refetch: vi.fn(),
-        create: vi.fn(),
-        update: vi.fn(),
-        delete: vi.fn(),
-      })
-      useProductFilamentsMock.mockReturnValue({
-        status: 'success',
-        filaments: [productFilamentRow],
-        isLoading: false,
-        error: null,
-        retry: vi.fn(),
-      })
-      renderPage()
-
-      const row = screen.getByText('PLA · Voolt3D · Sólida · Preto').closest('tr')
-      if (!row) throw new Error('linha da tabela de Filamentos não encontrada')
-      expect(within(row).getByText('Inativo')).toBeInTheDocument()
-    })
-
-    it('mostra "Nenhum filamento vinculado." quando a composição de filamentos está genuinamente vazia', () => {
-      renderPage()
-
-      expect(screen.getByText('Nenhum filamento vinculado.')).toBeInTheDocument()
-    })
-
-    it('erro ao carregar filamentos fica restrito ao bloco de Filamentos, com retry próprio', async () => {
-      const filamentsRetryMock = vi.fn()
-      useProductFilamentsMock.mockReturnValue({
-        status: 'error',
-        filaments: [],
-        isLoading: false,
-        error: new ApiError('database', 500, 'Falha ao carregar filamentos.'),
-        retry: filamentsRetryMock,
-      })
-      renderPage()
-
-      expect(screen.getByText('Identificação')).toBeInTheDocument()
-      expect(screen.getByText('Falha ao carregar filamentos.')).toBeInTheDocument()
-
-      await userEvent.setup().click(screen.getByRole('button', { name: /tentar novamente/i }))
-      expect(filamentsRetryMock).toHaveBeenCalled()
-    })
-
-    it('quando o Produto já tem plates (fonte autoritativa), mostra um card "Filamentos — Plate N" por plate, ignorando product_filaments legado', () => {
+    it('exibe um plate com peso e tempo de produção diretos, sem nenhuma coluna de filamento', () => {
       useProductPlatesMock.mockReturnValue({
         status: 'success',
         plates: [
-          { id: 'pp1', product_id: 'p1', plate_number: 1, production_time_seconds: 3600, created_at: '', updated_at: '' },
-          { id: 'pp2', product_id: 'p1', plate_number: 2, production_time_seconds: 1800, created_at: '', updated_at: '' },
+          { id: 'pp1', product_id: 'p1', plate_number: 1, production_time_seconds: 3600, weight_grams: 40, created_at: '', updated_at: '' },
         ],
-        filamentsByPlateId: new Map([
-          ['pp1', [{ id: 'ppf1', plate_id: 'pp1', filament_type_id: 'ft1', weight_grams: 40, created_at: '' }]],
-          ['pp2', [{ id: 'ppf2', plate_id: 'pp2', filament_type_id: 'ft1', weight_grams: 10, created_at: '' }]],
-        ]),
-        isLoading: false,
-        error: null,
-        retry: vi.fn(),
-      })
-      useFilamentTypesMock.mockReturnValue({
-        types: [filamentType],
-        isLoading: false,
-        error: null,
-        refetch: vi.fn(),
-        create: vi.fn(),
-        update: vi.fn(),
-        delete: vi.fn(),
-      })
-      // product_filaments (legado) deliberadamente com um valor DIFERENTE —
-      // prova que a Ficha usa product_plates, nunca o legado, quando plates
-      // já existem (o achado de divergência entre telas desta auditoria).
-      useProductFilamentsMock.mockReturnValue({
-        status: 'success',
-        filaments: [{ ...productFilamentRow, theoretical_weight_grams: 999 }],
         isLoading: false,
         error: null,
         retry: vi.fn(),
       })
       renderPage()
 
-      expect(screen.getByText('Filamentos — Plate 1')).toBeInTheDocument()
-      expect(screen.getByText('Filamentos — Plate 2')).toBeInTheDocument()
-      expect(screen.queryByText('999,00 g')).not.toBeInTheDocument()
+      const row = screen.getByText('Plate 1').closest('tr')
+      if (!row) throw new Error('linha da tabela de Plates não encontrada')
+      expect(within(row).getByText('40,00 g')).toBeInTheDocument()
+      expect(within(row).getByText('01:00:00')).toBeInTheDocument()
+      expect(screen.queryByText(/filamento/i)).not.toBeInTheDocument()
+    })
+
+    it('mostra um card por plate na ordem correta com múltiplos plates', () => {
+      useProductPlatesMock.mockReturnValue({
+        status: 'success',
+        plates: [
+          { id: 'pp1', product_id: 'p1', plate_number: 1, production_time_seconds: 3600, weight_grams: 40, created_at: '', updated_at: '' },
+          { id: 'pp2', product_id: 'p1', plate_number: 2, production_time_seconds: 1800, weight_grams: 10, created_at: '', updated_at: '' },
+        ],
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+      })
+      renderPage()
+
+      expect(screen.getByText('Plate 1')).toBeInTheDocument()
+      expect(screen.getByText('Plate 2')).toBeInTheDocument()
       expect(screen.getByText('40,00 g')).toBeInTheDocument()
       expect(screen.getByText('10,00 g')).toBeInTheDocument()
     })
 
-    it('erro ao carregar os plates fica restrito ao bloco de Filamentos, com retry próprio (nem consulta o legado)', async () => {
+    it('mostra "Nenhum plate cadastrado." quando a composição está genuinamente vazia', () => {
+      renderPage()
+
+      expect(screen.getByText('Nenhum plate cadastrado.')).toBeInTheDocument()
+    })
+
+    it('erro ao carregar os plates fica restrito ao bloco de Plates, com retry próprio', async () => {
       const platesRetryMock = vi.fn()
       useProductPlatesMock.mockReturnValue({
         status: 'error',
         plates: [],
-        filamentsByPlateId: new Map(),
         isLoading: false,
         error: new ApiError('database', 500, 'Falha ao carregar plates.'),
         retry: platesRetryMock,
@@ -875,27 +785,20 @@ describe('ProductDetailPage', () => {
         retry: compositionRetryMock,
         save: vi.fn(),
       })
-      useFilamentTypesMock.mockReturnValue({
-        types: [filamentType],
-        isLoading: false,
-        error: null,
-        refetch: vi.fn(),
-        create: vi.fn(),
-        update: vi.fn(),
-        delete: vi.fn(),
-      })
-      useProductFilamentsMock.mockReturnValue({
+      useProductPlatesMock.mockReturnValue({
         status: 'success',
-        filaments: [productFilamentRow],
+        plates: [
+          { id: 'pp1', product_id: 'p1', plate_number: 1, production_time_seconds: 3600, weight_grams: 40, created_at: '', updated_at: '' },
+        ],
         isLoading: false,
         error: null,
         retry: vi.fn(),
       })
       renderPage()
 
-      // Subtotal = 2 × R$1,50 = R$3,00 — exatamente como seria sem
-      // nenhum filamento vinculado; filamento nunca soma no subtotal
-      // (sem unit_cost cadastrado, fora de escopo desta rodada).
+      // Subtotal = 2 × R$1,50 = R$3,00 — exatamente como seria sem nenhum
+      // plate cadastrado; plate nunca soma no subtotal (sem custo, fora de
+      // escopo desta rodada).
       expect(screen.getAllByText(/R\$\s*3,00/).length).toBeGreaterThan(0)
     })
   })

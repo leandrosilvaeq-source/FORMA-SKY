@@ -1,11 +1,10 @@
 import { useState, type ChangeEvent, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react'
-import { MinusIcon, PlusIcon, Trash2Icon } from 'lucide-react'
+import { MinusIcon, PlusIcon, Trash2Icon, XIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
@@ -24,21 +23,14 @@ import { itemLabel } from '@/lib/forms/productComposition'
 import {
   autoTotalTimeSeconds,
   autoTotalWeightGrams,
-  autoPlateWeightGrams,
-  chosenFilamentTypeIdsInPlate,
   emptyPlateRow,
-  emptyPlateFilamentRow,
-  filamentTypeLabel,
-  filterSelectableFilamentTypes,
-  findFilamentTypeById,
-  hasInactiveFilamentSelectionInPlates,
   validatePlateRows,
   type PlateRow,
 } from '@/lib/forms/productPlates'
 import { ProductCompositionForm } from '@/components/products/ProductCompositionForm'
 import type { CreateProductWithPlatesInput, PlateInput } from '@/lib/api/products'
 import type { UpdateProductCompositionInput } from '@/lib/api/productComposition'
-import type { Accessory, FilamentTypeSummary, Packaging, ProductType } from '@/types/domain'
+import type { Accessory, Packaging, ProductType } from '@/types/domain'
 
 const PRICE_INPUT_ID = 'product-price'
 const PRICE_ERROR_ID = 'product-price-error'
@@ -53,6 +45,12 @@ const PRODUCT_TYPE_ITEMS: Array<{ label: string; value: ProductType }> = [
   { label: 'SPOT', value: 'SPOT' },
 ]
 
+// Múltiplas categorias (migration 20260829180000, ainda não aplicada) —
+// mesma lista predefinida de sugestões que a seleção única já usava, agora
+// como toggle (várias podem ficar marcadas ao mesmo tempo) em vez de
+// radiogroup. "Outro" continua permitindo texto livre, mas agora pode ser
+// adicionado MAIS DE UMA VEZ (cada valor digitado vira uma categoria extra
+// na lista, nunca substituindo as já escolhidas).
 const CATEGORY_OPTIONS = [
   'Chaveiro',
   'Suporte',
@@ -64,7 +62,6 @@ const CATEGORY_OPTIONS = [
   'Beauty',
   'Office',
 ]
-const OTHER_CATEGORY = 'Outro'
 
 const PASSTHROUGH_KEYS = new Set([
   'Tab',
@@ -82,26 +79,33 @@ const PASSTHROUGH_KEYS = new Set([
   'End',
 ])
 
-const SELECT_TRIGGER_CLASSNAME = 'focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-full min-w-0'
 const REMOVE_BUTTON_CLASSNAME =
   'border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0'
 const ADD_BUTTON_CLASSNAME =
   'border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark'
+// Separação visual das 3 seções (Dados Gerais/Composição/Acessórios e
+// Embalagens), aprovada nesta rodada — cartão com borda e fundo suave na
+// paleta da marca, cabeçalho com sublinhado, mesma identidade visual já
+// usada em outras telas (AppLayout/ProductsPage). Nunca uma nova biblioteca
+// de UI: só classes Tailwind já em uso no projeto.
+const SECTION_CARD_CLASSNAME =
+  'border-brand-primary/20 bg-brand-primary-soft/15 flex flex-col gap-4 rounded-xl border p-4 md:p-6'
+const SECTION_TITLE_CLASSNAME = 'border-brand-primary/20 text-brand-primary-dark border-b pb-2 font-heading text-base font-semibold'
 
 function formatGrams(grams: number): string {
   return `${grams.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} g`
 }
 
-// Estrutura produtiva por plates (2026-08-29) — valores para pré-preencher
-// o formulário em modo edição. `plates`/`accessories`/`packaging` já vêm
-// prontos na forma que este formulário consome (PlateRow[]/{id,quantity}) —
-// a conversão a partir de ProductPlate[]/ProductPlateFilament[]/
-// ProductAccessory[]/ProductPackaging[] é responsabilidade do chamador
-// (ProductsPage.tsx), que já carregou esses dados antes de abrir o diálogo
-// de edição.
+// Estrutura produtiva por plates — valores para pré-preencher o formulário
+// em modo edição. `plates`/`accessories`/`packaging` já vêm prontos na
+// forma que este formulário consome (PlateRow[]/{id,quantity}) — a
+// conversão a partir de ProductPlate[]/ProductAccessory[]/ProductPackaging[]
+// é responsabilidade do chamador (ProductsPage.tsx). `categories` (N por
+// Produto, migration 20260829180000, ainda não aplicada) substitui a antiga
+// `category` (string única).
 export interface ProductFormInitialValues {
   name: string
-  category: string | null
+  categories: string[]
   description: string | null
   defaultPrice: number
   allowsPersonalization: boolean
@@ -115,12 +119,12 @@ export interface ProductFormInitialValues {
 
 // Valores emitidos por onSubmit — cobre create_product_with_plates E
 // update_product_full (os dois RPCs esperam o mesmo formato de
-// plates/accessories/packaging; só o chamador decide qual dos dois chamar,
-// conforme mode).
+// categories/plates/accessories/packaging; só o chamador decide qual dos
+// dois chamar, conforme mode).
 export interface ProductFormSubmitValues {
   name: string
   product_type: ProductType
-  category: string | null
+  categories: string[]
   description: string | null
   default_price: number
   allows_personalization: boolean
@@ -134,7 +138,6 @@ export interface ProductFormSubmitValues {
 interface ProductFormProps {
   mode?: 'create' | 'edit'
   initialValues?: ProductFormInitialValues
-  filamentTypes: FilamentTypeSummary[]
   accessoriesList: Accessory[]
   packagingList: Packaging[]
   isSubmitting: boolean
@@ -146,7 +149,6 @@ interface ProductFormProps {
 export function ProductForm({
   mode = 'create',
   initialValues,
-  filamentTypes,
   accessoriesList,
   packagingList,
   isSubmitting,
@@ -155,21 +157,13 @@ export function ProductForm({
   onCancel,
 }: ProductFormProps) {
   // ---------------------------------------------------------------------
-  // Seção 1 — Dados Gerais (mesmos campos/regras do formulário antigo,
-  // exceto Peso/Tempo, que migraram para a seção Composição abaixo).
+  // Seção 1 — Dados Gerais
   // ---------------------------------------------------------------------
   const [name, setName] = useState(initialValues?.name ?? '')
   const [productType, setProductType] = useState<ProductType>(initialValues?.productType ?? 'CATALOG')
 
-  const initialCategoryIsPredefined =
-    initialValues?.category != null && CATEGORY_OPTIONS.includes(initialValues.category)
-  const [categorySelection, setCategorySelection] = useState<string>(() => {
-    if (!initialValues?.category) return ''
-    return initialCategoryIsPredefined ? initialValues.category : OTHER_CATEGORY
-  })
-  const [customCategory, setCustomCategory] = useState<string>(() =>
-    initialValues?.category && !initialCategoryIsPredefined ? initialValues.category : '',
-  )
+  const [categories, setCategories] = useState<string[]>(initialValues?.categories ?? [])
+  const [customCategoryInput, setCustomCategoryInput] = useState('')
 
   const [description, setDescription] = useState(initialValues?.description ?? '')
 
@@ -180,6 +174,28 @@ export function ProductForm({
   const [priceError, setPriceError] = useState<string | null>(null)
 
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+
+  function toggleCategory(option: string) {
+    setCategories((current) => (current.includes(option) ? current.filter((c) => c !== option) : [...current, option]))
+  }
+
+  function addCustomCategory() {
+    const trimmed = customCategoryInput.trim()
+    if (!trimmed) return
+    setCategories((current) => (current.includes(trimmed) ? current : [...current, trimmed]))
+    setCustomCategoryInput('')
+  }
+
+  function removeCategory(value: string) {
+    setCategories((current) => current.filter((c) => c !== value))
+  }
+
+  function handleCustomCategoryKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      addCustomCategory()
+    }
+  }
 
   function applyPriceCents(next: number) {
     setPriceCents(next)
@@ -238,18 +254,19 @@ export function ProductForm({
   }
 
   // ---------------------------------------------------------------------
-  // Seção 2 — Composição: número de plates + composição própria de cada
-  // um + totais automáticos/ajuste manual + Permite personalização.
+  // Seção 2 — Composição: número de plates + peso/tempo direto de cada um
+  // (sem filamento/cor — retirados do Produto, ver docs/05_ROADMAP_MODULOS.md)
+  // + totais automáticos/ajuste manual + Permite personalização.
   // ---------------------------------------------------------------------
   const [plates, setPlates] = useState<PlateRow[]>(() =>
     initialValues && initialValues.plates.length > 0 ? initialValues.plates : [emptyPlateRow()],
   )
   const [plateTimeErrors, setPlateTimeErrors] = useState<Record<string, string>>({})
-  const [plateFilamentErrors, setPlateFilamentErrors] = useState<Record<string, string>>({})
-  // Confirmação antes de remover um plate PREENCHIDO (com tempo informado
-  // ou ao menos uma linha de filamento com tipo selecionado) — nunca perde
-  // composição preenchida silenciosamente. Guarda a key do plate pendente
-  // de confirmação; null = nenhuma confirmação aberta.
+  const [plateWeightErrors, setPlateWeightErrors] = useState<Record<string, string>>({})
+  // Confirmação antes de remover um plate PREENCHIDO (com tempo ou peso
+  // informado) — nunca perde composição preenchida silenciosamente. Guarda
+  // a key do plate pendente de confirmação; null = nenhuma confirmação
+  // aberta.
   const [plateRemovalPending, setPlateRemovalPending] = useState<string | null>(null)
 
   const [allowsPersonalization, setAllowsPersonalization] = useState(initialValues?.allowsPersonalization ?? true)
@@ -267,14 +284,11 @@ export function ProductForm({
   const [manualWeightError, setManualWeightError] = useState<string | null>(null)
   const [manualTimeError, setManualTimeError] = useState<string | null>(null)
 
-  const hasInactiveFilamentType = hasInactiveFilamentSelectionInPlates(plates, filamentTypes)
-
   const autoWeight = autoTotalWeightGrams(plates)
   const autoTimeSeconds = autoTotalTimeSeconds(plates)
 
   function plateHasData(plate: PlateRow): boolean {
-    if (plate.timeInput.trim()) return true
-    return plate.filaments.some((row) => row.filamentTypeId !== null || row.weight.trim())
+    return plate.timeInput.trim() !== '' || plate.weightInput.trim() !== ''
   }
 
   function addPlate() {
@@ -299,35 +313,8 @@ export function ProductForm({
     setPlates((current) => current.map((plate) => (plate.key === key ? { ...plate, timeInput } : plate)))
   }
 
-  function addFilamentRow(plateKey: string) {
-    setPlates((current) =>
-      current.map((plate) =>
-        plate.key === plateKey ? { ...plate, filaments: [...plate.filaments, emptyPlateFilamentRow()] } : plate,
-      ),
-    )
-  }
-
-  function removeFilamentRow(plateKey: string, rowKey: string) {
-    setPlates((current) =>
-      current.map((plate) =>
-        plate.key === plateKey
-          ? { ...plate, filaments: plate.filaments.filter((row) => row.key !== rowKey) }
-          : plate,
-      ),
-    )
-  }
-
-  function updateFilamentRow(plateKey: string, rowKey: string, patch: Partial<{ filamentTypeId: string | null; weight: string }>) {
-    setPlates((current) =>
-      current.map((plate) =>
-        plate.key === plateKey
-          ? {
-              ...plate,
-              filaments: plate.filaments.map((row) => (row.key === rowKey ? { ...row, ...patch } : row)),
-            }
-          : plate,
-      ),
-    )
+  function updatePlateWeight(key: string, weightInput: string) {
+    setPlates((current) => current.map((plate) => (plate.key === key ? { ...plate, weightInput } : plate)))
   }
 
   function enableManualAdjustment() {
@@ -386,16 +373,8 @@ export function ProductForm({
     const trimmedName = name.trim()
     if (!trimmedName) errors.name = 'Informe o nome do produto.'
 
-    let finalCategory: string | null = null
-    if (categorySelection === OTHER_CATEGORY) {
-      const trimmedCustom = customCategory.trim()
-      if (!trimmedCustom) {
-        errors.category = 'Informe a categoria.'
-      } else {
-        finalCategory = trimmedCustom
-      }
-    } else if (categorySelection) {
-      finalCategory = categorySelection
+    if (categories.length === 0) {
+      errors.categories = 'Selecione ao menos uma categoria.'
     }
 
     // Preço e Tipo do produto nunca são editáveis aqui em mode="edit" —
@@ -411,13 +390,9 @@ export function ProductForm({
       }
     }
 
-    if (hasInactiveFilamentType) {
-      errors.plates = 'Remova os filamentos inativos da composição antes de salvar.'
-    }
-
     const platesResult = validatePlateRows(plates)
     setPlateTimeErrors(platesResult.timeErrors)
-    setPlateFilamentErrors(platesResult.filamentErrors)
+    setPlateWeightErrors(platesResult.weightErrors)
 
     let manualWeightValue: number | null = null
     let manualTimeValue: number | null = null
@@ -451,7 +426,7 @@ export function ProductForm({
     if (
       Object.keys(errors).length > 0 ||
       Object.keys(platesResult.timeErrors).length > 0 ||
-      Object.keys(platesResult.filamentErrors).length > 0
+      Object.keys(platesResult.weightErrors).length > 0
     ) {
       setFieldErrors(errors)
       return
@@ -461,14 +436,11 @@ export function ProductForm({
     onSubmit({
       name: trimmedName,
       product_type: productType,
-      category: finalCategory,
+      categories,
       description: description.trim() ? description.trim() : null,
       default_price: centsToAmount(priceCents),
       allows_personalization: allowsPersonalization,
-      plates: platesResult.items.map((item) => ({
-        production_time_seconds: item.production_time_seconds,
-        filaments: item.filaments.map((f) => ({ filament_type_id: f.filament_type_id, weight_grams: f.weight_grams })),
-      })),
+      plates: platesResult.items,
       manual_weight_override_grams: manualWeightValue,
       manual_time_override_seconds: manualTimeValue,
       accessories: selectedAccessories,
@@ -487,12 +459,12 @@ export function ProductForm({
     : autoTimeSeconds
 
   return (
-    <form className="flex flex-col gap-6" onSubmit={handleSubmit}>
+    <form className="flex w-full max-w-full flex-col gap-6" onSubmit={handleSubmit}>
       {/* ------------------------------------------------------------- */}
       {/* Seção 1 — Dados Gerais                                        */}
       {/* ------------------------------------------------------------- */}
-      <div className="flex flex-col gap-4">
-        <h3 className="text-sm font-semibold">Dados Gerais</h3>
+      <div className={SECTION_CARD_CLASSNAME}>
+        <h3 className={SECTION_TITLE_CLASSNAME}>Dados Gerais</h3>
 
         <div className="flex flex-col gap-2">
           <Label htmlFor="product-name">Nome</Label>
@@ -535,22 +507,22 @@ export function ProductForm({
         )}
 
         <div className="flex flex-col gap-2">
-          <Label>Categoria</Label>
+          <Label>Categorias</Label>
           <p id={CATEGORY_HELP_ID} className="text-muted-foreground text-xs">
-            A categoria organiza os produtos por finalidade ou público, facilitando a localização e a consulta na
-            listagem.
+            Um produto pode ter mais de uma categoria — selecione todas as que se aplicam ou adicione uma nova
+            abaixo.
           </p>
-          <div role="radiogroup" aria-label="Categoria" className="flex flex-wrap gap-2">
-            {[...CATEGORY_OPTIONS, OTHER_CATEGORY].map((option) => (
+          <div role="group" aria-label="Categorias" className="flex flex-wrap gap-2">
+            {CATEGORY_OPTIONS.map((option) => (
               <button
                 key={option}
                 type="button"
-                role="radio"
-                aria-checked={categorySelection === option}
-                onClick={() => setCategorySelection((current) => (current === option ? '' : option))}
+                role="checkbox"
+                aria-checked={categories.includes(option)}
+                onClick={() => toggleCategory(option)}
                 className={cn(
                   'focus-visible:ring-brand-accent rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2',
-                  categorySelection === option
+                  categories.includes(option)
                     ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
                     : 'border-input text-muted-foreground hover:bg-muted hover:text-foreground',
                 )}
@@ -559,17 +531,44 @@ export function ProductForm({
               </button>
             ))}
           </div>
-          {categorySelection === OTHER_CATEGORY && (
-            <div className="flex flex-col gap-1">
-              <Label htmlFor={CUSTOM_CATEGORY_INPUT_ID}>Informe a categoria</Label>
+
+          <div className="flex items-end gap-2">
+            <div className="flex flex-1 flex-col gap-1">
+              <Label htmlFor={CUSTOM_CATEGORY_INPUT_ID}>Outra categoria</Label>
               <Input
                 id={CUSTOM_CATEGORY_INPUT_ID}
-                value={customCategory}
-                onChange={(event) => setCustomCategory(event.target.value)}
+                value={customCategoryInput}
+                onChange={(event) => setCustomCategoryInput(event.target.value)}
+                onKeyDown={handleCustomCategoryKeyDown}
+                placeholder="Digite e adicione"
               />
             </div>
+            <Button type="button" variant="outline" onClick={addCustomCategory} className={ADD_BUTTON_CLASSNAME}>
+              Adicionar
+            </Button>
+          </div>
+
+          {categories.length > 0 && (
+            <ul className="flex flex-wrap gap-2" aria-label="Categorias selecionadas">
+              {categories.map((category) => (
+                <li
+                  key={category}
+                  className="border-brand-primary bg-brand-primary-soft text-brand-primary-dark flex items-center gap-1 rounded-full border px-3 py-1 text-sm"
+                >
+                  {category}
+                  <button
+                    type="button"
+                    onClick={() => removeCategory(category)}
+                    aria-label={`Remover categoria ${category}`}
+                    className="focus-visible:ring-brand-accent rounded-full outline-none focus-visible:ring-2"
+                  >
+                    <XIcon className="size-3.5" aria-hidden="true" />
+                  </button>
+                </li>
+              ))}
+            </ul>
           )}
-          {fieldErrors.category && <p className="text-destructive text-sm">{fieldErrors.category}</p>}
+          {fieldErrors.categories && <p className="text-destructive text-sm">{fieldErrors.categories}</p>}
         </div>
 
         <div className="flex flex-col gap-2">
@@ -593,7 +592,7 @@ export function ProductForm({
               onPaste={handlePricePaste}
               aria-invalid={priceError || fieldErrors.default_price ? true : undefined}
               aria-describedby={priceError || fieldErrors.default_price ? PRICE_ERROR_ID : undefined}
-              className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
+              className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-full max-w-xs"
             />
             {(priceError || fieldErrors.default_price) && (
               <p id={PRICE_ERROR_ID} className="text-destructive text-sm">
@@ -615,8 +614,12 @@ export function ProductForm({
       {/* ------------------------------------------------------------- */}
       {/* Seção 2 — Composição                                          */}
       {/* ------------------------------------------------------------- */}
-      <div className="flex flex-col gap-4 border-t pt-4">
-        <h3 className="text-sm font-semibold">Composição</h3>
+      <div className={SECTION_CARD_CLASSNAME}>
+        <h3 className={SECTION_TITLE_CLASSNAME}>Composição</h3>
+        <p className="text-muted-foreground text-xs">
+          Filamentos e cores não fazem mais parte do cadastro do Produto — são escolhidos no Pedido, por unidade e
+          por plate.
+        </p>
 
         <div className="flex flex-col gap-2">
           <Label>Número de plates</Label>
@@ -645,45 +648,43 @@ export function ProductForm({
           </div>
         </div>
 
-        <div className="flex flex-col gap-3">
-          {plates.map((plate, plateIndex) => {
-            const plateWeight = autoPlateWeightGrams(plate)
-            return (
-              <div key={plate.key} className="border-input flex flex-col gap-3 rounded-lg border p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold">Plate {plateIndex + 1}</span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon-sm"
-                    aria-label={`Remover Plate ${plateIndex + 1}`}
-                    onClick={() => requestRemovePlate(plate.key)}
-                    disabled={isSubmitting || plates.length <= 1}
-                    className={REMOVE_BUTTON_CLASSNAME}
-                  >
-                    <Trash2Icon aria-hidden="true" />
-                  </Button>
-                </div>
+        {/* 2 colunas no desktop (Plate 1/Plate 2 lado a lado) — 1 coluna em
+            telas menores. Com 1-2 plates, a tela de 1920×1080/100% não
+            precisa de rolagem vertical; com 3+ a rolagem do próprio Dialog
+            (max-h-[90vh] overflow-y-auto em ProductsPage.tsx) assume. */}
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          {plates.map((plate, plateIndex) => (
+            <div key={plate.key} className="border-input bg-background flex flex-col gap-3 rounded-lg border p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold">Plate {plateIndex + 1}</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label={`Remover Plate ${plateIndex + 1}`}
+                  onClick={() => requestRemovePlate(plate.key)}
+                  disabled={isSubmitting || plates.length <= 1}
+                  className={REMOVE_BUTTON_CLASSNAME}
+                >
+                  <Trash2Icon aria-hidden="true" />
+                </Button>
+              </div>
 
-                {plateRemovalPending === plate.key && (
-                  <div className="border-destructive/50 bg-destructive/10 flex flex-col gap-2 rounded-md border p-2 text-sm">
-                    <p>Este plate tem dados preenchidos. Remover mesmo assim?</p>
-                    <div className="flex gap-2">
-                      <Button type="button" size="sm" variant="destructive" onClick={() => removePlate(plate.key)}>
-                        Remover
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setPlateRemovalPending(null)}
-                      >
-                        Cancelar
-                      </Button>
-                    </div>
+              {plateRemovalPending === plate.key && (
+                <div className="border-destructive/50 bg-destructive/10 flex flex-col gap-2 rounded-md border p-2 text-sm">
+                  <p>Este plate tem dados preenchidos. Remover mesmo assim?</p>
+                  <div className="flex gap-2">
+                    <Button type="button" size="sm" variant="destructive" onClick={() => removePlate(plate.key)}>
+                      Remover
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => setPlateRemovalPending(null)}>
+                      Cancelar
+                    </Button>
                   </div>
-                )}
+                </div>
+              )}
 
+              <div className="flex flex-wrap gap-3">
                 <div className="flex flex-col gap-1">
                   <Label htmlFor={`plate-time-${plate.key}`}>Tempo de produção</Label>
                   <Input
@@ -699,87 +700,24 @@ export function ProductForm({
                   )}
                 </div>
 
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center justify-between">
-                    <Label>Filamentos/cores</Label>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => addFilamentRow(plate.key)}
-                      disabled={isSubmitting}
-                      className={ADD_BUTTON_CLASSNAME}
-                    >
-                      Adicionar filamento
-                    </Button>
-                  </div>
-                  {plate.filaments.map((row, rowIndex) => {
-                    const chosenElsewhere = chosenFilamentTypeIdsInPlate(plate, row.key)
-                    const options = filterSelectableFilamentTypes(filamentTypes, chosenElsewhere, row.filamentTypeId).map(
-                      (type) => ({ label: filamentTypeLabel(type), value: type.filament_type_id as string | null }),
-                    )
-                    const selectedType = findFilamentTypeById(filamentTypes, row.filamentTypeId)
-                    const errorKey = `${plate.key}:${row.key}`
-                    const removeLabel = selectedType
-                      ? `Remover ${filamentTypeLabel(selectedType)}`
-                      : `Remover filamento (linha ${rowIndex + 1})`
-                    return (
-                      <div key={row.key} className="flex flex-col gap-1">
-                        <div className="flex items-center gap-2">
-                          <Select
-                            items={options}
-                            value={row.filamentTypeId}
-                            disabled={isSubmitting}
-                            onValueChange={(value) => updateFilamentRow(plate.key, row.key, { filamentTypeId: value })}
-                          >
-                            <SelectTrigger
-                              aria-label="Tipo de filamento"
-                              title={selectedType ? filamentTypeLabel(selectedType) : undefined}
-                              className={SELECT_TRIGGER_CLASSNAME}
-                            >
-                              <SelectValue placeholder="Selecione um tipo de filamento" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {options.map((item) => (
-                                <SelectItem key={item.value ?? 'none'} value={item.value} title={item.label} className="truncate">
-                                  {item.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <Input
-                            aria-label="Peso (g)"
-                            inputMode="decimal"
-                            placeholder="Peso (g)"
-                            value={row.weight}
-                            disabled={isSubmitting}
-                            onChange={(event) => updateFilamentRow(plate.key, row.key, { weight: event.target.value })}
-                            className="w-28 shrink-0 focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
-                          />
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="icon-sm"
-                            onClick={() => removeFilamentRow(plate.key, row.key)}
-                            disabled={isSubmitting}
-                            aria-label={removeLabel}
-                            className={REMOVE_BUTTON_CLASSNAME}
-                          >
-                            <Trash2Icon aria-hidden="true" />
-                          </Button>
-                        </div>
-                        {plateFilamentErrors[errorKey] && (
-                          <p className="text-destructive text-sm">{plateFilamentErrors[errorKey]}</p>
-                        )}
-                      </div>
-                    )
-                  })}
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor={`plate-weight-${plate.key}`}>Peso (g)</Label>
+                  <Input
+                    id={`plate-weight-${plate.key}`}
+                    inputMode="decimal"
+                    placeholder="Peso (g)"
+                    value={plate.weightInput}
+                    disabled={isSubmitting}
+                    onChange={(event) => updatePlateWeight(plate.key, event.target.value)}
+                    className="w-32 focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
+                  />
+                  {plateWeightErrors[plate.key] && (
+                    <p className="text-destructive text-sm">{plateWeightErrors[plate.key]}</p>
+                  )}
                 </div>
-
-                <p className="text-muted-foreground text-xs">Peso do plate: {formatGrams(plateWeight)}</p>
               </div>
-            )
-          })}
+            </div>
+          ))}
         </div>
 
         {fieldErrors.plates && <p className="text-destructive text-sm">{fieldErrors.plates}</p>}
@@ -866,8 +804,8 @@ export function ProductForm({
       {/* ------------------------------------------------------------- */}
       {/* Seção 3 — Acessórios e Embalagem                               */}
       {/* ------------------------------------------------------------- */}
-      <div className="flex flex-col gap-3 border-t pt-4">
-        <h3 className="text-sm font-semibold">Acessórios e Embalagem</h3>
+      <div className={SECTION_CARD_CLASSNAME}>
+        <h3 className={SECTION_TITLE_CLASSNAME}>Acessórios e Embalagem</h3>
 
         <Button
           type="button"
