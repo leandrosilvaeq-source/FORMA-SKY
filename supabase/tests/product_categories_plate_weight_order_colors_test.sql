@@ -17,6 +17,15 @@
 -- cores antigas ao editar itens (update_quote_order) por mudança de
 -- quantidade.
 --
+-- CORRIGIDO NESTA RODADA (2026-08-30, após 1ª execução real contra o remoto
+-- já migrado) — Seções 1.2/1.4 usavam `select public.update_product_full(...)
+-- into v_row;`, que falha com "invalid input syntax for type uuid" ao chamar
+-- uma função SECURITY DEFINER que retorna public.products dessa forma
+-- (confirmado por reprodução isolada); trocado para `v_row :=
+-- public.update_product_full(...);`, forma que funciona corretamente e já é
+-- usada em outros pontos deste arquivo. Bug do script de teste, não da
+-- migration nem das funções testadas.
+--
 -- ESTE ARQUIVO NÃO É UMA MIGRATION. Roda inteiro dentro de UMA ÚNICA
 -- transação, terminada sempre com ROLLBACK — nenhum dado criado por este
 -- script persiste no banco. Usa somente cliente/produto/tipo de filamento
@@ -160,7 +169,7 @@ begin
   select value::uuid into v_user_id from zz_cpo_fixtures where key = 'user_id';
   select value::uuid into v_product_id from zz_cpo_fixtures where key = 'product_id';
 
-  select public.update_product_full(
+  v_row := public.update_product_full(
     v_product_id, '{}'::jsonb,
     jsonb_build_array('Suporte'),
     jsonb_build_array(
@@ -168,7 +177,7 @@ begin
       jsonb_build_object('production_time_seconds', 1800, 'weight_grams', 10)
     ),
     null, null, '[]'::jsonb, '[]'::jsonb, v_user_id
-  ) into v_row;
+  );
 
   select count(*) into v_category_count from public.product_categories where product_id = v_product_id;
   select category into v_only_category from public.product_categories where product_id = v_product_id and position = 1;
@@ -231,14 +240,14 @@ begin
   select value::uuid into v_user_id from zz_cpo_fixtures where key = 'user_id';
   select value::uuid into v_product_id from zz_cpo_fixtures where key = 'product_id';
 
-  select public.update_product_full(
+  v_row := public.update_product_full(
     v_product_id, '{}'::jsonb, '[]'::jsonb,
     jsonb_build_array(
       jsonb_build_object('production_time_seconds', 3600, 'weight_grams', 40),
       jsonb_build_object('production_time_seconds', 1800, 'weight_grams', 10)
     ),
     null, null, '[]'::jsonb, '[]'::jsonb, v_user_id
-  ) into v_row;
+  );
 
   select count(*) into v_category_count from public.product_categories where product_id = v_product_id;
 
