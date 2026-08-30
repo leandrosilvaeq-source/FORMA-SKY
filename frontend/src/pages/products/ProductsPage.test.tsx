@@ -512,6 +512,34 @@ describe('ProductsPage', () => {
     expect(headerRow).not.toHaveClass('even:bg-white')
   })
 
+  // Largura ampliada dos diálogos de Novo/Editar produto (~95vw, layout
+  // aprovado nesta rodada) — jsdom não mede largura real de viewport, só
+  // confirma que as classes de largura estão presentes; a ausência de
+  // rolagem vertical própria com 1-2 plates a 1920×1080/100% continua
+  // dependendo de validação manual em navegador real (registrada no
+  // roadmap, nunca assumida como provada só por este teste).
+  it('o diálogo "Novo produto" usa largura ampliada (w-[95vw], max-w-[1400px])', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /novo produto/i }))
+
+    const dialog = screen.getByRole('dialog', { name: /novo produto/i })
+    expect(dialog).toHaveClass('w-[95vw]')
+    expect(dialog).toHaveClass('max-w-[1400px]')
+  })
+
+  it('o diálogo "Editar produto" usa largura ampliada (w-[95vw], max-w-[1400px])', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+
+    const dialog = screen.getByRole('dialog', { name: /editar produto/i })
+    expect(dialog).toHaveClass('w-[95vw]')
+    expect(dialog).toHaveClass('max-w-[1400px]')
+  })
+
   it('opens the dialog, submits a new product with the bank-style price and shows a success toast', async () => {
     const user = userEvent.setup()
     renderPage()

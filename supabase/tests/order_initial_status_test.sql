@@ -1,23 +1,41 @@
 -- =============================================================================
 -- Forma Sky — status inicial automático de Pedidos NOVOS (regra aprovada
--- 2026-08-29, migration 20260829150000_add_order_initial_status_classification.sql)
--- TESTE DE INTEGRAÇÃO transacional das 2 novas funções
--- (determine_order_initial_status / validate_catalog_composition_for_creation)
--- e das duas sobrecargas de create_order() que passam a chamá-las.
+-- 2026-08-29, migration 20260829150000_add_order_initial_status_classification.sql,
+-- JÁ APLICADA ao remoto) + estrutura produtiva por plates SEM filamento
+-- (migration 20260829180000_add_categories_plate_weight_and_order_colors.sql,
+-- ainda NÃO aplicada) — TESTE DE INTEGRAÇÃO transacional de
+-- determine_order_initial_status() (inalterada por 20260829180000) e da
+-- validação de estrutura produtiva efetivamente chamada por create_order() a
+-- partir dessa migration pendente: validate_catalog_production_structure_for_creation
+-- (substitui validate_catalog_composition_for_creation, preservada no banco
+-- mas sem nenhum chamador a partir de então).
+--
+-- AUDITADO E ADAPTADO NESTA RODADA CORRETIVA (2026-08-30) — a versão
+-- anterior deste arquivo montava os Produtos "com composição" inserindo
+-- linhas diretas em product_plate_filaments (peso por filamento, somado
+-- pela função antiga) e verificava o marcador ORDER_CATALOG_MISSING_COMPOSITION:.
+-- A partir da migration 20260829180000, a validação de estrutura produtiva
+-- NUNCA olha para filamento em nenhuma forma (nem product_filaments, nem
+-- product_plate_filaments) — só a existência de linhas em product_plates
+-- (peso direto) importa. Os fixtures/comentários/asserções deste arquivo
+-- foram todos atualizados para esse contrato; nenhum teste deste arquivo
+-- depende mais de filamento vinculado ao Produto. A Seção 7 (nova) cobre
+-- explicitamente o comportamento de production_colors (sempre opcional na
+-- criação, nunca altera o status inicial, snapshot de plates correto).
 --
 -- ESTE ARQUIVO NÃO É UMA MIGRATION. Roda inteiro dentro de UMA ÚNICA
 -- transação, terminada sempre com ROLLBACK — nenhum dado criado por este
--- script persiste no banco. Usa somente cliente/produto/tipo de filamento
--- "TESTE%", nunca dados oficiais ou Petlink.
+-- script persiste no banco. Usa somente cliente/produto "TESTE%", nunca
+-- dados oficiais ou Petlink.
 --
--- IMPORTANTE — a migration acima ainda NÃO foi aplicada no projeto Supabase
--- remoto nesta rodada (restrição explícita desta tarefa: "não aplique a
--- migration"). Por isso este script NÃO PÔDE ser executado nesta rodada —
--- create_order() ainda não tem a nova lógica no banco remoto. Escrito
--- seguindo a mesma disciplina/estrutura já usada em
--- supabase/tests/product_customer_order_ops_test.sql (executado com
--- sucesso quando sua migration correspondente já estava aplicada) — pronto
--- para ser executado assim que a migration for aplicada, numa rodada
+-- IMPORTANTE — a migration 20260829180000 ainda NÃO foi aplicada ao projeto
+-- Supabase remoto nesta rodada (restrição explícita desta tarefa: "não
+-- aplique a migration"). Por isso este script NÃO PÔDE ser executado nesta
+-- rodada — create_order() ainda não chama validate_catalog_production_structure_for_creation
+-- no banco remoto (continua chamando a função anterior, da migration já
+-- aplicada). Escrito seguindo a mesma disciplina/estrutura já usada em
+-- supabase/tests/product_customer_order_ops_test.sql — pronto para ser
+-- executado assim que a migration 20260829180000 for aplicada, numa rodada
 -- futura autorizada.
 --
 -- Execução (quando a migration estiver aplicada):
@@ -39,20 +57,20 @@ create temporary table zz_ois_fixtures (
 );
 
 -- =============================================================================
--- SETUP — usuário ativo existente, cliente TESTE, 1 tipo de filamento TESTE
--- ativo, 2 produtos CATALOG TESTE COM composição e 2 produtos CATALOG TESTE
--- SEM composição.
+-- SETUP — usuário ativo existente, cliente TESTE, 2 produtos CATALOG TESTE
+-- COM estrutura produtiva (product_plates com weight_grams direto) e 2
+-- produtos CATALOG TESTE SEM nenhum plate. Nenhum tipo de filamento é
+-- criado neste arquivo — a validação de estrutura produtiva a partir da
+-- migration 20260829180000 nunca depende de filamento em nenhuma forma.
 -- =============================================================================
 do $$
 declare
   v_user_id uuid;
   v_customer_id uuid;
-  v_filament_type_id uuid;
   v_product_composed_1 uuid;
   v_product_composed_2 uuid;
   v_product_incomplete_1 uuid;
   v_product_incomplete_2 uuid;
-  v_plate_id uuid;
 begin
   select id into v_user_id from public.users where is_active limit 1;
   if v_user_id is null then
@@ -65,60 +83,48 @@ begin
     returning id into v_customer_id;
   insert into zz_ois_fixtures(key, value) values ('customer_id', v_customer_id::text);
 
-  v_filament_type_id := (public.create_filament_type(
-    'PLA', 'TESTE Marca Status Inicial', 'Sólida', 'Preto', null, null, true, null, v_user_id
-  )).id;
-
-  -- Composição por PLATES (fonte autoritativa a partir de
-  -- 20260829160000_add_product_plates_structure.sql) — antes desta correção
-  -- este fixture usava set_product_filaments (escrita direta em
-  -- product_filaments, legado), que validate_catalog_composition_for_creation
-  -- deixou de aceitar como prova de composição; substituído por um Plate 1 +
-  -- product_plate_filaments equivalente (mesmo peso, mesmo tipo de
-  -- filamento), inserido diretamente aqui pelo mesmo motivo que create_product
-  -- (11 parâmetros, legado) continua sendo usado nestes dois fixtures em vez
-  -- de create_product_with_plates: preservar exatamente o
-  -- default_weight_grams/default_print_time_seconds já fixados no restante
-  -- deste arquivo (20.00 / 60), sem depender do cálculo automático da soma
-  -- dos plates.
+  -- Estrutura produtiva por PLATES, peso DIRETO (fonte autoritativa a
+  -- partir de 20260829180000_add_categories_plate_weight_and_order_colors.sql)
+  -- — create_product (11 parâmetros, legado) continua sendo usado para
+  -- estes 4 fixtures em vez de create_product_with_plates só para
+  -- preservar exatamente o default_weight_grams/default_print_time_seconds
+  -- já fixados no restante deste arquivo (20.00/60), sem depender do
+  -- cálculo automático da soma dos plates; o plate em si é inserido
+  -- diretamente com weight_grams igual a esse mesmo peso — nenhum
+  -- filamento é criado ou referenciado em lugar nenhum.
   v_product_composed_1 := public.create_product(
-    'TESTE OPS — Produto COM composição 1', 'CATALOG', 'teste',
-    'produto com filamento cadastrado', 50.00, 60, 20.00, 4, null, false, v_user_id
+    'TESTE OPS — Produto COM estrutura 1', 'CATALOG', 'teste',
+    'produto com estrutura produtiva cadastrada', 50.00, 60, 20.00, 4, null, false, v_user_id
   );
-  insert into public.product_plates (product_id, plate_number, production_time_seconds)
-    values (v_product_composed_1, 1, 60)
-    returning id into v_plate_id;
-  insert into public.product_plate_filaments (plate_id, filament_type_id, weight_grams)
-    values (v_plate_id, v_filament_type_id, 10);
+  insert into public.product_plates (product_id, plate_number, production_time_seconds, weight_grams)
+    values (v_product_composed_1, 1, 60, 20.00);
   insert into zz_ois_fixtures(key, value) values ('product_composed_1', v_product_composed_1::text);
 
   v_product_composed_2 := public.create_product(
-    'TESTE OPS — Produto COM composição 2', 'CATALOG', 'teste',
-    'produto com filamento cadastrado', 60.00, 60, 20.00, 4, null, false, v_user_id
+    'TESTE OPS — Produto COM estrutura 2', 'CATALOG', 'teste',
+    'produto com estrutura produtiva cadastrada', 60.00, 60, 20.00, 4, null, false, v_user_id
   );
-  insert into public.product_plates (product_id, plate_number, production_time_seconds)
-    values (v_product_composed_2, 1, 60)
-    returning id into v_plate_id;
-  insert into public.product_plate_filaments (plate_id, filament_type_id, weight_grams)
-    values (v_plate_id, v_filament_type_id, 15);
+  insert into public.product_plates (product_id, plate_number, production_time_seconds, weight_grams)
+    values (v_product_composed_2, 1, 60, 20.00);
   insert into zz_ois_fixtures(key, value) values ('product_composed_2', v_product_composed_2::text);
 
-  -- Produtos CATALOG SEM nenhuma linha em product_filaments (nunca chamado
-  -- set_product_filaments para eles).
+  -- Produtos CATALOG SEM nenhuma linha em product_plates (nunca chamado
+  -- create_product_with_plates/update_product_full/set_product_production
+  -- para eles).
   v_product_incomplete_1 := public.create_product(
-    'TESTE OPS — Produto SEM composição 1', 'CATALOG', 'teste',
-    'produto sem filamento cadastrado', 40.00, 60, 20.00, 4, null, false, v_user_id
+    'TESTE OPS — Produto SEM estrutura 1', 'CATALOG', 'teste',
+    'produto sem estrutura produtiva cadastrada', 40.00, 60, 20.00, 4, null, false, v_user_id
   );
   insert into zz_ois_fixtures(key, value) values ('product_incomplete_1', v_product_incomplete_1::text);
 
   v_product_incomplete_2 := public.create_product(
-    'TESTE OPS — Produto SEM composição 2', 'CATALOG', 'teste',
-    'produto sem filamento cadastrado', 45.00, 60, 20.00, 4, null, false, v_user_id
+    'TESTE OPS — Produto SEM estrutura 2', 'CATALOG', 'teste',
+    'produto sem estrutura produtiva cadastrada', 45.00, 60, 20.00, 4, null, false, v_user_id
   );
   insert into zz_ois_fixtures(key, value) values ('product_incomplete_2', v_product_incomplete_2::text);
 
   insert into zz_ois_test_results(section, test_name, status, details)
-    values ('0', '0.0 setup: usuário/cliente/tipo de filamento/4 produtos TESTE criados', 'PASS',
+    values ('0', '0.0 setup: usuário/cliente/4 produtos TESTE criados (2 com plate, 2 sem nenhum)', 'PASS',
       'user_id=' || v_user_id || ' customer_id=' || v_customer_id);
 end $$;
 
@@ -127,7 +133,7 @@ end $$;
 -- efetivamente chamada pela Edge Function/create_order_with_payment)
 -- =============================================================================
 
--- 1.1 — CATALOG (com composição) → IN_PRODUCTION_QUEUE; um único registro
+-- 1.1 — CATALOG (com estrutura produtiva) → IN_PRODUCTION_QUEUE; um único registro
 -- de histórico (from_status null, to_status IN_PRODUCTION_QUEUE); nenhum
 -- histórico fictício de QUOTE/WAITING_APPROVAL/APPROVED; nenhuma approval.
 do $$
@@ -148,7 +154,7 @@ begin
 
   begin
     v_order_id := public.create_order(
-      v_customer_id, null, null, null, null, 0, 0, 'CATALOG com composição',
+      v_customer_id, null, null, null, null, 0, 0, 'CATALOG com estrutura produtiva',
       jsonb_build_array(jsonb_build_object(
         'item_type', 'CATALOG', 'product_id', v_product_id,
         'item_name', 'Item teste', 'quantity', 1, 'unit_price', 50
@@ -163,7 +169,7 @@ begin
       from public.approvals a join public.order_items oi on oi.id = a.order_item_id
       where oi.order_id = v_order_id;
     insert into zz_ois_test_results(section, test_name, status, details)
-      values ('1', '1.1 CATALOG com composição -> IN_PRODUCTION_QUEUE, histórico único direto, zero approval',
+      values ('1', '1.1 CATALOG com estrutura produtiva -> IN_PRODUCTION_QUEUE, histórico único direto, zero approval',
         case when v_order_status = 'IN_PRODUCTION_QUEUE' and v_history_count = 1
                 and v_history_from_status is null and v_history_to_status = 'IN_PRODUCTION_QUEUE'
                 and v_approval_count = 0
@@ -173,7 +179,7 @@ begin
         ' approval_count=' || v_approval_count);
   exception when others then
     insert into zz_ois_test_results(section, test_name, status, details)
-      values ('1', '1.1 CATALOG com composição -> IN_PRODUCTION_QUEUE', 'FAIL', sqlerrm);
+      values ('1', '1.1 CATALOG com estrutura produtiva -> IN_PRODUCTION_QUEUE', 'FAIL', sqlerrm);
   end;
 end $$;
 
@@ -208,7 +214,7 @@ begin
   end;
 end $$;
 
--- 1.3 — CATALOG (com composição) + SPOT → IN_PRODUCTION_QUEUE.
+-- 1.3 — CATALOG (com estrutura produtiva) + SPOT → IN_PRODUCTION_QUEUE.
 do $$
 declare
   v_user_id uuid;
@@ -234,7 +240,7 @@ begin
     );
     select order_status into v_order_status from public.orders where id = v_order_id;
     insert into zz_ois_test_results(section, test_name, status, details)
-      values ('1', '1.3 CATALOG (com composição) + SPOT -> IN_PRODUCTION_QUEUE',
+      values ('1', '1.3 CATALOG (com estrutura produtiva) + SPOT -> IN_PRODUCTION_QUEUE',
         case when v_order_status = 'IN_PRODUCTION_QUEUE' then 'PASS' else 'FAIL' end,
         'order_status=' || v_order_status);
   exception when others then
@@ -243,7 +249,7 @@ begin
   end;
 end $$;
 
--- 1.4 — Dois itens CATALOG, ambos com composição → IN_PRODUCTION_QUEUE.
+-- 1.4 — Dois itens CATALOG, ambos com estrutura produtiva → IN_PRODUCTION_QUEUE.
 do $$
 declare
   v_user_id uuid;
@@ -260,7 +266,7 @@ begin
 
   begin
     v_order_id := public.create_order(
-      v_customer_id, null, null, null, null, 0, 0, 'dois CATALOG com composição',
+      v_customer_id, null, null, null, null, 0, 0, 'dois CATALOG com estrutura produtiva',
       jsonb_build_array(
         jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_1,
           'item_name', 'Item 1', 'quantity', 1, 'unit_price', 50),
@@ -271,12 +277,12 @@ begin
     );
     select order_status into v_order_status from public.orders where id = v_order_id;
     insert into zz_ois_test_results(section, test_name, status, details)
-      values ('1', '1.4 dois itens CATALOG (ambos com composição) -> IN_PRODUCTION_QUEUE',
+      values ('1', '1.4 dois itens CATALOG (ambos com estrutura produtiva) -> IN_PRODUCTION_QUEUE',
         case when v_order_status = 'IN_PRODUCTION_QUEUE' then 'PASS' else 'FAIL' end,
         'order_status=' || v_order_status);
   exception when others then
     insert into zz_ois_test_results(section, test_name, status, details)
-      values ('1', '1.4 dois CATALOG com composição -> IN_PRODUCTION_QUEUE', 'FAIL', sqlerrm);
+      values ('1', '1.4 dois CATALOG com estrutura produtiva -> IN_PRODUCTION_QUEUE', 'FAIL', sqlerrm);
   end;
 end $$;
 
@@ -313,9 +319,9 @@ begin
   end;
 end $$;
 
--- 1.6 — CATALOG (SEM composição) + CUSTOM → QUOTE, e NÃO bloqueado por
--- composição (decisão de escopo documentada na migration: composição só é
--- exigida quando o pedido nasceria em IN_PRODUCTION_QUEUE).
+-- 1.6 — CATALOG (SEM estrutura produtiva) + CUSTOM → QUOTE, e NÃO bloqueado
+-- por estrutura (decisão de escopo documentada na migration: estrutura
+-- produtiva só é exigida quando o pedido nasceria em IN_PRODUCTION_QUEUE).
 do $$
 declare
   v_user_id uuid;
@@ -330,7 +336,7 @@ begin
 
   begin
     v_order_id := public.create_order(
-      v_customer_id, null, null, null, null, 0, 0, 'CATALOG sem composição + CUSTOM',
+      v_customer_id, null, null, null, null, 0, 0, 'CATALOG sem estrutura produtiva + CUSTOM',
       jsonb_build_array(
         jsonb_build_object('item_type', 'CATALOG', 'product_id', v_product_id,
           'item_name', 'Item CATALOG teste', 'quantity', 1, 'unit_price', 40),
@@ -341,12 +347,12 @@ begin
     );
     select order_status into v_order_status from public.orders where id = v_order_id;
     insert into zz_ois_test_results(section, test_name, status, details)
-      values ('1', '1.6 CATALOG (SEM composição) + CUSTOM -> QUOTE, nunca bloqueado por composição',
+      values ('1', '1.6 CATALOG (SEM estrutura produtiva) + CUSTOM -> QUOTE, nunca bloqueado por estrutura',
         case when v_order_status = 'QUOTE' then 'PASS' else 'FAIL' end,
         'order_status=' || v_order_status);
   exception when others then
     insert into zz_ois_test_results(section, test_name, status, details)
-      values ('1', '1.6 CATALOG sem composição + CUSTOM -> QUOTE', 'FAIL', sqlerrm);
+      values ('1', '1.6 CATALOG sem estrutura produtiva + CUSTOM -> QUOTE', 'FAIL', sqlerrm);
   end;
 end $$;
 
@@ -384,7 +390,7 @@ begin
 end $$;
 
 -- =============================================================================
--- SEÇÃO 2 — validação de composição CATALOG (bloqueio, zero órfão)
+-- SEÇÃO 2 — validação de estrutura produtiva CATALOG (bloqueio, zero órfão)
 -- =============================================================================
 
 -- 2.1 — CATALOG sem product_id é REJEITADO antes de qualquer escrita.
@@ -418,14 +424,16 @@ begin
   end;
 end $$;
 
--- 2.2 — CATALOG sem composição (produto existe, mas sem product_filaments)
--- é REJEITADO com o marcador ORDER_CATALOG_MISSING_COMPOSITION:, nenhum
--- pedido/item órfão.
+-- 2.2 — CATALOG sem estrutura produtiva (produto existe, mas sem nenhuma
+-- linha em product_plates) é REJEITADO com o marcador
+-- ORDER_CATALOG_MISSING_PRODUCTION_STRUCTURE: (nome atual do marcador a
+-- partir da migration 20260829180000 — substitui
+-- ORDER_CATALOG_MISSING_COMPOSITION:), nenhum pedido/item órfão.
 -- v_items_before/v_items_after comparam a CONTAGEM (nunca um valor
 -- absoluto): o produto_incomplete_1 já pode ter um order_item legítimo de
 -- um teste anterior desta mesma seção (1.6, CATALOG+CUSTOM, que não exige
--- composição por decisão de escopo) — um valor absoluto de 0 seria um
--- falso FAIL contra esse item legítimo e preexistente, não um órfão real.
+-- estrutura produtiva por decisão de escopo) — um valor absoluto de 0 seria
+-- um falso FAIL contra esse item legítimo e preexistente, não um órfão real.
 do $$
 declare
   v_user_id uuid;
@@ -444,7 +452,7 @@ begin
 
   begin
     perform public.create_order(
-      v_customer_id, null, null, null, null, 0, 0, 'CATALOG sem composição sozinho',
+      v_customer_id, null, null, null, null, 0, 0, 'CATALOG sem estrutura produtiva sozinho',
       jsonb_build_array(jsonb_build_object(
         'item_type', 'CATALOG', 'product_id', v_product_id,
         'item_name', 'Item teste', 'quantity', 1, 'unit_price', 40
@@ -452,14 +460,14 @@ begin
       v_user_id, null
     );
     insert into zz_ois_test_results(section, test_name, status, details)
-      values ('2', '2.2 CATALOG sem composição é REJEITADO (ORDER_CATALOG_MISSING_COMPOSITION:), zero órfão', 'FAIL', 'não levantou exceção');
+      values ('2', '2.2 CATALOG sem estrutura produtiva é REJEITADO (ORDER_CATALOG_MISSING_PRODUCTION_STRUCTURE:), zero órfão', 'FAIL', 'não levantou exceção');
   exception when others then
     select count(*) into v_orders_after from public.orders where customer_id = v_customer_id;
     select count(*) into v_items_after from public.order_items where product_id = v_product_id;
     insert into zz_ois_test_results(section, test_name, status, details)
-      values ('2', '2.2 CATALOG sem composição é REJEITADO (ORDER_CATALOG_MISSING_COMPOSITION:), zero órfão',
-        case when sqlerrm like 'ORDER_CATALOG_MISSING_COMPOSITION:%'
-                and sqlerrm like '%TESTE OPS — Produto SEM composição 1%'
+      values ('2', '2.2 CATALOG sem estrutura produtiva é REJEITADO (ORDER_CATALOG_MISSING_PRODUCTION_STRUCTURE:), zero órfão',
+        case when sqlerrm like 'ORDER_CATALOG_MISSING_PRODUCTION_STRUCTURE:%'
+                and sqlerrm like '%TESTE OPS — Produto SEM estrutura 1%'
                 and v_orders_after = v_orders_before and v_items_after = v_items_before
              then 'PASS' else 'FAIL' end,
         sqlerrm || ' orders_before=' || v_orders_before || ' orders_after=' || v_orders_after ||
@@ -493,12 +501,12 @@ begin
       v_user_id, null
     );
     insert into zz_ois_test_results(section, test_name, status, details)
-      values ('2', '2.3 dois produtos sem composição -> AMBOS os nomes aparecem na mesma mensagem', 'FAIL', 'não levantou exceção');
+      values ('2', '2.3 dois produtos sem estrutura produtiva -> AMBOS os nomes aparecem na mesma mensagem', 'FAIL', 'não levantou exceção');
   exception when others then
     insert into zz_ois_test_results(section, test_name, status, details)
-      values ('2', '2.3 dois produtos sem composição -> AMBOS os nomes aparecem na mesma mensagem',
-        case when sqlerrm like '%TESTE OPS — Produto SEM composição 1%'
-                and sqlerrm like '%TESTE OPS — Produto SEM composição 2%'
+      values ('2', '2.3 dois produtos sem estrutura produtiva -> AMBOS os nomes aparecem na mesma mensagem',
+        case when sqlerrm like '%TESTE OPS — Produto SEM estrutura 1%'
+                and sqlerrm like '%TESTE OPS — Produto SEM estrutura 2%'
              then 'PASS' else 'FAIL' end,
         sqlerrm);
   end;
@@ -766,9 +774,19 @@ begin
     not has_function_privilege('authenticated', 'public.determine_order_initial_status(jsonb)', 'EXECUTE')
     and not has_function_privilege('anon', 'public.determine_order_initial_status(jsonb)', 'EXECUTE')
     and not has_function_privilege('service_role', 'public.determine_order_initial_status(jsonb)', 'EXECUTE')
+    -- validate_catalog_composition_for_creation (migration 20260829150000):
+    -- preservada no banco, mas sem nenhum grant desde sempre — continua sem
+    -- nenhum EXECUTE, mesmo não sendo mais chamada por create_order() a
+    -- partir de 20260829180000 (pendente).
     and not has_function_privilege('authenticated', 'public.validate_catalog_composition_for_creation(jsonb)', 'EXECUTE')
     and not has_function_privilege('anon', 'public.validate_catalog_composition_for_creation(jsonb)', 'EXECUTE')
     and not has_function_privilege('service_role', 'public.validate_catalog_composition_for_creation(jsonb)', 'EXECUTE')
+    -- validate_catalog_production_structure_for_creation (migration
+    -- 20260829180000, pendente) — a função efetivamente chamada por
+    -- create_order() a partir dessa migration; também zero grants (interna).
+    and not has_function_privilege('authenticated', 'public.validate_catalog_production_structure_for_creation(jsonb)', 'EXECUTE')
+    and not has_function_privilege('anon', 'public.validate_catalog_production_structure_for_creation(jsonb)', 'EXECUTE')
+    and not has_function_privilege('service_role', 'public.validate_catalog_production_structure_for_creation(jsonb)', 'EXECUTE')
     and not has_function_privilege('authenticated', 'public.create_order(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid)', 'EXECUTE')
     and has_function_privilege('service_role', 'public.create_order(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid)', 'EXECUTE')
     and not has_function_privilege('authenticated', 'public.create_order(uuid,uuid,uuid,date,text,numeric,numeric,text,jsonb,uuid,text)', 'EXECUTE')
@@ -778,7 +796,7 @@ begin
     and has_function_privilege('service_role', 'public.change_order_status(uuid,text,uuid,text)', 'EXECUTE')
   into v_ok;
   insert into zz_ois_test_results(section, test_name, status, details)
-    values ('5', '5.1 helpers internos sem NENHUM grant; as 2 sobrecargas de create_order e change_order_status continuam exclusivas de service_role',
+    values ('5', '5.1 helpers internos (antigo e atual) sem NENHUM grant; as 2 sobrecargas de create_order e change_order_status continuam exclusivas de service_role',
       case when v_ok then 'PASS' else 'FAIL' end, 'v_ok=' || v_ok);
 exception when others then
   insert into zz_ois_test_results(section, test_name, status, details)
@@ -861,7 +879,7 @@ begin
   end;
 end $$;
 
--- 6.3 — CATALOG (com composição) + SPOT sem tempo do SPOT ->
+-- 6.3 — CATALOG (com estrutura produtiva) + SPOT sem tempo do SPOT ->
 -- IN_PRODUCTION_QUEUE (mistura, mesma checagem da Seção 1.3, agora com
 -- asserção explícita do search_time_status).
 do $$
@@ -889,7 +907,7 @@ begin
     );
     select order_status into v_order_status from public.orders where id = v_order_id;
     insert into zz_ois_test_results(section, test_name, status, details)
-      values ('6', '6.3 CATALOG (com composição) + SPOT sem tempo -> IN_PRODUCTION_QUEUE',
+      values ('6', '6.3 CATALOG (com estrutura produtiva) + SPOT sem tempo -> IN_PRODUCTION_QUEUE',
         case when v_order_status = 'IN_PRODUCTION_QUEUE' then 'PASS' else 'FAIL' end,
         'order_status=' || v_order_status);
   exception when others then
@@ -1040,6 +1058,221 @@ begin
     insert into zz_ois_test_results(section, test_name, status, details)
       values ('6', '6.6 cancelamento continua bloqueado após IN_PRODUCTION', 'FAIL', sqlerrm);
   end;
+end $$;
+
+-- =============================================================================
+-- SEÇÃO 7 — production_colors (migration 20260829180000, ainda não
+-- aplicada): SEMPRE opcional na criação, nunca altera o status inicial, e o
+-- snapshot de plates (order_item_plates) é criado corretamente a partir do
+-- Produto no momento da criação. Nenhum destes testes depende de nenhum
+-- fixture das Seções anteriores — setup próprio (7.0).
+-- =============================================================================
+
+-- 7.0 — setup: 1 tipo de filamento TESTE ativo e 1 Produto CATALOG TESTE
+-- com 2 plates (create_product_with_plates, contrato atual — peso direto,
+-- sem filamento no cadastro).
+do $$
+declare
+  v_user_id uuid;
+  v_filament_type_id uuid;
+  v_product_id uuid;
+begin
+  select value::uuid into v_user_id from zz_ois_fixtures where key = 'user_id';
+
+  v_filament_type_id := (public.create_filament_type(
+    'PLA', 'TESTE Marca Cores Status Inicial', 'Sólida', 'Preto', null, null, true, null, v_user_id
+  )).id;
+  insert into zz_ois_fixtures(key, value) values ('filament_type_id', v_filament_type_id::text);
+
+  v_product_id := public.create_product_with_plates(
+    'TESTE OPS — Produto p/ cores (2 plates)', 'CATALOG', jsonb_build_array('teste'), null,
+    70.00, null, true,
+    jsonb_build_array(
+      jsonb_build_object('production_time_seconds', 3600, 'weight_grams', 40),
+      jsonb_build_object('production_time_seconds', 1800, 'weight_grams', 10)
+    ),
+    null, null, '[]'::jsonb, '[]'::jsonb, v_user_id
+  );
+  insert into zz_ois_fixtures(key, value) values ('product_2plates', v_product_id::text);
+
+  insert into zz_ois_test_results(section, test_name, status, details)
+    values ('7', '7.0 setup: tipo de filamento + Produto com 2 plates criados', 'PASS',
+      'filament_type_id=' || v_filament_type_id || ' product_2plates=' || v_product_id);
+end $$;
+
+-- 7.1 — CATALOG sem NENHUMA cor no payload -> entra em IN_PRODUCTION_QUEUE
+-- normalmente; zero linhas em order_item_unit_plate_filaments (nenhum
+-- vínculo de cor é inventado quando nada foi enviado).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_order_item_id uuid;
+  v_order_status text;
+  v_color_count integer;
+begin
+  select value::uuid into v_user_id from zz_ois_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ois_fixtures where key = 'customer_id';
+  select value::uuid into v_product_id from zz_ois_fixtures where key = 'product_2plates';
+
+  begin
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'CATALOG sem cores',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item sem cores', 'quantity', 2, 'unit_price', 70
+      )),
+      v_user_id
+    );
+    select order_status into v_order_status from public.orders where id = v_order_id;
+    select id into v_order_item_id from public.order_items where order_id = v_order_id;
+    select count(*) into v_color_count from public.order_item_unit_plate_filaments where order_item_id = v_order_item_id;
+
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('7', '7.1 CATALOG sem cores -> IN_PRODUCTION_QUEUE normalmente, zero vínculo de cor inventado',
+        case when v_order_status = 'IN_PRODUCTION_QUEUE' and v_color_count = 0 then 'PASS' else 'FAIL' end,
+        'order_status=' || v_order_status || ' color_count=' || v_color_count);
+  exception when others then
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('7', '7.1 CATALOG sem cores', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 7.2 — CATALOG com cores PARCIAIS (quantity=2, 2 plates = 4 combinações
+-- possíveis, só 1 enviada) -> ainda entra em IN_PRODUCTION_QUEUE (cores
+-- parciais nunca bloqueiam a criação nem a entrada na Fila).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_filament_type_id uuid;
+  v_order_id uuid;
+  v_order_item_id uuid;
+  v_order_status text;
+  v_color_count integer;
+begin
+  select value::uuid into v_user_id from zz_ois_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ois_fixtures where key = 'customer_id';
+  select value::uuid into v_product_id from zz_ois_fixtures where key = 'product_2plates';
+  select value::uuid into v_filament_type_id from zz_ois_fixtures where key = 'filament_type_id';
+
+  begin
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'CATALOG com cores parciais',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item cores parciais', 'quantity', 2, 'unit_price', 70,
+        'production_colors', jsonb_build_array(jsonb_build_object(
+          'plate_number', 1, 'unit_number', 1, 'filament_type_ids', jsonb_build_array(v_filament_type_id)
+        ))
+      )),
+      v_user_id
+    );
+    select order_status into v_order_status from public.orders where id = v_order_id;
+    select id into v_order_item_id from public.order_items where order_id = v_order_id;
+    select count(*) into v_color_count from public.order_item_unit_plate_filaments where order_item_id = v_order_item_id;
+
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('7', '7.2 CATALOG com cores PARCIAIS (1 de 4 combinações unidade/plate) -> IN_PRODUCTION_QUEUE normalmente',
+        case when v_order_status = 'IN_PRODUCTION_QUEUE' and v_color_count = 1 then 'PASS' else 'FAIL' end,
+        'order_status=' || v_order_status || ' color_count=' || v_color_count);
+  exception when others then
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('7', '7.2 CATALOG com cores parciais', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 7.3 — cores NUNCA alteram o status inicial: um pedido idêntico, mas com
+-- TODAS as cores preenchidas (2 unidades x 2 plates = 4 combinações),
+-- nasce no MESMO status (IN_PRODUCTION_QUEUE) que o pedido sem nenhuma cor
+-- (7.1) e o de cores parciais (7.2) — determine_order_initial_status()
+-- nunca lê production_colors.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_filament_type_id uuid;
+  v_order_id uuid;
+  v_order_status text;
+begin
+  select value::uuid into v_user_id from zz_ois_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ois_fixtures where key = 'customer_id';
+  select value::uuid into v_product_id from zz_ois_fixtures where key = 'product_2plates';
+  select value::uuid into v_filament_type_id from zz_ois_fixtures where key = 'filament_type_id';
+
+  begin
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'CATALOG com cores completas',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item cores completas', 'quantity', 2, 'unit_price', 70,
+        'production_colors', jsonb_build_array(
+          jsonb_build_object('plate_number', 1, 'unit_number', 1, 'filament_type_ids', jsonb_build_array(v_filament_type_id)),
+          jsonb_build_object('plate_number', 2, 'unit_number', 1, 'filament_type_ids', jsonb_build_array(v_filament_type_id)),
+          jsonb_build_object('plate_number', 1, 'unit_number', 2, 'filament_type_ids', jsonb_build_array(v_filament_type_id)),
+          jsonb_build_object('plate_number', 2, 'unit_number', 2, 'filament_type_ids', jsonb_build_array(v_filament_type_id))
+        )
+      )),
+      v_user_id
+    );
+    select order_status into v_order_status from public.orders where id = v_order_id;
+
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('7', '7.3 cores COMPLETAS na criação: MESMO status inicial (IN_PRODUCTION_QUEUE) que sem cores (7.1) e cores parciais (7.2) — status nunca depende de cor',
+        case when v_order_status = 'IN_PRODUCTION_QUEUE' then 'PASS' else 'FAIL' end,
+        'order_status=' || v_order_status);
+  exception when others then
+    insert into zz_ois_test_results(section, test_name, status, details)
+      values ('7', '7.3 cores completas -> status inicial', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- 7.4 — snapshot de plates (order_item_plates) criado corretamente: 2
+-- linhas, plate_number/weight_grams/production_time_seconds idênticos ao
+-- Produto no momento da criação (40g/3600s no plate 1, 10g/1800s no plate 2).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_order_item_id uuid;
+  v_snapshot_count integer;
+  v_weight_1 numeric;
+  v_time_1 integer;
+  v_weight_2 numeric;
+  v_time_2 integer;
+begin
+  select value::uuid into v_user_id from zz_ois_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_ois_fixtures where key = 'customer_id';
+  select value::uuid into v_product_id from zz_ois_fixtures where key = 'product_2plates';
+
+  v_order_id := public.create_order(
+    v_customer_id, null, null, null, null, 0, 0, 'CATALOG snapshot de plates',
+    jsonb_build_array(jsonb_build_object(
+      'item_type', 'CATALOG', 'product_id', v_product_id,
+      'item_name', 'Item snapshot', 'quantity', 1, 'unit_price', 70
+    )),
+    v_user_id
+  );
+  select id into v_order_item_id from public.order_items where order_id = v_order_id;
+
+  select count(*) into v_snapshot_count from public.order_item_plates where order_item_id = v_order_item_id;
+  select weight_grams, production_time_seconds into v_weight_1, v_time_1
+    from public.order_item_plates where order_item_id = v_order_item_id and plate_number = 1;
+  select weight_grams, production_time_seconds into v_weight_2, v_time_2
+    from public.order_item_plates where order_item_id = v_order_item_id and plate_number = 2;
+
+  insert into zz_ois_test_results(section, test_name, status, details)
+    values ('7', '7.4 snapshot de plates criado corretamente: 2 linhas, peso/tempo idênticos ao Produto (40g/3600s, 10g/1800s)',
+      case when v_snapshot_count = 2 and v_weight_1 = 40 and v_time_1 = 3600 and v_weight_2 = 10 and v_time_2 = 1800
+           then 'PASS' else 'FAIL' end,
+      'snapshot_count=' || v_snapshot_count || ' plate1=' || v_weight_1 || 'g/' || v_time_1 || 's' ||
+      ' plate2=' || v_weight_2 || 'g/' || v_time_2 || 's');
 end $$;
 
 -- =============================================================================

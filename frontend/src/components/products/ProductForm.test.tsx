@@ -152,6 +152,39 @@ describe('ProductForm', () => {
     expect(screen.getByRole('heading', { name: 'Acessórios e Embalagem' })).toBeInTheDocument()
   })
 
+  // Separação visual das seções e o grid de 2 colunas dos plates (layout
+  // aprovado nesta rodada) — jsdom não mede altura/largura real de
+  // viewport, então este teste verifica só a ESTRUTURA/CLASSES esperadas
+  // (cartão com borda+fundo na paleta da marca; grid responsivo
+  // grid-cols-1/md:grid-cols-2); a confirmação visual final (sem rolagem
+  // vertical própria com 1-2 plates a 1920×1080/100%, comportamento com 3+
+  // plates) depende de validação manual em navegador real, registrada
+  // separadamente no roadmap — nunca assumida como provada só por este teste.
+  it('cada uma das 3 seções tem um cartão visualmente distinto (borda + fundo na paleta da marca)', () => {
+    renderForm()
+
+    for (const heading of [
+      screen.getByRole('heading', { name: 'Dados Gerais' }),
+      screen.getByRole('heading', { name: 'Composição' }),
+      screen.getByRole('heading', { name: 'Acessórios e Embalagem' }),
+    ]) {
+      const card = heading.parentElement as HTMLElement
+      expect(card).toHaveClass('rounded-xl')
+      expect(card).toHaveClass('border')
+      expect(card.className).toMatch(/border-brand-primary/)
+      expect(card.className).toMatch(/bg-brand-primary-soft/)
+    }
+  })
+
+  it('o grid de plates usa 1 coluna em telas estreitas e 2 colunas no desktop (md:grid-cols-2)', () => {
+    renderForm()
+
+    const plateLabel = screen.getByText('Plate 1')
+    const grid = plateLabel.closest('.grid') as HTMLElement
+    expect(grid).toHaveClass('grid-cols-1')
+    expect(grid).toHaveClass('md:grid-cols-2')
+  })
+
   it('renderiza os campos de Dados Gerais, sem Peso/Tempo soltos (migraram para Composição) e sem nenhum campo de filamento', () => {
     renderForm()
 
