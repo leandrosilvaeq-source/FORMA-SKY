@@ -32,11 +32,17 @@ const {
 vi.mock('@/hooks/useProducts', () => ({ useProducts: useProductsMock }))
 vi.mock('@/hooks/useAccessories', () => ({ useAccessories: useAccessoriesMock }))
 vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
-vi.mock('@/hooks/useProductComposition', () => ({ useProductComposition: useProductCompositionMock }))
-vi.mock('@/hooks/useAllProductCategories', () => ({ useAllProductCategories: useAllProductCategoriesMock }))
+vi.mock('@/hooks/useProductComposition', () => ({
+  useProductComposition: useProductCompositionMock,
+}))
+vi.mock('@/hooks/useAllProductCategories', () => ({
+  useAllProductCategories: useAllProductCategoriesMock,
+}))
 vi.mock('@/hooks/useProductCategories', () => ({ useProductCategories: useProductCategoriesMock }))
 vi.mock('@/hooks/useProductPlates', () => ({ useProductPlates: useProductPlatesMock }))
-vi.mock('@/hooks/useProductPriceHistory', () => ({ useProductPriceHistory: useProductPriceHistoryMock }))
+vi.mock('@/hooks/useProductPriceHistory', () => ({
+  useProductPriceHistory: useProductPriceHistoryMock,
+}))
 vi.mock('sonner', () => ({ toast: toastMock }))
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
 
@@ -89,7 +95,13 @@ const packagingItem = {
   updated_at: '',
 }
 
-const productAccessoryRow = { id: 'pa1', product_id: '1', accessory_id: 'a1', quantity: 2, created_at: '' }
+const productAccessoryRow = {
+  id: 'pa1',
+  product_id: '1',
+  accessory_id: 'a1',
+  quantity: 2,
+  created_at: '',
+}
 
 // Estrutura produtiva por plates (migration 20260829180000, ainda não
 // aplicada) — fixture "já migrada": o Produto tem 1 plate real com
@@ -114,7 +126,11 @@ function renderPage() {
 
 function mockProducts(
   list: Product[],
-  overrides: Partial<{ isLoading: boolean; error: unknown; refetch: ReturnType<typeof vi.fn> }> = {},
+  overrides: Partial<{
+    isLoading: boolean
+    error: unknown
+    refetch: ReturnType<typeof vi.fn>
+  }> = {},
   createMock: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined),
   changePriceMock: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined),
   updateMock: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(list[0]),
@@ -172,7 +188,9 @@ async function applySort(
 // único por linha nos fixtures usados aqui, independente de qual coluna
 // está de fato ordenando.
 function getVisibleProductNamesInOrder(): string[] {
-  const dataRows = screen.getAllByRole('row').filter((row) => within(row).queryAllByRole('cell').length > 0)
+  const dataRows = screen
+    .getAllByRole('row')
+    .filter((row) => within(row).queryAllByRole('cell').length > 0)
   return dataRows.map((row) => within(row).getAllByRole('cell')[0].textContent ?? '')
 }
 
@@ -192,7 +210,10 @@ describe('ProductsPage', () => {
     refetchMock = vi.fn()
     saveCompositionMock = vi.fn().mockResolvedValue(undefined)
 
-    useAuthMock.mockReturnValue({ session: { user: { email: 'op@formasky.com' } }, signOut: vi.fn() })
+    useAuthMock.mockReturnValue({
+      session: { user: { email: 'op@formasky.com' } },
+      signOut: vi.fn(),
+    })
     useProductsMock.mockReturnValue({
       products: [product],
       isLoading: false,
@@ -211,8 +232,18 @@ describe('ProductsPage', () => {
       error: null,
       retry: vi.fn(),
     })
-    useAccessoriesMock.mockReturnValue({ accessories: [accessory], isLoading: false, error: null, refetch: vi.fn() })
-    usePackagingMock.mockReturnValue({ packaging: [packagingItem], isLoading: false, error: null, refetch: vi.fn() })
+    useAccessoriesMock.mockReturnValue({
+      accessories: [accessory],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+    usePackagingMock.mockReturnValue({
+      packaging: [packagingItem],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
     useProductCompositionMock.mockReturnValue({
       status: 'success',
       accessories: [productAccessoryRow],
@@ -241,7 +272,9 @@ describe('ProductsPage', () => {
     // "Decoração"), então um valor estático padrão basta.
     useProductCategoriesMock.mockReturnValue({
       status: 'success',
-      categories: [{ id: 'pc1', product_id: '1', category: 'Decoração', position: 1, created_at: '' }],
+      categories: [
+        { id: 'pc1', product_id: '1', category: 'Decoração', position: 1, created_at: '' },
+      ],
       isLoading: false,
       error: null,
       retry: vi.fn(),
@@ -286,7 +319,12 @@ describe('ProductsPage', () => {
     useProductsMock.mockReturnValue({
       products: [
         { ...product, id: '1', name: 'Chaveiro', product_type: 'CATALOG' },
-        { ...product, id: '2', name: 'Miniatura Personalizada Reutilizável', product_type: 'CUSTOM' },
+        {
+          ...product,
+          id: '2',
+          name: 'Miniatura Personalizada Reutilizável',
+          product_type: 'CUSTOM',
+        },
         { ...product, id: '3', name: 'Peça Spot Reutilizável', product_type: 'SPOT' },
       ],
       isLoading: false,
@@ -306,7 +344,14 @@ describe('ProductsPage', () => {
   describe('colunas Tipo, Tempo de Produção e Peso total (g)', () => {
     it('exibe Tipo (Catálogo), Tempo de Produção (HH:MM:SS) e Peso total (g) quando preenchidos', () => {
       useProductsMock.mockReturnValue({
-        products: [{ ...product, product_type: 'CATALOG', default_print_time_seconds: 5400, default_weight_grams: 45 }],
+        products: [
+          {
+            ...product,
+            product_type: 'CATALOG',
+            default_print_time_seconds: 5400,
+            default_weight_grams: 45,
+          },
+        ],
         isLoading: false,
         error: null,
         refetch: refetchMock,
@@ -376,7 +421,9 @@ describe('ProductsPage', () => {
       expect(within(row).getByRole('link', { name: 'Chaveiro' })).toBeInTheDocument()
       expect(within(row).getByRole('switch', { name: 'Desativar Chaveiro' })).toBeInTheDocument()
       expect(within(row).getByRole('button', { name: /^editar produto$/i })).toBeInTheDocument()
-      expect(within(row).getByRole('button', { name: /^acessórios e embalagem$/i })).toBeInTheDocument()
+      expect(
+        within(row).getByRole('button', { name: /^acessórios e embalagem$/i }),
+      ).toBeInTheDocument()
     })
 
     it('clicar no nome não aciona o Switch nem outra ação da linha', async () => {
@@ -470,7 +517,9 @@ describe('ProductsPage', () => {
       const toggle = screen.getByRole('switch', { name: 'Desativar Chaveiro' })
       await user.click(toggle)
 
-      await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Falha ao atualizar produto.'))
+      await waitFor(() =>
+        expect(toastMock.error).toHaveBeenCalledWith('Falha ao atualizar produto.'),
+      )
       expect(toggle).not.toHaveAttribute('aria-disabled', 'true')
     })
 
@@ -480,7 +529,9 @@ describe('ProductsPage', () => {
       const row = screen.getByRole('row', { name: /chaveiro/i })
       expect(within(row).getByRole('switch', { name: 'Desativar Chaveiro' })).toBeInTheDocument()
       expect(within(row).getByRole('button', { name: /^editar produto$/i })).toBeInTheDocument()
-      expect(within(row).getByRole('button', { name: /^acessórios e embalagem$/i })).toBeInTheDocument()
+      expect(
+        within(row).getByRole('button', { name: /^acessórios e embalagem$/i }),
+      ).toBeInTheDocument()
     })
   })
 
@@ -497,7 +548,9 @@ describe('ProductsPage', () => {
     })
     renderPage()
 
-    const dataRows = screen.getAllByRole('row').filter((row) => within(row).queryAllByRole('cell').length > 0)
+    const dataRows = screen
+      .getAllByRole('row')
+      .filter((row) => within(row).queryAllByRole('cell').length > 0)
     expect(dataRows).toHaveLength(2)
     for (const row of dataRows) {
       expect(row).toHaveClass('odd:bg-brand-primary-soft/50')
@@ -512,32 +565,55 @@ describe('ProductsPage', () => {
     expect(headerRow).not.toHaveClass('even:bg-white')
   })
 
-  // Largura ampliada dos diálogos de Novo/Editar produto (~95vw, layout
-  // aprovado nesta rodada) — jsdom não mede largura real de viewport, só
-  // confirma que as classes de largura estão presentes; a ausência de
-  // rolagem vertical própria com 1-2 plates a 1920×1080/100% continua
-  // dependendo de validação manual em navegador real (registrada no
-  // roadmap, nunca assumida como provada só por este teste).
-  it('o diálogo "Novo produto" usa largura ampliada (w-[95vw], max-w-[1400px])', async () => {
+  // Largura ampliada dos diálogos de Novo/Editar produto (rodada corretiva
+  // 2026-08-30 — a janela "continuava estreita" na validação manual porque
+  // o max-w-[1400px] anterior, sem breakpoint, nunca vencia o sm:max-w-sm
+  // padrão de DialogContent — ver comentário de PRODUCT_FORM_DIALOG_CLASSNAME
+  // em ProductsPage.tsx). jsdom não mede largura real de viewport: este
+  // teste confirma que a classe correta está presente E que a classe
+  // padrão sm:max-w-sm NÃO sobrevive no className final (prova de que o
+  // conflito foi resolvido pelo twMerge, não só mascarado); a confirmação
+  // visual final (largura efetiva ~96vw/1600px num navegador real) continua
+  // dependendo de validação manual, registrada no roadmap.
+  it('o diálogo "Novo produto" usa largura ampliada (w-[96vw], sm:max-w-[1600px]) e nunca o padrão sm:max-w-sm', async () => {
     const user = userEvent.setup()
     renderPage()
 
     await user.click(screen.getByRole('button', { name: /novo produto/i }))
 
     const dialog = screen.getByRole('dialog', { name: /novo produto/i })
-    expect(dialog).toHaveClass('w-[95vw]')
-    expect(dialog).toHaveClass('max-w-[1400px]')
+    expect(dialog).toHaveClass('w-[96vw]')
+    expect(dialog).toHaveClass('sm:max-w-[1600px]')
+    expect(dialog).not.toHaveClass('sm:max-w-sm')
+    expect(dialog).not.toHaveClass('w-full')
   })
 
-  it('o diálogo "Editar produto" usa largura ampliada (w-[95vw], max-w-[1400px])', async () => {
+  it('o diálogo "Editar produto" usa largura ampliada (w-[96vw], sm:max-w-[1600px]) e nunca o padrão sm:max-w-sm', async () => {
     const user = userEvent.setup()
     renderPage()
 
     await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
 
     const dialog = screen.getByRole('dialog', { name: /editar produto/i })
-    expect(dialog).toHaveClass('w-[95vw]')
-    expect(dialog).toHaveClass('max-w-[1400px]')
+    expect(dialog).toHaveClass('w-[96vw]')
+    expect(dialog).toHaveClass('sm:max-w-[1600px]')
+    expect(dialog).not.toHaveClass('sm:max-w-sm')
+    expect(dialog).not.toHaveClass('w-full')
+  })
+
+  it('Novo produto e Editar produto usam exatamente a mesma largura', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: /novo produto/i }))
+    const createDialog = screen.getByRole('dialog', { name: /novo produto/i })
+    const createClassName = createDialog.className
+    await user.click(within(createDialog).getByRole('button', { name: /^cancelar$/i }))
+
+    await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+    const editDialog = screen.getByRole('dialog', { name: /editar produto/i })
+
+    expect(editDialog.className).toBe(createClassName)
   })
 
   it('opens the dialog, submits a new product with the bank-style price and shows a success toast', async () => {
@@ -615,7 +691,9 @@ describe('ProductsPage', () => {
     await user.type(screen.getByLabelText(/novo preço/i), '1500')
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
-    await waitFor(() => expect(changePriceMock).toHaveBeenCalledWith('1', { new_price: 15, reason: null }))
+    await waitFor(() =>
+      expect(changePriceMock).toHaveBeenCalledWith('1', { new_price: 15, reason: null }),
+    )
     expect(toastMock.success).toHaveBeenCalledWith('Preço atualizado.')
   })
 
@@ -632,7 +710,9 @@ describe('ProductsPage', () => {
     await user.paste('15,50')
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
-    await waitFor(() => expect(changePriceMock).toHaveBeenCalledWith('1', { new_price: 15.5, reason: null }))
+    await waitFor(() =>
+      expect(changePriceMock).toHaveBeenCalledWith('1', { new_price: 15.5, reason: null }),
+    )
   })
 
   describe('Editar produto — formulário completo por plates', () => {
@@ -643,10 +723,16 @@ describe('ProductsPage', () => {
       await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
 
       expect(screen.getByLabelText('Nome')).toHaveValue('Chaveiro')
-      expect(screen.getByRole('checkbox', { name: 'Decoração' })).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByRole('checkbox', { name: 'Decoração' })).toHaveAttribute(
+        'aria-checked',
+        'true',
+      )
       expect(screen.getByText('Plate 1')).toBeInTheDocument()
       expect(screen.getAllByLabelText('Peso (g)')[0]).toHaveValue('40')
-      expect(screen.getByText(/Ímã 6x2 · Acessório · Qtd\. 2/)).toBeInTheDocument()
+      expect(screen.getByRole('combobox', { name: 'Acessório' })).toHaveTextContent('Ímã 6x2')
+      expect(screen.getByRole('combobox', { name: 'Quantidade do acessório' })).toHaveTextContent(
+        '2',
+      )
     })
 
     it('não exibe mais o campo de Preço editável nesta seção — o preço continua só na seção "Preço"', async () => {
@@ -779,7 +865,13 @@ describe('ProductsPage', () => {
         status: 'success',
         plates: [
           productPlateRow,
-          { ...productPlateRow, id: 'pp2', plate_number: 2, production_time_seconds: 1800, weight_grams: 10 },
+          {
+            ...productPlateRow,
+            id: 'pp2',
+            plate_number: 2,
+            production_time_seconds: 1800,
+            weight_grams: 10,
+          },
         ],
         isLoading: false,
         error: null,
@@ -796,7 +888,13 @@ describe('ProductsPage', () => {
 
     it('carrega ajustes manuais pré-existentes do Produto (colunas de override)', async () => {
       useProductsMock.mockReturnValue({
-        products: [{ ...product, production_weight_manual_override_grams: 55, production_time_manual_override_seconds: null }],
+        products: [
+          {
+            ...product,
+            production_weight_manual_override_grams: 55,
+            production_time_manual_override_seconds: null,
+          },
+        ],
         isLoading: false,
         error: null,
         refetch: refetchMock,
@@ -831,7 +929,10 @@ describe('ProductsPage', () => {
     it('exibe o histórico, mais recente primeiro (ordem já vem do hook)', async () => {
       useProductPriceHistoryMock.mockReturnValue({
         status: 'success',
-        history: [historyEntry, { ...historyEntry, id: 'h0', price: 8, effective_to: historyEntry.effective_from }],
+        history: [
+          historyEntry,
+          { ...historyEntry, id: 'h0', price: 8, effective_to: historyEntry.effective_from },
+        ],
         isLoading: false,
         error: null,
         retry: vi.fn(),
@@ -841,7 +942,9 @@ describe('ProductsPage', () => {
 
       await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
 
-      const rows = screen.getAllByRole('row').filter((row) => within(row).queryAllByRole('cell').length > 0)
+      const rows = screen
+        .getAllByRole('row')
+        .filter((row) => within(row).queryAllByRole('cell').length > 0)
       // A primeira linha de dados do histórico é a mais recente (vigente).
       expect(within(rows[0]).getByText('Vigente')).toBeInTheDocument()
       expect(within(rows[1]).getByText('Anterior')).toBeInTheDocument()
@@ -989,7 +1092,9 @@ describe('ProductsPage', () => {
 
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
-    await waitFor(() => expect(saveCompositionMock).toHaveBeenCalledWith({ accessories: [], packaging: [] }))
+    await waitFor(() =>
+      expect(saveCompositionMock).toHaveBeenCalledWith({ accessories: [], packaging: [] }),
+    )
     expect(toastMock.success).toHaveBeenCalledWith('Acessórios e embalagem atualizados.')
   })
 
@@ -1420,31 +1525,47 @@ describe('ProductsPage', () => {
       ['Produto', ['ana', 'Ana', 'Beatriz', 'Carlos'], ['Carlos', 'Beatriz', 'ana', 'Ana']],
       ['Tipo', ['Ana', 'Beatriz', 'ana', 'Carlos'], ['Carlos', 'ana', 'Ana', 'Beatriz']],
       ['Categoria', ['ana', 'Beatriz', 'Carlos', 'Ana'], ['Carlos', 'Beatriz', 'ana', 'Ana']],
-      ['Tempo de Produção', ['ana', 'Beatriz', 'Carlos', 'Ana'], ['Carlos', 'Beatriz', 'ana', 'Ana']],
+      [
+        'Tempo de Produção',
+        ['ana', 'Beatriz', 'Carlos', 'Ana'],
+        ['Carlos', 'Beatriz', 'ana', 'Ana'],
+      ],
       ['Peso total (g)', ['ana', 'Beatriz', 'Carlos', 'Ana'], ['Carlos', 'Beatriz', 'ana', 'Ana']],
       ['Preço', ['ana', 'Beatriz', 'Ana', 'Carlos'], ['Carlos', 'Ana', 'Beatriz', 'ana']],
       ['Ativo', ['ana', 'Carlos', 'Ana', 'Beatriz'], ['Carlos', 'Ana', 'Beatriz', 'ana']],
-    ])('coluna %s: crescente e decrescente respeitam a ordem esperada (vazios sempre no final, texto de Tipo/Categoria, numérico de Tempo/Peso/Preço)', async (columnLabel, ascOrder, descOrder) => {
-      const user = userEvent.setup()
-      renderPage()
+    ])(
+      'coluna %s: crescente e decrescente respeitam a ordem esperada (vazios sempre no final, texto de Tipo/Categoria, numérico de Tempo/Peso/Preço)',
+      async (columnLabel, ascOrder, descOrder) => {
+        const user = userEvent.setup()
+        renderPage()
 
-      await applySort(user, columnLabel, 'Ordenar crescente')
-      expect(getVisibleProductNamesInOrder()).toEqual(ascOrder)
+        await applySort(user, columnLabel, 'Ordenar crescente')
+        expect(getVisibleProductNamesInOrder()).toEqual(ascOrder)
 
-      await applySort(user, columnLabel, 'Ordenar decrescente')
-      expect(getVisibleProductNamesInOrder()).toEqual(descOrder)
-    })
+        await applySort(user, columnLabel, 'Ordenar decrescente')
+        expect(getVisibleProductNamesInOrder()).toEqual(descOrder)
+      },
+    )
 
     it('somente uma coluna ordenada por vez: escolher outra coluna substitui a ordenação anterior', async () => {
       const user = userEvent.setup()
       renderPage()
 
       await applySort(user, 'Produto', 'Ordenar crescente')
-      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'ascending')
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute(
+        'aria-sort',
+        'ascending',
+      )
 
       await applySort(user, 'Preço', 'Ordenar crescente')
-      expect(screen.getByRole('columnheader', { name: /^Preço/ })).toHaveAttribute('aria-sort', 'ascending')
-      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'none')
+      expect(screen.getByRole('columnheader', { name: /^Preço/ })).toHaveAttribute(
+        'aria-sort',
+        'ascending',
+      )
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute(
+        'aria-sort',
+        'none',
+      )
       expect(getVisibleProductNamesInOrder()).toEqual(['ana', 'Beatriz', 'Ana', 'Carlos'])
     })
 
@@ -1458,20 +1579,32 @@ describe('ProductsPage', () => {
       await applySort(user, 'Produto', 'Remover ordenação')
 
       expect(getVisibleProductNamesInOrder()).toEqual(['Carlos', 'ana', 'Ana', 'Beatriz'])
-      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'none')
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute(
+        'aria-sort',
+        'none',
+      )
     })
 
     it('aria-sort correto: none por padrão, ascending/descending após ordenar', async () => {
       const user = userEvent.setup()
       renderPage()
 
-      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'none')
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute(
+        'aria-sort',
+        'none',
+      )
 
       await applySort(user, 'Produto', 'Ordenar crescente')
-      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'ascending')
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute(
+        'aria-sort',
+        'ascending',
+      )
 
       await applySort(user, 'Produto', 'Ordenar decrescente')
-      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'descending')
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute(
+        'aria-sort',
+        'descending',
+      )
     })
 
     it('a coluna de ações (sem título nem dado próprio) não é ordenável', () => {
@@ -1480,14 +1613,24 @@ describe('ProductsPage', () => {
       const headers = screen.getAllByRole('columnheader')
       const actionsHeader = headers[headers.length - 1]
       expect(actionsHeader).toHaveTextContent('')
-      expect(within(actionsHeader).queryByRole('button', { name: /ordenar coluna/i })).not.toBeInTheDocument()
+      expect(
+        within(actionsHeader).queryByRole('button', { name: /ordenar coluna/i }),
+      ).not.toBeInTheDocument()
       expect(actionsHeader).not.toHaveAttribute('aria-sort')
     })
 
     it('nomes acessíveis claros nos botões de ordenação de cada coluna', () => {
       renderPage()
 
-      for (const label of ['Produto', 'Tipo', 'Categoria', 'Tempo de Produção', 'Peso total (g)', 'Preço', 'Ativo']) {
+      for (const label of [
+        'Produto',
+        'Tipo',
+        'Categoria',
+        'Tempo de Produção',
+        'Peso total (g)',
+        'Preço',
+        'Ativo',
+      ]) {
         expect(screen.getByRole('button', { name: `Ordenar coluna ${label}` })).toBeInTheDocument()
       }
     })
@@ -1528,7 +1671,10 @@ describe('ProductsPage', () => {
       await user.click(screen.getByRole('button', { name: /limpar busca/i }))
 
       expect(getVisibleProductNamesInOrder()).toEqual(['Carlos', 'Amanda', 'Alice'])
-      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'descending')
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute(
+        'aria-sort',
+        'descending',
+      )
     })
 
     it('remover a ordenação mantém a busca ativa', async () => {
@@ -1557,7 +1703,10 @@ describe('ProductsPage', () => {
 
       await user.click(options[0])
 
-      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute('aria-sort', 'descending')
+      expect(screen.getByRole('columnheader', { name: /^Produto/ })).toHaveAttribute(
+        'aria-sort',
+        'descending',
+      )
     })
 
     it('zebra striping é recalculado conforme a ordem visual resultante da busca + ordenação', async () => {
@@ -1566,7 +1715,9 @@ describe('ProductsPage', () => {
 
       await applySort(user, 'Produto', 'Ordenar crescente')
 
-      const dataRows = screen.getAllByRole('row').filter((row) => within(row).queryAllByRole('cell').length > 0)
+      const dataRows = screen
+        .getAllByRole('row')
+        .filter((row) => within(row).queryAllByRole('cell').length > 0)
       expect(dataRows.map((row) => within(row).getAllByRole('cell')[0].textContent)).toEqual([
         'Alice',
         'Amanda',

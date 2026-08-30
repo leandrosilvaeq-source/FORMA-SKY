@@ -19,11 +19,19 @@ export function nextRowKey(): string {
 }
 
 export function accessoryRowsFrom(items: ProductAccessory[]): CompositionRow[] {
-  return items.map((item) => ({ key: nextRowKey(), itemId: item.accessory_id, quantity: String(item.quantity) }))
+  return items.map((item) => ({
+    key: nextRowKey(),
+    itemId: item.accessory_id,
+    quantity: String(item.quantity),
+  }))
 }
 
 export function packagingRowsFrom(items: ProductPackaging[]): CompositionRow[] {
-  return items.map((item) => ({ key: nextRowKey(), itemId: item.packaging_id, quantity: String(item.quantity) }))
+  return items.map((item) => ({
+    key: nextRowKey(),
+    itemId: item.packaging_id,
+    quantity: String(item.quantity),
+  }))
 }
 
 // Filtra as opções ofertadas para UMA linha do formulário:
@@ -53,7 +61,10 @@ export function itemLabel(item: { name: string; is_active: boolean }): string {
   return item.is_active ? item.name : `${item.name} (inativo)`
 }
 
-export function findItemById<T extends { id: string }>(items: T[], id: string | null): T | undefined {
+export function findItemById<T extends { id: string }>(
+  items: T[],
+  id: string | null,
+): T | undefined {
   if (id === null) return undefined
   return items.find((item) => item.id === id)
 }
@@ -61,7 +72,10 @@ export function findItemById<T extends { id: string }>(items: T[], id: string | 
 // true quando a linha tem um item selecionado e esse item está inativo —
 // usado tanto para o aviso persistente por linha quanto para bloquear o
 // salvamento enquanto qualquer item inativo permanecer na composição.
-export function isRowInactive(row: CompositionRow, items: Array<{ id: string; is_active: boolean }>): boolean {
+export function isRowInactive(
+  row: CompositionRow,
+  items: Array<{ id: string; is_active: boolean }>,
+): boolean {
   const item = findItemById(items, row.itemId)
   return item ? !item.is_active : false
 }
@@ -98,6 +112,24 @@ export function hasOutOfRangeQuantity(rows: CompositionRow[]): boolean {
   return rows.some((row) => isQuantityOutOfRange(row.quantity))
 }
 
+// Opções fixas 1-20 exibidas no Select de quantidade, mais uma opção extra
+// (marcada) para uma quantidade pré-existente fora desse intervalo — o valor
+// atual continua visível no lugar de sumir/ficar em branco, nunca corrigido
+// em silêncio. `extraValue` deve vir de um valor ESTÁVEL (capturado uma vez
+// na montagem, não recalculado a cada render a partir do valor atual da
+// linha): recalcular a partir do valor atual faz a opção selecionada
+// desaparecer da lista no exato render em que o usuário a troca por uma
+// válida, o que confunde o Select do base-ui e reverte a seleção para vazio.
+export function quantitySelectOptions(
+  extraValue: string | undefined,
+): Array<{ label: string; value: string | null }> {
+  const base = QUANTITY_OPTIONS.map((n) => ({ label: String(n), value: String(n) }))
+  if (extraValue !== undefined) {
+    return [{ label: `${extraValue} (fora do intervalo)`, value: extraValue }, ...base]
+  }
+  return base
+}
+
 export interface ValidatedRows {
   items: Array<{ id: string; quantity: number }>
   errors: Record<string, string>
@@ -112,7 +144,11 @@ export function validateRows(rows: CompositionRow[], selectLabel: string): Valid
       errors[row.key] = `Selecione ${selectLabel}.`
       continue
     }
-    const quantity = parseNumberField(row.quantity, 'A quantidade', { required: true, integer: true, min: 1 })
+    const quantity = parseNumberField(row.quantity, 'A quantidade', {
+      required: true,
+      integer: true,
+      min: 1,
+    })
     if (quantity.error) {
       errors[row.key] = quantity.error
       continue

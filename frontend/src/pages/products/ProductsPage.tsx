@@ -6,14 +6,31 @@ import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeade
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { ProductCompositionForm } from '@/components/products/ProductCompositionForm'
-import { ProductForm, type ProductFormInitialValues, type ProductFormSubmitValues } from '@/components/products/ProductForm'
+import {
+  ProductForm,
+  type ProductFormInitialValues,
+  type ProductFormSubmitValues,
+} from '@/components/products/ProductForm'
 import { ProductPriceForm } from '@/components/products/ProductPriceForm'
 import { ProductPriceHistoryList } from '@/components/products/ProductPriceHistoryList'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { useAccessories } from '@/hooks/useAccessories'
 import { useAllProductCategories } from '@/hooks/useAllProductCategories'
 import { usePackaging } from '@/hooks/usePackaging'
@@ -61,12 +78,31 @@ const PRODUCT_TYPE_LABELS: Record<ProductType, string> = {
 const PRODUCT_NAME_LINK_CLASSNAME =
   'text-brand-primary hover:text-brand-primary-dark focus-visible:ring-brand-accent rounded outline-none hover:underline focus-visible:ring-2'
 
+// Largura efetiva de Novo/Editar Produto (rodada corretiva 2026-08-30) — a
+// causa real da janela "estreita" reportada na validação manual: o padrão
+// de DialogContent (components/ui/dialog.tsx) já define `sm:max-w-sm`, e
+// esse utilitário COM breakpoint sempre vence, no CSS gerado, um
+// `max-w-[1400px]` SEM breakpoint (a camada `@media (min-width:640px)` do
+// Tailwind é emitida depois da camada base, então empata em especificidade
+// e ganha por ordem) — twMerge não resolve isso porque `max-w-[1400px]` e
+// `sm:max-w-sm` são grupos DIFERENTES (base vs. variante sm:), então os
+// dois sobreviviam no className final e o navegador sempre aplicava
+// sm:max-w-sm (24rem) em qualquer viewport de desktop. Corrigido usando o
+// MESMO breakpoint do padrão (`sm:max-w-[1600px]`) — aí sim twMerge
+// reconhece o conflito (mesmo grupo, mesma variante) e descarta o
+// `sm:max-w-sm` original. w-[96vw] (sem breakpoint) já sobrepõe w-full do
+// padrão do mesmo jeito (mesmo grupo, sem variante). Mesma classe nos dois
+// diálogos (Novo/Editar) — literalmente a mesma constante, nunca duas
+// strings que podem divergir.
+const PRODUCT_FORM_DIALOG_CLASSNAME = 'w-[96vw] sm:max-w-[1600px] max-h-[90vh] overflow-y-auto'
+
 // Ordenação: Tipo/Categoria comparam pelo texto exibido ao usuário (nunca o
 // valor bruto de product_type); Tempo/Peso comparam o valor numérico em
 // segundos/gramas (nunca o texto já formatado em HH:MM:SS/"NNN g", que
 // ordenaria como texto e não numericamente); Preço é sempre um número
 // presente (products.default_price nunca é null no contrato).
-type ProductSortColumn = 'name' | 'product_type' | 'category' | 'print_time' | 'weight' | 'price' | 'is_active'
+type ProductSortColumn =
+  'name' | 'product_type' | 'category' | 'print_time' | 'weight' | 'price' | 'is_active'
 
 // Categoria: a partir da migration 20260829180000 (múltiplas categorias,
 // ainda não aplicada) um Produto pode ter N categorias — a ordenação usa a
@@ -76,7 +112,10 @@ type ProductSortColumn = 'name' | 'product_type' | 'category' | 'print_time' | '
 // product.category (espelho de position=1, insuficiente para representar
 // todas as categorias na coluna).
 function joinedCategoriesText(categories: string[]): string {
-  return categories.slice().sort((a, b) => a.localeCompare(b, 'pt-BR')).join(', ')
+  return categories
+    .slice()
+    .sort((a, b) => a.localeCompare(b, 'pt-BR'))
+    .join(', ')
 }
 
 function getProductSortValue(
@@ -103,7 +142,8 @@ function getProductSortValue(
 }
 
 export function ProductsPage() {
-  const { products, isLoading, error, refetch, createWithPlates, changePrice, update, updateFull } = useProducts()
+  const { products, isLoading, error, refetch, createWithPlates, changePrice, update, updateFull } =
+    useProducts()
   const { accessories } = useAccessories()
   const { packaging } = usePackaging()
   const allCategories = useAllProductCategories()
@@ -143,7 +183,8 @@ export function ProductsPage() {
   const [priceError, setPriceError] = useState<string | null>(null)
   const priceHistory = useProductPriceHistory(editDialogProduct?.id ?? null)
 
-  const editDataLoading = editPlates.isLoading || editCategories.isLoading || editComposition.isLoading
+  const editDataLoading =
+    editPlates.isLoading || editCategories.isLoading || editComposition.isLoading
   const editDataError =
     editPlates.status === 'error'
       ? editPlates.error
@@ -176,11 +217,20 @@ export function ProductsPage() {
           plates:
             editPlates.plates.length > 0
               ? plateRowsFrom(editPlates.plates)
-              : plateRowsFromLegacyWeight(editDialogProduct.default_weight_grams, editDialogProduct.default_print_time_seconds),
+              : plateRowsFromLegacyWeight(
+                  editDialogProduct.default_weight_grams,
+                  editDialogProduct.default_print_time_seconds,
+                ),
           manualWeightOverrideGrams: editDialogProduct.production_weight_manual_override_grams,
           manualTimeOverrideSeconds: editDialogProduct.production_time_manual_override_seconds,
-          accessories: editComposition.accessories.map((item) => ({ id: item.accessory_id, quantity: item.quantity })),
-          packaging: editComposition.packaging.map((item) => ({ id: item.packaging_id, quantity: item.quantity })),
+          accessories: editComposition.accessories.map((item) => ({
+            id: item.accessory_id,
+            quantity: item.quantity,
+          })),
+          packaging: editComposition.packaging.map((item) => ({
+            id: item.packaging_id,
+            quantity: item.quantity,
+          })),
         }
       : null
 
@@ -390,8 +440,9 @@ export function ProductsPage() {
             linha correspondente em products — por isso nunca aparece
             nesta listagem, sem precisar de nenhuma coluna is_reusable. */}
       <p className="text-muted-foreground mt-1 text-sm">
-        A listagem reúne todos os produtos de Catálogo e os produtos reutilizáveis. Produtos SPOT criados somente
-        dentro de um pedido não aparecem aqui; um SPOT aparece quando é cadastrado como produto reutilizável.
+        A listagem reúne todos os produtos de Catálogo e os produtos reutilizáveis. Produtos SPOT
+        criados somente dentro de um pedido não aparecem aqui; um SPOT aparece quando é cadastrado
+        como produto reutilizável.
       </p>
 
       {error && (
@@ -427,7 +478,9 @@ export function ProductsPage() {
         ) : products.length === 0 ? (
           <p className="text-muted-foreground text-sm">Nenhum produto cadastrado.</p>
         ) : sortedProducts.length === 0 ? (
-          <p className="text-muted-foreground text-sm">Nenhum produto encontrado para esta busca.</p>
+          <p className="text-muted-foreground text-sm">
+            Nenhum produto encontrado para esta busca.
+          </p>
         ) : (
           // 8 colunas: overflow-x-auto + min-w garante rolagem horizontal
           // controlada só em telas estreitas (mesmo padrão já aprovado em
@@ -492,7 +545,9 @@ export function ProductsPage() {
                 {sortedProducts.map((product) => {
                   const printTimeText = formatPrintTime(product.default_print_time_seconds)
                   const weightText = formatWeight(product.default_weight_grams)
-                  const categoriesText = joinedCategoriesText(allCategories.categoriesByProductId.get(product.id) ?? [])
+                  const categoriesText = joinedCategoriesText(
+                    allCategories.categoriesByProductId.get(product.id) ?? [],
+                  )
                   return (
                     <TableRow
                       key={product.id}
@@ -501,14 +556,19 @@ export function ProductsPage() {
                       // Baseado na posição renderizada (nth-child via
                       // odd:/even:), então já reflete a ordem visual atual
                       // (busca + ordenação) sem nenhum cálculo extra.
-                      className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft"
+                      className="odd:bg-brand-primary-soft/50 hover:bg-brand-primary-soft even:bg-white"
                     >
                       <TableCell className="truncate" title={product.name}>
-                        <Link to={`/produtos/${product.id}`} className={PRODUCT_NAME_LINK_CLASSNAME}>
+                        <Link
+                          to={`/produtos/${product.id}`}
+                          className={PRODUCT_NAME_LINK_CLASSNAME}
+                        >
                           {product.name}
                         </Link>
                       </TableCell>
-                      <TableCell className="truncate">{PRODUCT_TYPE_LABELS[product.product_type]}</TableCell>
+                      <TableCell className="truncate">
+                        {PRODUCT_TYPE_LABELS[product.product_type]}
+                      </TableCell>
                       <TableCell className="truncate" title={categoriesText || undefined}>
                         {categoriesText || '—'}
                       </TableCell>
@@ -557,15 +617,13 @@ export function ProductsPage() {
         )}
       </div>
 
-      {/* Largura próxima de 95vw (decisão aprovada 2026-08-29, layout de
-          Novo/Editar Produto) — o grid de 2 colunas dos plates (ProductForm)
-          só ganha espaço real de sobra num diálogo largo; max-w-[1400px]
-          evita um formulário absurdamente esticado em monitores ultra-wide. */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="w-[95vw] max-w-[1400px] max-h-[90vh] overflow-y-auto">
+        <DialogContent className={PRODUCT_FORM_DIALOG_CLASSNAME}>
           <DialogHeader>
             <DialogTitle>Novo produto</DialogTitle>
-            <DialogDescription>Preencha os dados para cadastrar um produto de Catálogo.</DialogDescription>
+            <DialogDescription>
+              Preencha os dados para cadastrar um produto de Catálogo.
+            </DialogDescription>
           </DialogHeader>
           <ProductForm
             accessoriesList={accessories}
@@ -584,7 +642,7 @@ export function ProductsPage() {
           if (!open) setEditDialogProduct(null)
         }}
       >
-        <DialogContent className="w-[95vw] max-w-[1400px] max-h-[90vh] overflow-y-auto">
+        <DialogContent className={PRODUCT_FORM_DIALOG_CLASSNAME}>
           <DialogHeader>
             <DialogTitle>Editar produto</DialogTitle>
             <DialogDescription>
@@ -671,19 +729,22 @@ export function ProductsPage() {
           if (!open) setCompositionDialogProduct(null)
         }}
       >
-        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Acessórios e Embalagem</DialogTitle>
             <DialogDescription>
-              {compositionDialogProduct ? `Acessórios e embalagens de "${compositionDialogProduct.name}".` : ''}
+              {compositionDialogProduct
+                ? `Acessórios e embalagens de "${compositionDialogProduct.name}".`
+                : ''}
             </DialogDescription>
           </DialogHeader>
-          {compositionDialogProduct && (composition.status === 'idle' || composition.status === 'loading') && (
-            <div className="flex flex-col gap-2">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
-            </div>
-          )}
+          {compositionDialogProduct &&
+            (composition.status === 'idle' || composition.status === 'loading') && (
+              <div className="flex flex-col gap-2">
+                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-8 w-full" />
+              </div>
+            )}
           {compositionDialogProduct && composition.status === 'error' && (
             <div className="border-destructive/50 bg-destructive/10 flex items-center justify-between rounded-lg border p-3 text-sm">
               <span>{toErrorMessage(composition.error)}</span>
