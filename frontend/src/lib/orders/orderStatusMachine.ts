@@ -46,18 +46,30 @@ export function canCancelOrder(current: OrderStatus): boolean {
 
 // Congelamento das cores/filamentos por unidade+plate (rodada corretiva,
 // migration 20260829180000_add_categories_plate_weight_and_order_colors.sql,
-// ainda não aplicada) — espelha exatamente a allow-list de
-// update_order_item_production_colors() na RPC: editável só em
-// QUOTE/WAITING_APPROVAL/APPROVED/IN_PRODUCTION_QUEUE (antes do início real
-// da produção); bloqueado em IN_PRODUCTION/WAITING_DELIVERY/DELIVERED/
-// CANCELLED. CANCELLED nunca está em ORDER_STATUS_SEQUENCE (indexOf = -1),
-// então cai fora corretamente, igual a canCancelOrder. Função própria
-// (mesmo cálculo de canCancelOrder hoje) para o caso de as duas regras
-// divergirem no futuro — nunca combine as duas condições no chamador.
+// ainda não aplicada) — allow-list EXPLÍCITA e tipada, espelhando ao pé da
+// letra a mesma allow-list de update_order_item_production_colors() na RPC
+// (`if v_order_status not in ('QUOTE', 'WAITING_APPROVAL', 'APPROVED',
+// 'IN_PRODUCTION_QUEUE') then raise ORDER_PRODUCTION_COLORS_FROZEN:`).
+//
+// Deliberadamente NUNCA calculada a partir da posição em
+// ORDER_STATUS_SEQUENCE (como canCancelOrder faz) — coincidir com a
+// posição atual de IN_PRODUCTION é um acidente da ordem hoje, não a regra
+// em si: um status novo inserido ANTES de IN_PRODUCTION nessa sequência no
+// futuro ficaria liberado aqui por posição, mas continuaria bloqueado na
+// RPC (que só conhece os 4 nomes exatos abaixo) — a falha teria que ser
+// seguro dos dois lados, e um cálculo posicional falha de forma insegura
+// (libera por omissão). Por isso a comparação é sempre por PERTENCIMENTO a
+// um conjunto fechado de nomes: qualquer status fora dele — incluindo um
+// desconhecido/futuro — cai no `false` por padrão, nunca no `true`.
+const PRODUCTION_COLOR_EDITABLE_STATUSES = new Set<OrderStatus>([
+  'QUOTE',
+  'WAITING_APPROVAL',
+  'APPROVED',
+  'IN_PRODUCTION_QUEUE',
+])
+
 export function canEditProductionColors(current: OrderStatus): boolean {
-  const index = ORDER_STATUS_SEQUENCE.indexOf(current)
-  const inProductionIndex = ORDER_STATUS_SEQUENCE.indexOf('IN_PRODUCTION')
-  return index !== -1 && index < inProductionIndex
+  return PRODUCTION_COLOR_EDITABLE_STATUSES.has(current)
 }
 
 // DELIVERED e CANCELLED nunca mostram avanço de status nem cancelamento —
