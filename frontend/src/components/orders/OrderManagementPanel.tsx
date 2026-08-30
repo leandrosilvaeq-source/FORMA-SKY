@@ -5,8 +5,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { ProductionColorsPicker, type ProductionColorsValue } from './ProductionColorsPicker'
 import { RegisterPaymentForm, type RegisterPaymentFormValues } from './RegisterPaymentForm'
+import { useFilamentTypes } from '@/hooks/useFilamentTypes'
 import { useOrderManagement } from '@/hooks/useOrderManagement'
+import { useOrderProductionColors } from '@/hooks/useOrderProductionColors'
 import { ApiError } from '@/lib/api/errors'
 import { canCancelOrder, getNextOrderStatus, isTerminalOrderStatus } from '@/lib/orders/orderStatusMachine'
 import type { OrderStatus, PaymentMethod, PaymentStatus, PaymentType } from '@/types/domain'
@@ -182,6 +185,36 @@ export function OrderManagementPanel({ orderId, clientLabel, onClose, onChanged 
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false)
   const [paymentError, setPaymentError] = useState<string | null>(null)
 
+  // "Cores e filamentos" — caminho para completar/alterar cores DEPOIS da
+  // criação do Pedido (migration 20260829180000, ainda não aplicada), via
+  // PATCH /orders/:id/production-colors. Bloco independente do resto do
+  // painel (própria fonte/carregamento/erro/retry/salvamento) — nunca a
+  // mesma transação de status/pagamento, e nunca altera order_status.
+  const filamentTypesHook = useFilamentTypes()
+  const productionColorsHook = useOrderProductionColors(orderId)
+  const [productionColorsDraft, setProductionColorsDraft] = useState<ProductionColorsValue>({})
+  const [productionColorsError, setProductionColorsError] = useState<string | null>(null)
+  // "Ajustar estado durante a renderização" (mesmo padrão oficial do React
+  // já usado em useProductComposition.ts/useProductPlates.ts) em vez de um
+  // useEffect com setState síncrono — sincroniza o rascunho editável com o
+  // valor recém-carregado só quando a referência realmente muda (nunca a
+  // cada render).
+  const [lastLoadedProductionColors, setLastLoadedProductionColors] = useState<ProductionColorsValue | null>(null)
+  if (productionColorsHook.status === 'success' && productionColorsHook.value !== lastLoadedProductionColors) {
+    setLastLoadedProductionColors(productionColorsHook.value)
+    setProductionColorsDraft(productionColorsHook.value)
+  }
+
+  async function handleSaveProductionColors() {
+    setProductionColorsError(null)
+    try {
+      await productionColorsHook.save(productionColorsDraft)
+      toast.success('Cores salvas.')
+    } catch (err) {
+      setProductionColorsError(toErrorMessage(err))
+    }
+  }
+
   async function handleConfirmStatusChange() {
     if (!confirmTarget) return
     setStatusActionError(null)
@@ -348,6 +381,51 @@ export function OrderManagementPanel({ orderId, clientLabel, onClose, onChanged 
           )}
         </CardContent>
       </Card>
+
+      {(productionColorsHook.status === 'loading' ||
+        productionColorsHook.status === 'error' ||
+        (productionColorsHook.status === 'success' && productionColorsHook.items.length > 0)) && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Cores e filamentos</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            {productionColorsHook.status === 'loading' && (
+              <div className="flex flex-col gap-2">
+                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-8 w-full" />
+              </div>
+            )}
+            {productionColorsHook.status === 'error' && (
+              <div className="border-destructive/50 bg-destructive/10 flex items-center justify-between rounded-lg border p-3 text-sm">
+                <span>{toErrorMessage(productionColorsHook.error)}</span>
+                <Button type="button" variant="outline" size="sm" onClick={productionColorsHook.retry}>
+                  Tentar novamente
+                </Button>
+              </div>
+            )}
+            {productionColorsHook.status === 'success' && (
+              <>
+                <ProductionColorsPicker
+                  items={productionColorsHook.items}
+                  filamentTypes={filamentTypesHook.types}
+                  value={productionColorsDraft}
+                  onChange={setProductionColorsDraft}
+                />
+                {productionColorsError && <p className="text-destructive text-sm">{productionColorsError}</p>}
+                <Button
+                  type="button"
+                  onClick={() => void handleSaveProductionColors()}
+                  disabled={productionColorsHook.isSaving}
+                  className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark self-start"
+                >
+                  {productionColorsHook.isSaving ? 'Salvando...' : 'Salvar cores'}
+                </Button>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

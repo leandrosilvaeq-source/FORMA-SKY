@@ -31,6 +31,12 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { LeadSourcePicker } from '@/components/leadSources/LeadSourcePicker'
+import {
+  ProductionColorsPicker,
+  colorKey,
+  type ProductionColorItem,
+  type ProductionColorsValue,
+} from '@/components/orders/ProductionColorsPicker'
 import { cn } from '@/lib/utils'
 import {
   MAX_CENTS,
@@ -43,7 +49,7 @@ import {
 } from '@/lib/forms/currencyField'
 import { parseNumberField } from '@/lib/forms/numberField'
 import type { CreateOrderInput, OrderItemInput } from '@/lib/api/orders'
-import type { Company, Customer, LeadSource, PaymentCondition, PaymentMethod, Product } from '@/types/domain'
+import type { Company, Customer, FilamentTypeSummary, LeadSource, PaymentCondition, PaymentMethod, Product } from '@/types/domain'
 
 type SaleType = 'B2C' | 'B2B'
 type DeliveryMethod = 'Em mãos' | 'Correios' | 'Transportadora'
@@ -283,6 +289,15 @@ interface OrderFormProps {
   companies: Company[]
   leadSources: LeadSource[]
   products: Product[]
+  // "Cores e filamentos" (migration 20260829180000, ainda não aplicada) —
+  // filamentTypes é a mesma lista já usada em Estoque/Filamentos
+  // (useFilamentTypes); productPlateCounts (product_id -> nº de plates,
+  // useAllProductPlateCounts) define quantas linhas "Plate N" cada item
+  // CATALOG oferece na seção de cores. Um produto sem nenhuma linha em
+  // product_plates (ainda não deveria acontecer após o backfill da
+  // migration) simplesmente não mostra a seção de cores para aquele item.
+  filamentTypes: FilamentTypeSummary[]
+  productPlateCounts: Map<string, number>
   isSubmitting: boolean
   submitError: string | null
   onSubmit: (values: OrderFormSubmitValues) => void
@@ -301,6 +316,8 @@ export function OrderForm({
   companies,
   leadSources,
   products,
+  filamentTypes,
+  productPlateCounts,
   isSubmitting,
   submitError,
   onSubmit,
@@ -359,6 +376,20 @@ export function OrderForm({
 
   const [headerErrors, setHeaderErrors] = useState<Record<string, string>>({})
   const [itemErrors, setItemErrors] = useState<Record<string, string>>({})
+
+  // "Cores e filamentos" (migration 20260829180000, ainda não aplicada) —
+  // chave composta `${row.key}:${unit}:${plate}` -> filament_type_id[],
+  // ver ProductionColorsPicker.tsx. Nunca prefill automático a partir de
+  // um pedido existente: editar itens (OrderEditForm, mode="edit") sempre
+  // gera um novo snapshot de plates (update_quote_order substitui o
+  // conjunto inteiro), então cores antigas nunca sobrevivem a uma edição
+  // de itens — o usuário sempre re-informa as cores desejadas ao editar.
+  const [productionColors, setProductionColors] = useState<ProductionColorsValue>({})
+  // Confirmação antes de diminuir a quantidade de um item removendo uma
+  // unidade que já tinha cor selecionada — nunca perde seleção preenchida
+  // silenciosamente (mesmo padrão de confirmação já usado por
+  // ProductForm.tsx). Guarda a key da linha pendente de confirmação.
+  const [decrementColorsPending, setDecrementColorsPending] = useState<string | null>(null)
 
   // Só ativos podem ser escolhidos para um pedido novo — nenhum destes
   // filtros muta customers/companies/leadSources/products (props originais
@@ -496,6 +527,13 @@ export function OrderForm({
   function removeItemRow(key: string) {
     if (readOnly) return
     setItems((rows) => (rows.length > 1 ? rows.filter((row) => row.key !== key) : rows))
+    setProductionColors((current) => {
+      const next = { ...current }
+      for (const existingKey of Object.keys(current)) {
+        if (existingKey.startsWith(`${key}:`)) delete next[existingKey]
+      }
+      return next
+    })
   }
   function updateItemRow(key: string, patch: Partial<ItemRow>) {
     if (readOnly) return
@@ -513,16 +551,58 @@ export function OrderForm({
       }),
     )
   }
-  function decrementQuantity(key: string) {
-    if (readOnly) return
+  // Cores já selecionadas para a unidade `unit` (qualquer plate) do item
+  // `key` — usado para decidir se uma redução de quantidade precisa de
+  // confirmação antes de descartar seleções.
+  function unitHasColors(key: string, unit: number, plateCount: number): boolean {
+    for (let plate = 1; plate <= plateCount; plate += 1) {
+      if ((productionColors[colorKey(key, unit, plate)] ?? []).length > 0) return true
+    }
+    return false
+  }
+
+  function pruneColorsAboveQuantity(key: string, quantity: number) {
+    setProductionColors((current) => {
+      let changed = false
+      const next = { ...current }
+      for (const existingKey of Object.keys(current)) {
+        const [rowKey, unitText] = existingKey.split(':')
+        if (rowKey !== key) continue
+        if (Number(unitText) > quantity) {
+          delete next[existingKey]
+          changed = true
+        }
+      }
+      return changed ? next : current
+    })
+  }
+
+  function applyDecrement(key: string) {
+    let removedQuantity: number | null = null
     setItems((rows) =>
       rows.map((row) => {
         if (row.key !== key) return row
         const current = Number.parseInt(row.quantity, 10)
         const next = Number.isInteger(current) ? Math.max(1, current - 1) : 1
+        if (next < current) removedQuantity = next
         return { ...row, quantity: String(next) }
       }),
     )
+    if (removedQuantity !== null) pruneColorsAboveQuantity(key, removedQuantity)
+    setDecrementColorsPending(null)
+  }
+
+  function decrementQuantity(key: string) {
+    if (readOnly) return
+    const row = items.find((r) => r.key === key)
+    if (!row) return
+    const current = Number.parseInt(row.quantity, 10)
+    const plateCount = row.productId ? (productPlateCounts.get(row.productId) ?? 0) : 0
+    if (Number.isInteger(current) && current > 1 && plateCount > 0 && unitHasColors(key, current, plateCount)) {
+      setDecrementColorsPending(key)
+      return
+    }
+    applyDecrement(key)
   }
 
   function handleProductChange(key: string, productId: string | null) {
@@ -650,13 +730,30 @@ export function OrderForm({
         continue
       }
 
+      // "Cores e filamentos" (migration 20260829180000, ainda não
+      // aplicada) — SEMPRE opcional: production_colors só é incluído
+      // quando ao menos uma seleção foi feita para este item (preenchimento
+      // vazio/parcial nunca bloqueia o envio, ver ProductionColorsPicker.tsx).
+      const quantityValue = quantity.value as number
+      const plateCount = productPlateCounts.get(row.productId) ?? 0
+      const productionColorsForItem: Array<{ plate_number: number; unit_number: number; filament_type_ids: string[] }> = []
+      for (let unit = 1; unit <= quantityValue; unit += 1) {
+        for (let plate = 1; plate <= plateCount; plate += 1) {
+          const ids = productionColors[colorKey(row.key, unit, plate)] ?? []
+          if (ids.length > 0) {
+            productionColorsForItem.push({ plate_number: plate, unit_number: unit, filament_type_ids: ids })
+          }
+        }
+      }
+
       validated.push({
         item_type: 'CATALOG',
         product_id: row.productId,
         item_name: product.name,
-        quantity: quantity.value as number,
+        quantity: quantityValue,
         unit_price: unitPrice.value as number,
         ...(personalizationFee.value !== undefined ? { personalization_fee: personalizationFee.value } : {}),
+        ...(productionColorsForItem.length > 0 ? { production_colors: productionColorsForItem } : {}),
       })
     }
 
@@ -788,6 +885,20 @@ export function OrderForm({
   // subtotal - discount_value), então somar aqui é necessário para o
   // destaque do rodapé não subestimar o valor real cobrado quando há
   // frete. Desconto não existe como campo neste formulário (sempre 0).
+  // "Cores e filamentos" (migration 20260829180000, ainda não aplicada) —
+  // só itens CATALOG com produto selecionado E que tenham ao menos 1 plate
+  // cadastrado entram nesta lista; um item sem plates simplesmente não
+  // oferece a seção (nada para colorir).
+  const productionColorItems: ProductionColorItem[] = items.flatMap((row) => {
+    if (!row.productId) return []
+    const plateCount = productPlateCounts.get(row.productId) ?? 0
+    if (plateCount === 0) return []
+    const product = activeProducts.find((item) => item.id === row.productId)
+    const quantityParsed = Number.parseInt(row.quantity, 10)
+    const quantity = Number.isInteger(quantityParsed) && quantityParsed > 0 ? quantityParsed : 1
+    return [{ key: row.key, label: product?.name ?? 'Item', quantity, plateCount }]
+  })
+
   const itemsTotal = items.reduce((sum, row) => sum + computeRowTotal(row), 0)
   const shippingPreview = showShipping ? Number.parseFloat(shippingCost) || 0 : 0
   const orderTotal = itemsTotal + shippingPreview
@@ -1071,6 +1182,33 @@ export function OrderForm({
             </TableBody>
           </Table>
         </div>
+
+        {decrementColorsPending && (
+          <div className="border-destructive/50 bg-destructive/10 flex flex-col gap-2 rounded-md border p-2 text-sm">
+            <p>Esta unidade já tem cores selecionadas. Diminuir a quantidade mesmo assim?</p>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                onClick={() => applyDecrement(decrementColorsPending)}
+              >
+                Diminuir
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={() => setDecrementColorsPending(null)}>
+                Cancelar
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <ProductionColorsPicker
+          items={productionColorItems}
+          filamentTypes={filamentTypes}
+          value={productionColors}
+          onChange={setProductionColors}
+          disabled={readOnly}
+        />
 
         <SectionRow number={paymentMethodSectionNumber} label="Método de pagamento">
           {/* Mesmo tratamento de tamanho de ícone (size-8) de "Forma de

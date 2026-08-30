@@ -270,9 +270,13 @@ export interface OrderItemPlate {
 // na RPC, nunca uma FK — não há coluna para isso em nenhuma tabela).
 export interface OrderItemUnitPlateFilament {
   id: string
+  order_item_id: string
   order_item_plate_id: string
   unit_number: number
   filament_type_id: string
+  // Posição de escolha dentro da mesma unidade/plate — só para preservar
+  // ordem de exibição, sem significado de negócio.
+  position: number
   created_at: string
 }
 

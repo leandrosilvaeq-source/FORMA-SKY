@@ -46,6 +46,18 @@ export interface SpotDetailsInput {
   notes?: string | null
 }
 
+// Cores/filamentos por unidade+plate de um item CATALOG — migration
+// 20260829180000_add_categories_plate_weight_and_order_colors.sql (ainda
+// não aplicada). SEMPRE opcional na criação: um item pode ser enviado sem
+// nenhuma entrada (cores definidas depois, via updateOrderProductionColors)
+// ou com uma entrada só para os plates/unidades já decididos (preenchimento
+// parcial permitido — nunca exige todas as unidades/plates de uma vez).
+export interface OrderItemProductionColorInput {
+  plate_number: number
+  unit_number: number
+  filament_type_ids: string[]
+}
+
 export interface OrderItemInput {
   item_type: ItemType
   item_name: string
@@ -62,6 +74,7 @@ export interface OrderItemInput {
   notes?: string | null
   custom_details?: CustomDetailsInput
   spot_details?: SpotDetailsInput
+  production_colors?: OrderItemProductionColorInput[]
 }
 
 export interface CreateOrderInput {
@@ -189,6 +202,26 @@ export async function updateQuoteOrder(orderId: string, input: UpdateQuoteOrderI
 // amigáveis (business_rule), nunca um DELETE parcial/cascata.
 export async function deleteOrder(orderId: string): Promise<void> {
   await callEdgeFunction<{ success: true }>('orders', `/${orderId}`, 'DELETE')
+}
+
+// PATCH /orders/:id/production-colors -> update_order_item_production_colors
+// (NOVA, migration 20260829180000, ainda não aplicada). Caminho para
+// completar/alterar cores DEPOIS da criação do Pedido — substitui TODO o
+// conjunto de cores dos itens CATALOG informados no payload (mesma
+// semântica "substitui o conjunto inteiro" de updateProductFull/
+// set_product_categories), nunca altera order_status.
+export interface OrderProductionColorSelectionInput {
+  order_item_id: string
+  plate_number: number
+  unit_number: number
+  filament_type_ids: string[]
+}
+
+export async function updateOrderProductionColors(
+  orderId: string,
+  selections: OrderProductionColorSelectionInput[],
+): Promise<void> {
+  await callEdgeFunction<{ success: true }>('orders', `/${orderId}/production-colors`, 'PATCH', { selections })
 }
 
 // POST /order-status/:orderId -> change_order_status

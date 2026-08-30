@@ -3,12 +3,16 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ApiError } from '@/lib/api/errors'
 
-const { useOrderManagementMock, toastMock } = vi.hoisted(() => ({
+const { useOrderManagementMock, useFilamentTypesMock, useOrderProductionColorsMock, toastMock } = vi.hoisted(() => ({
   useOrderManagementMock: vi.fn(),
+  useFilamentTypesMock: vi.fn(),
+  useOrderProductionColorsMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
 }))
 
 vi.mock('@/hooks/useOrderManagement', () => ({ useOrderManagement: useOrderManagementMock }))
+vi.mock('@/hooks/useFilamentTypes', () => ({ useFilamentTypes: useFilamentTypesMock }))
+vi.mock('@/hooks/useOrderProductionColors', () => ({ useOrderProductionColors: useOrderProductionColorsMock }))
 vi.mock('sonner', () => ({ toast: toastMock }))
 
 import { OrderManagementPanel } from './OrderManagementPanel'
@@ -108,11 +112,44 @@ function renderPanel(props: Partial<Parameters<typeof OrderManagementPanel>[0]> 
   }
 }
 
+function mockProductionColorsHook(overrides: Partial<ReturnType<typeof useOrderProductionColorsMock>> = {}) {
+  const save = vi.fn().mockResolvedValue(undefined)
+  const retry = vi.fn()
+  useOrderProductionColorsMock.mockReturnValue({
+    status: 'success',
+    items: [],
+    value: {},
+    isLoading: false,
+    error: null,
+    retry,
+    isSaving: false,
+    save,
+    ...overrides,
+  })
+  return { save, retry }
+}
+
 describe('OrderManagementPanel', () => {
   beforeEach(() => {
     useOrderManagementMock.mockReset()
+    useFilamentTypesMock.mockReset()
+    useOrderProductionColorsMock.mockReset()
     toastMock.success.mockReset()
     toastMock.error.mockReset()
+
+    useFilamentTypesMock.mockReturnValue({
+      types: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    })
+    // Padrão: nenhum item CATALOG com plates ainda — a maioria dos testes
+    // (status/pagamento/histórico) não depende disso; os testes de "Cores e
+    // filamentos" abaixo sobrescrevem explicitamente.
+    mockProductionColorsHook()
   })
 
   it('shows a loading skeleton while isLoading is true', () => {
@@ -356,5 +393,103 @@ describe('OrderManagementPanel', () => {
     await user.click(screen.getByRole('button', { name: /^fechar$/i }))
 
     expect(onClose).toHaveBeenCalled()
+  })
+
+  // ---------------------------------------------------------------------------
+  // "Cores e filamentos" (migration 20260829180000_add_categories_plate_weight_and_order_colors.sql,
+  // ainda não aplicada) — caminho para completar/alterar cores DEPOIS da
+  // criação do Pedido (PATCH /orders/:id/production-colors), bloco
+  // inteiramente independente de status/pagamento/histórico.
+  // ---------------------------------------------------------------------------
+  describe('Cores e filamentos', () => {
+    it('não mostra o cartão quando o pedido não tem nenhum item CATALOG com plates', () => {
+      mockHook()
+      mockProductionColorsHook({ items: [] })
+      renderPanel()
+
+      expect(screen.queryByText('Cores e filamentos')).not.toBeInTheDocument()
+    })
+
+    it('mostra skeleton enquanto carrega, sem esconder o resto do painel', () => {
+      mockHook()
+      mockProductionColorsHook({ status: 'loading', items: [] })
+      renderPanel()
+
+      expect(screen.getByText('Cores e filamentos')).toBeInTheDocument()
+      expect(screen.getByText('Pedido FS-26-001')).toBeInTheDocument()
+    })
+
+    it('mostra erro real com retry próprio quando falha ao carregar', async () => {
+      const user = userEvent.setup()
+      mockHook()
+      const { retry } = mockProductionColorsHook({
+        status: 'error',
+        items: [],
+        error: new ApiError('database', 500, 'Falha ao carregar cores.'),
+      })
+      renderPanel()
+
+      expect(screen.getByText('Falha ao carregar cores.')).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: /tentar novamente/i }))
+      expect(retry).toHaveBeenCalled()
+    })
+
+    it('mostra o picker pré-preenchido e salva as cores editadas via save()', async () => {
+      const user = userEvent.setup()
+      mockHook()
+      useFilamentTypesMock.mockReturnValue({
+        types: [
+          {
+            filament_type_id: 'ft1',
+            material: 'PLA',
+            manufacturer: 'Voolt3D',
+            line: 'Sólida',
+            commercial_color: 'Preto',
+            color_code: null,
+            minimum_stock_grams: null,
+            is_active: true,
+            total_available_grams: 1000,
+            usable_spool_count: 1,
+            total_spool_count: 1,
+          },
+        ],
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+        create: vi.fn(),
+        update: vi.fn(),
+        delete: vi.fn(),
+      })
+      const { save } = mockProductionColorsHook({
+        items: [{ key: 'oi1', label: 'Chaveiro', quantity: 1, plateCount: 1 }],
+        value: {},
+      })
+      renderPanel()
+
+      expect(screen.getAllByText('Cores e filamentos').length).toBeGreaterThan(0)
+      await user.click(screen.getByRole('button', { name: /cores e filamentos/i }))
+      await user.click(screen.getByRole('checkbox', { name: /preto/i }))
+      await user.click(screen.getByRole('button', { name: /^salvar cores$/i }))
+
+      await waitFor(() =>
+        expect(save).toHaveBeenCalledWith({ 'oi1:1:1': ['ft1'] }),
+      )
+      expect(toastMock.success).toHaveBeenCalledWith('Cores salvas.')
+    })
+
+    it('erro real ao salvar fica restrito ao cartão de cores, sem afetar status/pagamento', async () => {
+      const user = userEvent.setup()
+      mockHook()
+      mockProductionColorsHook({
+        items: [{ key: 'oi1', label: 'Chaveiro', quantity: 1, plateCount: 1 }],
+        save: vi.fn().mockRejectedValue(new ApiError('business_rule', 409, 'Não é possível alterar cores.')),
+      })
+      renderPanel()
+
+      await user.click(screen.getByRole('button', { name: /^salvar cores$/i }))
+
+      expect(await screen.findByText('Não é possível alterar cores.')).toBeInTheDocument()
+      expect(toastMock.success).not.toHaveBeenCalled()
+    })
   })
 })

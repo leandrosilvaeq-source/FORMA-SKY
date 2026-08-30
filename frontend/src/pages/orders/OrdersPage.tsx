@@ -14,8 +14,10 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { useAllProductPlateCounts } from '@/hooks/useAllProductPlateCounts'
 import { useCompanies } from '@/hooks/useCompanies'
 import { useCustomers } from '@/hooks/useCustomers'
+import { useFilamentTypes } from '@/hooks/useFilamentTypes'
 import { useLeadSources } from '@/hooks/useLeadSources'
 import { useOrders } from '@/hooks/useOrders'
 import { useProducts } from '@/hooks/useProducts'
@@ -307,6 +309,13 @@ export function OrdersPage() {
   const { companies } = useCompanies()
   const { leadSources } = useLeadSources()
   const { products } = useProducts()
+  // "Cores e filamentos" (migration 20260829180000, ainda não aplicada) —
+  // mesma lista de filamentos ativos/inativos já usada em Estoque, e a
+  // contagem de plates por Produto (product_id -> nº de plates), ambos
+  // repassados para OrderForm/OrderEditForm decidirem quantas linhas
+  // "Plate N" oferecer por item CATALOG.
+  const { types: filamentTypes } = useFilamentTypes()
+  const { plateCountByProductId } = useAllProductPlateCounts()
 
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -787,6 +796,8 @@ export function OrdersPage() {
             companies={companies}
             leadSources={leadSources}
             products={products}
+            filamentTypes={filamentTypes}
+            productPlateCounts={plateCountByProductId}
             isSubmitting={isSubmitting}
             submitError={formError}
             onSubmit={(values) => void handleSubmit(values)}
@@ -814,6 +825,8 @@ export function OrdersPage() {
               companies={companies}
               leadSources={leadSources}
               products={products}
+              filamentTypes={filamentTypes}
+              productPlateCounts={plateCountByProductId}
               isSubmitting={isEditSubmitting}
               submitError={editFormError}
               onSubmit={(values) => void handleEditSubmit(values)}

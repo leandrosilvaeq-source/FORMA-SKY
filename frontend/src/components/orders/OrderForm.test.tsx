@@ -2,7 +2,23 @@ import { describe, expect, it, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { OrderForm } from './OrderForm'
-import type { Company, Customer, LeadSource, Product } from '@/types/domain'
+import type { Company, Customer, FilamentTypeSummary, LeadSource, Product } from '@/types/domain'
+
+// "Cores e filamentos" (migration 20260829180000_add_categories_plate_weight_and_order_colors.sql,
+// ainda não aplicada).
+const ftBlack: FilamentTypeSummary = {
+  filament_type_id: 'ft1',
+  material: 'PLA',
+  manufacturer: 'Voolt3D',
+  line: 'Sólida',
+  commercial_color: 'Preto',
+  color_code: null,
+  minimum_stock_grams: null,
+  is_active: true,
+  total_available_grams: 1000,
+  usable_spool_count: 1,
+  total_spool_count: 1,
+}
 
 const customers: Customer[] = [
   {
@@ -197,6 +213,8 @@ function renderForm(overrides: Partial<Parameters<typeof OrderForm>[0]> = {}) {
       companies={companies}
       leadSources={leadSources}
       products={products}
+      filamentTypes={[]}
+      productPlateCounts={new Map()}
       isSubmitting={false}
       submitError={null}
       onSubmit={onSubmit}
@@ -1451,6 +1469,107 @@ describe('OrderForm', () => {
       const payload = onSubmit.mock.calls[0][0]
       expect('payment_condition' in payload).toBe(false)
       expect('deposit_amount' in payload).toBe(false)
+    })
+  })
+
+  describe('Cores e filamentos (migration 20260829180000, ainda não aplicada)', () => {
+    it('não mostra a seção quando o produto escolhido não tem nenhum plate cadastrado (productPlateCounts vazio)', async () => {
+      const user = userEvent.setup()
+      renderForm()
+
+      await selectOption(user, 'Produto', 'Chaveiro')
+
+      expect(screen.queryByRole('button', { name: /cores e filamentos/i })).not.toBeInTheDocument()
+    })
+
+    it('mostra a seção quando o produto escolhido tem plates; nasce recolhida', async () => {
+      const user = userEvent.setup()
+      renderForm({ filamentTypes: [ftBlack], productPlateCounts: new Map([['p1', 1]]) })
+
+      await selectOption(user, 'Produto', 'Chaveiro')
+
+      expect(screen.getByRole('button', { name: /cores e filamentos/i })).toBeInTheDocument()
+      expect(screen.queryByRole('checkbox', { name: /preto/i })).not.toBeInTheDocument()
+    })
+
+    it('salvar sem escolher nenhuma cor não bloqueia o envio — production_colors nem é incluído no payload', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm({ filamentTypes: [ftBlack], productPlateCounts: new Map([['p1', 1]]) })
+
+      await fillMinimalValidOrder(user)
+      await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+
+      expect(onSubmit).toHaveBeenCalled()
+      const payload = onSubmit.mock.calls[0][0] as { items: Array<Record<string, unknown>> }
+      expect('production_colors' in payload.items[0]).toBe(false)
+    })
+
+    it('cor selecionada é enviada em items[0].production_colors', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm({ filamentTypes: [ftBlack], productPlateCounts: new Map([['p1', 1]]) })
+
+      await fillMinimalValidOrder(user)
+      await user.click(screen.getByRole('button', { name: /cores e filamentos/i }))
+      await user.click(screen.getByRole('checkbox', { name: /preto/i }))
+      await user.click(screen.getByRole('button', { name: /salvar pedido/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          items: [
+            expect.objectContaining({
+              production_colors: [{ plate_number: 1, unit_number: 1, filament_type_ids: ['ft1'] }],
+            }),
+          ],
+        }),
+      )
+    })
+
+    it('aumentar a quantidade oferece novas unidades sempre pendentes (nunca copia a cor da Unidade 1 automaticamente)', async () => {
+      const user = userEvent.setup()
+      renderForm({ filamentTypes: [ftBlack], productPlateCounts: new Map([['p1', 1]]) })
+
+      await fillMinimalValidOrder(user)
+      await user.click(screen.getByRole('button', { name: /cores e filamentos/i }))
+      await user.click(screen.getByRole('checkbox', { name: /preto/i }))
+
+      await user.click(screen.getByRole('button', { name: /aumentar quantidade/i }))
+
+      const groups = screen.getAllByRole('group', { name: /cores da unidade/i })
+      expect(within(groups[0]).getByRole('checkbox', { name: /preto/i })).toHaveAttribute('aria-checked', 'true')
+      expect(within(groups[1]).getByRole('checkbox', { name: /preto/i })).toHaveAttribute('aria-checked', 'false')
+    })
+
+    it('diminuir a quantidade de uma unidade com cor selecionada pede confirmação antes de remover', async () => {
+      const user = userEvent.setup()
+      renderForm({ filamentTypes: [ftBlack], productPlateCounts: new Map([['p1', 1]]) })
+
+      await fillMinimalValidOrder(user)
+      await user.click(screen.getByRole('button', { name: /aumentar quantidade/i }))
+      await user.click(screen.getByRole('button', { name: /cores e filamentos/i }))
+
+      const groupsBefore = screen.getAllByRole('group', { name: /cores da unidade/i })
+      await user.click(within(groupsBefore[1]).getByRole('checkbox', { name: /preto/i }))
+
+      await user.click(screen.getByRole('button', { name: /diminuir quantidade/i }))
+
+      expect(screen.getByText(/esta unidade já tem cores selecionadas/i)).toBeInTheDocument()
+      expect((screen.getByLabelText('Quantidade') as HTMLInputElement).value).toBe('2')
+
+      await user.click(screen.getByRole('button', { name: /^diminuir$/i }))
+
+      expect((screen.getByLabelText('Quantidade') as HTMLInputElement).value).toBe('1')
+    })
+
+    it('diminuir a quantidade de uma unidade SEM cor selecionada nunca pede confirmação', async () => {
+      const user = userEvent.setup()
+      renderForm({ filamentTypes: [ftBlack], productPlateCounts: new Map([['p1', 1]]) })
+
+      await fillMinimalValidOrder(user)
+      await user.click(screen.getByRole('button', { name: /aumentar quantidade/i }))
+      await user.click(screen.getByRole('button', { name: /diminuir quantidade/i }))
+
+      expect(screen.queryByText(/esta unidade já tem cores selecionadas/i)).not.toBeInTheDocument()
+      expect((screen.getByLabelText('Quantidade') as HTMLInputElement).value).toBe('1')
     })
   })
 })

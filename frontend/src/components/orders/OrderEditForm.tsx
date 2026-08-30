@@ -5,7 +5,17 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { getOrder, type CreateOrderInput } from '@/lib/api/orders'
 import { listOrderItems } from '@/lib/api/orderItems'
 import { ApiError } from '@/lib/api/errors'
-import type { Company, Customer, LeadSource, Order, OrderItem, OrderStatus, PaymentStatus, Product } from '@/types/domain'
+import type {
+  Company,
+  Customer,
+  FilamentTypeSummary,
+  LeadSource,
+  Order,
+  OrderItem,
+  OrderStatus,
+  PaymentStatus,
+  Product,
+} from '@/types/domain'
 
 function toErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message
@@ -57,6 +67,13 @@ export interface OrderEditFormProps {
   companies: Company[]
   leadSources: LeadSource[]
   products: Product[]
+  // "Cores e filamentos" (migration 20260829180000, ainda não aplicada) —
+  // mesmos props repassados a OrderForm.tsx. Editar itens sempre gera um
+  // novo snapshot de plates (update_quote_order substitui o conjunto
+  // inteiro), então este formulário nunca tenta prefill de cores antigas —
+  // o usuário sempre re-informa as cores desejadas ao editar itens.
+  filamentTypes: FilamentTypeSummary[]
+  productPlateCounts: Map<string, number>
   isSubmitting: boolean
   submitError: string | null
   onSubmit: (values: CreateOrderInput) => void
@@ -69,6 +86,8 @@ export function OrderEditForm({
   companies,
   leadSources,
   products,
+  filamentTypes,
+  productPlateCounts,
   isSubmitting,
   submitError,
   onSubmit,
@@ -162,6 +181,8 @@ export function OrderEditForm({
       companies={companies}
       leadSources={leadSources}
       products={products}
+      filamentTypes={filamentTypes}
+      productPlateCounts={productPlateCounts}
       isSubmitting={isSubmitting}
       submitError={submitError}
       onSubmit={onSubmit}

@@ -21,6 +21,17 @@ export async function listProductPlates(productId: string): Promise<ProductPlate
   return data as ProductPlate[]
 }
 
+// Todos os plates de TODOS os produtos — usada por OrderForm.tsx
+// (useAllProductPlateCounts) para saber, ao escolher um produto num item
+// CATALOG, quantos plates ele tem (define quantas linhas "Plate N" a seção
+// "Cores e filamentos" oferece), sem 1 consulta por produto.
+export async function listAllProductPlates(): Promise<ProductPlate[]> {
+  const { data, error } = await supabase.from('product_plates').select('*').order('plate_number', { ascending: true })
+
+  if (error) throw mapSupabaseError(error)
+  return data as ProductPlate[]
+}
+
 // Uma única consulta para todos os plates de um produto — o chamador
 // (hook/página de edição) já tem a lista de plate_id em mãos depois de
 // listProductPlates(), então filtra por IN aqui em vez de N consultas
