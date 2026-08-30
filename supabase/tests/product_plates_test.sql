@@ -675,7 +675,7 @@ declare
   v_product_id uuid;
 begin
   select value::uuid into v_user_id from zz_pp_fixtures where key = 'user_id';
-  select value::uuid into v_customer_id from public.customers where name = 'TESTE OPS Plates — Cliente';
+  select id into v_customer_id from public.customers where name = 'TESTE OPS Plates — Cliente';
 
   v_product_id := public.create_product_with_plates(
     'TESTE OPS Plates — Produto sem composição', 'CATALOG', 'teste', null,
@@ -714,7 +714,7 @@ declare
 begin
   select value::uuid into v_user_id from zz_pp_fixtures where key = 'user_id';
   select value::uuid into v_type_a from zz_pp_fixtures where key = 'type_a';
-  select value::uuid into v_customer_id from public.customers where name = 'TESTE OPS Plates — Cliente';
+  select id into v_customer_id from public.customers where name = 'TESTE OPS Plates — Cliente';
 
   v_product_id := public.create_product_with_plates(
     'TESTE OPS Plates — Só legado, sem plate', 'CATALOG', 'teste', null,
@@ -761,7 +761,7 @@ declare
 begin
   select value::uuid into v_user_id from zz_pp_fixtures where key = 'user_id';
   select value::uuid into v_type_a from zz_pp_fixtures where key = 'type_a';
-  select value::uuid into v_customer_id from public.customers where name = 'TESTE OPS Plates — Cliente';
+  select id into v_customer_id from public.customers where name = 'TESTE OPS Plates — Cliente';
 
   v_product_id := public.create_product_with_plates(
     'TESTE OPS Plates — Backfill simulado', 'CATALOG', 'teste', null,
@@ -820,7 +820,7 @@ declare
 begin
   select value::uuid into v_user_id from zz_pp_fixtures where key = 'user_id';
   select value::uuid into v_type_a from zz_pp_fixtures where key = 'type_a';
-  select value::uuid into v_customer_id from public.customers where name = 'TESTE OPS Plates — Cliente';
+  select id into v_customer_id from public.customers where name = 'TESTE OPS Plates — Cliente';
 
   -- Produto nasce com composição real (1 plate, 1 filamento).
   v_product_id := public.create_product_with_plates(
@@ -898,7 +898,7 @@ begin
     and not has_function_privilege('authenticated', 'public.update_product_full(uuid,jsonb,jsonb,numeric,integer,jsonb,jsonb,uuid)', 'EXECUTE')
     and has_function_privilege('service_role', 'public.update_product_full(uuid,jsonb,jsonb,numeric,integer,jsonb,jsonb,uuid)', 'EXECUTE')
     and not has_function_privilege('authenticated', 'public.validate_catalog_composition_for_creation(jsonb)', 'EXECUTE')
-    and not has_function_privilege('anon', 'public.product_plates', 'SELECT')
+    and not has_table_privilege('anon', 'public.product_plates', 'SELECT')
     and has_function_privilege('authenticated', 'public.set_product_production(uuid,jsonb,numeric,integer,uuid)', 'EXECUTE') is not distinct from false
   into v_ok;
 

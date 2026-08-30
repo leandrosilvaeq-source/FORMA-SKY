@@ -52,6 +52,7 @@ declare
   v_product_composed_2 uuid;
   v_product_incomplete_1 uuid;
   v_product_incomplete_2 uuid;
+  v_plate_id uuid;
 begin
   select id into v_user_id from public.users where is_active limit 1;
   if v_user_id is null then
@@ -68,26 +69,38 @@ begin
     'PLA', 'TESTE Marca Status Inicial', 'Sólida', 'Preto', null, null, true, null, v_user_id
   )).id;
 
+  -- Composição por PLATES (fonte autoritativa a partir de
+  -- 20260829160000_add_product_plates_structure.sql) — antes desta correção
+  -- este fixture usava set_product_filaments (escrita direta em
+  -- product_filaments, legado), que validate_catalog_composition_for_creation
+  -- deixou de aceitar como prova de composição; substituído por um Plate 1 +
+  -- product_plate_filaments equivalente (mesmo peso, mesmo tipo de
+  -- filamento), inserido diretamente aqui pelo mesmo motivo que create_product
+  -- (11 parâmetros, legado) continua sendo usado nestes dois fixtures em vez
+  -- de create_product_with_plates: preservar exatamente o
+  -- default_weight_grams/default_print_time_seconds já fixados no restante
+  -- deste arquivo (20.00 / 60), sem depender do cálculo automático da soma
+  -- dos plates.
   v_product_composed_1 := public.create_product(
     'TESTE OPS — Produto COM composição 1', 'CATALOG', 'teste',
     'produto com filamento cadastrado', 50.00, 60, 20.00, 4, null, false, v_user_id
   );
-  perform public.set_product_filaments(
-    v_product_composed_1,
-    jsonb_build_array(jsonb_build_object('id', v_filament_type_id, 'theoretical_weight_grams', 10)),
-    v_user_id
-  );
+  insert into public.product_plates (product_id, plate_number, production_time_seconds)
+    values (v_product_composed_1, 1, 60)
+    returning id into v_plate_id;
+  insert into public.product_plate_filaments (plate_id, filament_type_id, weight_grams)
+    values (v_plate_id, v_filament_type_id, 10);
   insert into zz_ois_fixtures(key, value) values ('product_composed_1', v_product_composed_1::text);
 
   v_product_composed_2 := public.create_product(
     'TESTE OPS — Produto COM composição 2', 'CATALOG', 'teste',
     'produto com filamento cadastrado', 60.00, 60, 20.00, 4, null, false, v_user_id
   );
-  perform public.set_product_filaments(
-    v_product_composed_2,
-    jsonb_build_array(jsonb_build_object('id', v_filament_type_id, 'theoretical_weight_grams', 15)),
-    v_user_id
-  );
+  insert into public.product_plates (product_id, plate_number, production_time_seconds)
+    values (v_product_composed_2, 1, 60)
+    returning id into v_plate_id;
+  insert into public.product_plate_filaments (plate_id, filament_type_id, weight_grams)
+    values (v_plate_id, v_filament_type_id, 15);
   insert into zz_ois_fixtures(key, value) values ('product_composed_2', v_product_composed_2::text);
 
   -- Produtos CATALOG SEM nenhuma linha em product_filaments (nunca chamado

@@ -172,6 +172,62 @@ begin
   end;
 end $$;
 
+-- Correção da pendência conhecida deste arquivo (achado de auditoria de uma
+-- rodada anterior): este arquivo nunca deu nenhuma composição real ao
+-- Produto criado acima ("Produto Teste Integração") — nem product_filaments
+-- (legado), nem, mais recentemente, product_plates/product_plate_filaments
+-- (fonte autoritativa a partir de 20260829160000_add_product_plates_structure.sql).
+-- Isso já fazia este arquivo abortar por inteiro (não um FAIL normal, uma
+-- exceção não capturada) assim que a regra de composição obrigatória para
+-- Pedidos CATALOG entrou em vigor, porque uma das seções mais abaixo cria
+-- um Pedido CATALOG usando exatamente este product_id. Corrigido aqui,
+-- imediatamente após a criação do Produto (mesmo local lógico de um
+-- "setup" de fixture, robusto a mudanças de posição das seções abaixo):
+-- cria um tipo de filamento TESTE e um Plate 1 com uma linha de composição
+-- para o Produto, preservando default_weight_grams/default_print_time_seconds
+-- já fixados na criação acima (25.50 / 120) — o Plate 1 tem seu próprio
+-- tempo (120, mesmo valor) e uma linha de filamento (peso arbitrário,
+-- nenhuma asserção deste arquivo depende do peso exato), sem enviar nenhum
+-- ajuste manual (os efetivos já fixados em create_product continuam
+-- valendo através dos 2 ajustes manuais, preenchidos verbatim, mesmo
+-- padrão do backfill real da migration).
+do $$
+declare
+  v_user_id uuid;
+  v_product_id uuid;
+  v_filament_type_id uuid;
+  v_plate_id uuid;
+begin
+  begin
+    select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+    select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
+    if v_user_id is null or v_product_id is null then
+      raise exception 'fixtures ausentes: user_id/product_id (Seção 1 falhou)';
+    end if;
+
+    v_filament_type_id := (public.create_filament_type(
+      'PLA', 'TESTE Marca Bloco1 Integração', 'Sólida', 'Preto', null, null, true, null, v_user_id
+    )).id;
+
+    insert into public.product_plates (product_id, plate_number, production_time_seconds)
+      values (v_product_id, 1, 120)
+      returning id into v_plate_id;
+    insert into public.product_plate_filaments (plate_id, filament_type_id, weight_grams)
+      values (v_plate_id, v_filament_type_id, 25.50);
+    update public.products
+      set production_weight_manual_override_grams = 25.50,
+          production_time_manual_override_seconds = 120
+      where id = v_product_id;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('1', '1.1b Produto Teste Integração ganha Plate 1 + composição real (correção da pendência de composição ausente)',
+              'PASS', 'product_id=' || v_product_id || ' plate_id=' || v_plate_id);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('1', '1.1b Produto Teste Integração ganha Plate 1 + composição real', 'FAIL', sqlerrm);
+  end;
+end $$;
+
 -- =============================================================================
 -- SEÇÃO 2 — update_product_price
 -- =============================================================================
