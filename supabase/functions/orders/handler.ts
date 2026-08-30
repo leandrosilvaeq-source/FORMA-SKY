@@ -15,6 +15,7 @@
 //   POST   /orders/with-payment  -> RPC create_order_with_payment (NOVA)
 //   PUT    /orders/:id           -> RPC update_order
 //   PUT    /orders/:id/full      -> RPC update_quote_order
+//   PATCH  /orders/:id/production-colors -> RPC update_order_item_production_colors (NOVA)
 //   DELETE /orders/:id           -> RPC delete_order (NOVA)
 //
 // orders NÃO possui nenhuma rota GET. Leituras do Bloco 1 ficam no
@@ -119,6 +120,10 @@ export async function handleRequest(req: Request): Promise<Response> {
 
     if (req.method === "PUT" && route.length === 2 && route[1] === "full") {
       return await handleUpdateFullOrder(req, route[0]);
+    }
+
+    if (req.method === "PATCH" && route.length === 2 && route[1] === "production-colors") {
+      return await handleUpdateOrderProductionColors(req, route[0]);
     }
 
     if (req.method === "PUT" && route.length === 1) {
@@ -577,6 +582,77 @@ async function handleDeleteOrder(req: Request, orderId: string): Promise<Respons
 }
 
 // ---------------------------------------------------------------------------
+// PATCH /orders/:id/production-colors -> update_order_item_production_colors(
+//   p_order_id, p_selections, p_changed_by) — NOVA (2026-08-29, migration
+//   20260829180000_add_categories_plate_weight_and_order_colors.sql,
+//   pendente)
+//
+// Caminho para completar/alterar cores DEPOIS da criação do Pedido —
+// decisão do usuário: cores normalmente fecham o Pedido, mas podem ser
+// definidas ou ajustadas depois, até antes de iniciar a produção. Nunca
+// altera order_status; nunca reserva/consome estoque. Substitui TODO o
+// conjunto de cores dos itens CATALOG informados no payload (mesma
+// semântica "substitui o conjunto inteiro" já usada no resto do projeto) —
+// nunca uma rota reaproveitada com semântica incompatível.
+// ---------------------------------------------------------------------------
+async function handleUpdateOrderProductionColors(req: Request, orderId: string): Promise<Response> {
+  const operator = await resolveOperator(req);
+
+  if (!isUuid(orderId)) {
+    throw new ValidationError("Identificador de pedido inválido na rota.");
+  }
+
+  const rawBody = await req.text();
+  rejectIdentityFields(rawBody);
+  const body = parseJsonBody(rawBody);
+
+  if (!Array.isArray(body.selections)) {
+    throw new ValidationError("Campo obrigatório: selections deve ser um array.");
+  }
+
+  const selections = body.selections.map((raw, index) => {
+    const prefix = `selections[${index}]`;
+    const record = requireObject(raw, prefix);
+
+    const orderItemId = requireUuid(record.order_item_id, `${prefix}.order_item_id`);
+    const plateNumber = requireNumber(record.plate_number, `${prefix}.plate_number`, { min: 1 });
+    if (!Number.isInteger(plateNumber)) {
+      throw new ValidationError(`Campo inválido: ${prefix}.plate_number deve ser um número inteiro.`);
+    }
+    const unitNumber = requireNumber(record.unit_number, `${prefix}.unit_number`, { min: 1 });
+    if (!Number.isInteger(unitNumber)) {
+      throw new ValidationError(`Campo inválido: ${prefix}.unit_number deve ser um número inteiro.`);
+    }
+
+    const rawIds = record.filament_type_ids;
+    if (!Array.isArray(rawIds)) {
+      throw new ValidationError(`Campo inválido: ${prefix}.filament_type_ids deve ser um array.`);
+    }
+    const filamentTypeIds = rawIds.map((id, idIndex) =>
+      requireUuid(id, `${prefix}.filament_type_ids[${idIndex}]`),
+    );
+
+    return {
+      order_item_id: orderItemId,
+      plate_number: plateNumber,
+      unit_number: unitNumber,
+      filament_type_ids: filamentTypeIds,
+    };
+  });
+
+  const admin = getAdminClient();
+  const { error } = await admin.rpc("update_order_item_production_colors", {
+    p_order_id: orderId,
+    p_selections: selections,
+    p_changed_by: operator.userId,
+  });
+
+  if (error) throw mapPgError(error);
+
+  return jsonResponse(req, { success: true }, 200);
+}
+
+// ---------------------------------------------------------------------------
 // Validação de um item de p_items — espelha as constraints reais de
 // order_items (Migration 8) e, conforme item_type, de custom_item_details
 // (Migration 9) ou spot_item_details (Migration 10).
@@ -669,9 +745,53 @@ function validateOrderItem(raw: unknown, index: number): Record<string, unknown>
       requireObject(item.spot_details, `${prefix}.spot_details`),
       `${prefix}.spot_details`,
     );
+  } else if (itemType === "CATALOG" && item.production_colors !== undefined && item.production_colors !== null) {
+    // Cores/filamentos por unidade+plate — SEMPRE opcionais na criação
+    // (decisão do usuário: normalmente definidas ao fechar o Pedido, mas
+    // o Pedido pode entrar na Fila sem nenhuma; só ficam obrigatórias
+    // antes de iniciar a produção, ver change_order_status). create_order
+    // (RPC) exige filamento ativo para qualquer cor enviada aqui — é uma
+    // criação, não existe seleção "antiga" a preservar.
+    payload.production_colors = validateProductionColors(item.production_colors, `${prefix}.production_colors`);
   }
 
   return payload;
+}
+
+// Cores por unidade+plate de um item CATALOG — array de
+// {plate_number, unit_number, filament_type_ids: [uuid, ...]}. A RPC
+// (create_order/update_order_item_production_colors) é a autoridade final
+// (revalida plate_number contra o snapshot, unit_number contra quantity,
+// filamento ativo) — esta função só evita um round-trip ao banco para os
+// erros mais comuns.
+function validateProductionColors(raw: unknown, field: string): Record<string, unknown>[] {
+  if (!Array.isArray(raw)) {
+    throw new ValidationError(`Campo inválido: ${field} deve ser um array.`);
+  }
+
+  return raw.map((entry, index) => {
+    const prefix = `${field}[${index}]`;
+    const record = requireObject(entry, prefix);
+
+    const plateNumber = requireNumber(record.plate_number, `${prefix}.plate_number`, { min: 1 });
+    if (!Number.isInteger(plateNumber)) {
+      throw new ValidationError(`Campo inválido: ${prefix}.plate_number deve ser um número inteiro.`);
+    }
+    const unitNumber = requireNumber(record.unit_number, `${prefix}.unit_number`, { min: 1 });
+    if (!Number.isInteger(unitNumber)) {
+      throw new ValidationError(`Campo inválido: ${prefix}.unit_number deve ser um número inteiro.`);
+    }
+
+    const rawIds = record.filament_type_ids;
+    if (!Array.isArray(rawIds)) {
+      throw new ValidationError(`Campo inválido: ${prefix}.filament_type_ids deve ser um array.`);
+    }
+    const filamentTypeIds = rawIds.map((id, idIndex) =>
+      requireUuid(id, `${prefix}.filament_type_ids[${idIndex}]`),
+    );
+
+    return { plate_number: plateNumber, unit_number: unitNumber, filament_type_ids: filamentTypeIds };
+  });
 }
 
 // custom_item_details (Migration 9): current_version segue vX.Y.

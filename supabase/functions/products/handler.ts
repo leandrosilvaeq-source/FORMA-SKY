@@ -482,72 +482,21 @@ async function handleUpdateProductFilaments(req: Request, productId: string): Pr
 }
 
 // ---------------------------------------------------------------------------
-// Validador local de um array de itens de composição de filamento —
-// {id: uuid (filament_type_id), theoretical_weight_grams: número > 0}, sem
-// id repetido no mesmo array (impede duplicidade — o mesmo tipo de
-// filamento não pode aparecer duas vezes na composição de um produto,
-// espelhando unique(product_id, filament_type_id) em product_filaments).
-// Mesmo critério de validateCompositionItems (acima): campos não
-// revalidados além do necessário para a RPC decidir — a RPC
-// (set_product_filaments) é a autoridade final e revalida tipo ativo/peso
-// positivo de novo, em profundidade.
-// ---------------------------------------------------------------------------
-export function validateFilamentCompositionItems(
-  raw: unknown,
-  field: string,
-): Array<{ id: string; theoretical_weight_grams: number }> {
-  if (raw === undefined || raw === null) return [];
-  if (!Array.isArray(raw)) {
-    throw new ValidationError(`Campo inválido: ${field} deve ser um array.`);
-  }
-
-  const seen = new Set<string>();
-  return raw.map((entry, index) => {
-    const prefix = `${field}[${index}]`;
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      throw new ValidationError(`Campo inválido: ${prefix} deve ser um objeto.`);
-    }
-    const record = entry as Record<string, unknown>;
-
-    if (!isUuid(record.id)) {
-      throw new ValidationError(`Campo inválido: ${prefix}.id deve ser um UUID.`);
-    }
-    const id = record.id as string;
-    if (seen.has(id)) {
-      throw new ValidationError(`Campo inválido: ${field} não pode repetir o mesmo id (${id}).`);
-    }
-    seen.add(id);
-
-    const weight = requireNumber(record.theoretical_weight_grams, `${prefix}.theoretical_weight_grams`, {
-      min: 0.01,
-    });
-
-    return { id, theoretical_weight_grams: weight };
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Validador local da estrutura de plates (estrutura produtiva por plates,
-// 2026-08-29) — array de:
-//   { production_time_seconds: inteiro >= 0, filaments: [{filament_type_id: uuid, weight_grams: número > 0}, ...] }
+// Validador local da estrutura de plates — a partir da rodada de
+// reorganização (2026-08-29, migration
+// 20260829180000_add_categories_plate_weight_and_order_colors.sql,
+// pendente), plate NUNCA mais carrega filamentos/cores (removidos do
+// cadastro do Produto — cores agora são escolhidas no Pedido, por unidade
+// e por plate). Array de:
+//   { production_time_seconds: inteiro >= 0, weight_grams: número >= 0 }
 // A posição no array define o número do plate (Plate 1, Plate 2, ...) —
 // nunca um campo separado no payload, para nunca haver buraco/duplicata.
-// filaments pode ser um array vazio (plate só com tempo definido ainda,
-// sem composição) — set_product_production() (RPC) não exige nenhuma
-// linha; a UI normal sempre sugere ao menos uma, mas não é imposto aqui.
-// Mesmo critério das demais validações locais deste arquivo: a RPC
-// continua sendo a autoridade final (revalida tipo ativo/peso positivo/
-// duplicidade em profundidade) — esta função só evita um round-trip ao
-// banco para os erros mais comuns.
+// A RPC (set_product_production) continua sendo a autoridade final —
+// esta função só evita um round-trip ao banco para os erros mais comuns.
 // ---------------------------------------------------------------------------
-export interface PlateFilamentInput {
-  filament_type_id: string;
-  weight_grams: number;
-}
-
 export interface PlateInput {
   production_time_seconds: number;
-  filaments: PlateFilamentInput[];
+  weight_grams: number;
 }
 
 export function validatePlates(raw: unknown, field: string): PlateInput[] {
@@ -572,38 +521,40 @@ export function validatePlates(raw: unknown, field: string): PlateInput[] {
       throw new ValidationError(`Campo inválido: ${prefix}.production_time_seconds deve ser um número inteiro.`);
     }
 
-    const rawFilaments = record.filaments;
-    if (rawFilaments !== undefined && rawFilaments !== null && !Array.isArray(rawFilaments)) {
-      throw new ValidationError(`Campo inválido: ${prefix}.filaments deve ser um array.`);
+    const weightGrams = requireNumber(record.weight_grams, `${prefix}.weight_grams`, { min: 0 });
+
+    return { production_time_seconds: productionTimeSeconds, weight_grams: weightGrams };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Validador local de múltiplas categorias (2026-08-29, mesma migration) —
+// array de strings não vazias, sem repetição (case-sensitive, mesmo texto
+// livre que a antiga categoria única já aceitava, incl. valores digitados
+// em "Outro"). A ORDEM no array define a posição (categories[0] é o valor
+// espelhado em products.category pela RPC). A RPC (set_product_categories)
+// continua sendo a autoridade final.
+// ---------------------------------------------------------------------------
+export function validateCategories(raw: unknown, field: string): string[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw new ValidationError(`Campo inválido: ${field} deve ser um array.`);
+  }
+
+  const seen = new Set<string>();
+  return raw.map((entry, index) => {
+    if (typeof entry !== "string") {
+      throw new ValidationError(`Campo inválido: ${field}[${index}] deve ser um texto.`);
     }
-
-    const seen = new Set<string>();
-    const filaments = ((rawFilaments as unknown[] | undefined) ?? []).map((filamentEntry, filamentIndex) => {
-      const filamentPrefix = `${prefix}.filaments[${filamentIndex}]`;
-      if (typeof filamentEntry !== "object" || filamentEntry === null || Array.isArray(filamentEntry)) {
-        throw new ValidationError(`Campo inválido: ${filamentPrefix} deve ser um objeto.`);
-      }
-      const filamentRecord = filamentEntry as Record<string, unknown>;
-
-      if (!isUuid(filamentRecord.filament_type_id)) {
-        throw new ValidationError(`Campo inválido: ${filamentPrefix}.filament_type_id deve ser um UUID.`);
-      }
-      const filamentTypeId = filamentRecord.filament_type_id as string;
-      if (seen.has(filamentTypeId)) {
-        throw new ValidationError(
-          `Campo inválido: ${prefix}.filaments não pode repetir o mesmo filament_type_id (${filamentTypeId}).`,
-        );
-      }
-      seen.add(filamentTypeId);
-
-      const weightGrams = requireNumber(filamentRecord.weight_grams, `${filamentPrefix}.weight_grams`, {
-        min: 0.01,
-      });
-
-      return { filament_type_id: filamentTypeId, weight_grams: weightGrams };
-    });
-
-    return { production_time_seconds: productionTimeSeconds, filaments };
+    const trimmed = entry.trim();
+    if (trimmed === "") {
+      throw new ValidationError(`Campo inválido: ${field}[${index}] não pode ser vazio.`);
+    }
+    if (seen.has(trimmed)) {
+      throw new ValidationError(`Campo inválido: ${field} não pode repetir a mesma categoria (${trimmed}).`);
+    }
+    seen.add(trimmed);
+    return trimmed;
   });
 }
 
@@ -632,7 +583,7 @@ async function handleCreateProductWithPlates(req: Request): Promise<Response> {
   const name = requireString(body.name, "name");
   const productType = requireEnum(body.product_type, "product_type", PRODUCT_TYPES);
   const defaultPrice = requireNumber(body.default_price, "default_price", { min: 0 });
-  const category = optionalString(body.category, "category");
+  const categories = validateCategories(body.categories, "categories");
   const description = optionalString(body.description, "description");
   const defaultFileId = optionalUuid(body.default_file_id, "default_file_id");
   const allowsPersonalization = optionalBoolean(body.allows_personalization, "allows_personalization");
@@ -655,7 +606,7 @@ async function handleCreateProductWithPlates(req: Request): Promise<Response> {
   const { data, error } = await admin.rpc("create_product_with_plates", {
     p_name: name,
     p_product_type: productType,
-    p_category: category,
+    p_categories: categories,
     p_description: description,
     p_default_price: defaultPrice,
     p_default_file_id: defaultFileId,
@@ -686,8 +637,22 @@ async function handleCreateProductWithPlates(req: Request): Promise<Response> {
 // manual_time_override_seconds, accessories, packaging}) continuam
 // rejeitadas, mesmo critério de handleUpdateProduct.
 // ---------------------------------------------------------------------------
+// Whitelist do p_patch de update_product_full — DELIBERADAMENTE não reusa
+// PRODUCT_PATCH_KEYS (que ainda inclui "category", exclusiva de
+// handleUpdateProduct/update_product, rota antiga preservada): a partir da
+// migration 20260829180000, categorias são SEMPRE substituição completa
+// via p_categories (Seção 2/6 da migration) — "category" nunca é aceita
+// dentro do patch desta rota, para nunca haver duas fontes concorrentes.
+const PRODUCT_FULL_PATCH_KEYS = [
+  "name",
+  "description",
+  "default_file_id",
+  "allows_personalization",
+] as const;
+
 const PRODUCT_FULL_KEYS = [
-  ...PRODUCT_PATCH_KEYS,
+  ...PRODUCT_FULL_PATCH_KEYS,
+  "categories",
   "plates",
   "manual_weight_override_grams",
   "manual_time_override_seconds",
@@ -717,22 +682,7 @@ async function handleUpdateProductFull(req: Request, productId: string): Promise
 
   const patch: Record<string, unknown> = {};
   if ("name" in body) patch.name = requireString(body.name, "name");
-  if ("category" in body) patch.category = optionalString(body.category, "category");
   if ("description" in body) patch.description = optionalString(body.description, "description");
-  if ("default_print_time_seconds" in body) {
-    patch.default_print_time_seconds = optionalInteger(
-      body.default_print_time_seconds,
-      "default_print_time_seconds",
-      { min: 0 },
-    );
-  }
-  if ("default_weight_grams" in body) {
-    patch.default_weight_grams = optionalNumber(
-      body.default_weight_grams,
-      "default_weight_grams",
-      { min: 0 },
-    );
-  }
   if ("default_file_id" in body) {
     patch.default_file_id = optionalUuid(body.default_file_id, "default_file_id");
   }
@@ -743,6 +693,7 @@ async function handleUpdateProductFull(req: Request, productId: string): Promise
     );
   }
 
+  const categories = validateCategories(body.categories, "categories");
   const plates = validatePlates(body.plates, "plates");
   const manualWeightOverrideGrams = optionalNumber(
     body.manual_weight_override_grams,
@@ -761,6 +712,7 @@ async function handleUpdateProductFull(req: Request, productId: string): Promise
   const { data, error } = await admin.rpc("update_product_full", {
     p_product_id: productId,
     p_patch: patch,
+    p_categories: categories,
     p_plates: plates,
     p_manual_weight_override_grams: manualWeightOverrideGrams,
     p_manual_time_override_seconds: manualTimeOverrideSecondsRaw,

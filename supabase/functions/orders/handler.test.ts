@@ -114,20 +114,28 @@ Deno.test("handleRequest rejeita DELETE /orders/:id sem Authorization com 401 (N
   assertEquals(res.status, 401);
 });
 
+Deno.test("handleRequest rejeita PATCH /orders/:id/production-colors sem Authorization com 401 (NOVA rota, 2026-08-29, migration 20260829180000 pendente)", async () => {
+  const res = await handleRequest(makeRequest("PATCH", `/${VALID_UUID_1}/production-colors`, { selections: [] }));
+  assertEquals(res.status, 401);
+});
+
 // ---------------------------------------------------------------------------
-// Roteamento — as 5 rotas nunca se confundem entre si.
+// Roteamento — as 6 rotas nunca se confundem entre si.
 // ---------------------------------------------------------------------------
 
-Deno.test("as 5 rotas (POST /orders, POST /with-payment, PUT /:id, PUT /:id/full, DELETE /:id) são todas resolvidas (401, nunca 404) — nenhuma ambiguidade de roteamento", async () => {
+Deno.test("as 6 rotas (POST /orders, POST /with-payment, PUT /:id, PUT /:id/full, PATCH /:id/production-colors, DELETE /:id) são todas resolvidas (401, nunca 404) — nenhuma ambiguidade de roteamento", async () => {
   const resPost = await handleRequest(makeRequest("POST", "", { customer_id: VALID_UUID_1, items: MINIMAL_ITEMS }));
   const resWithPayment = await handleRequest(
     makeRequest("POST", "/with-payment", { customer_id: VALID_UUID_1, items: MINIMAL_ITEMS }),
   );
   const resPut = await handleRequest(makeRequest("PUT", `/${VALID_UUID_1}`, {}));
   const resPutFull = await handleRequest(makeRequest("PUT", `/${VALID_UUID_1}/full`, {}));
+  const resProductionColors = await handleRequest(
+    makeRequest("PATCH", `/${VALID_UUID_1}/production-colors`, { selections: [] }),
+  );
   const resDelete = await handleRequest(makeRequest("DELETE", `/${VALID_UUID_1}`));
 
-  for (const res of [resPost, resWithPayment, resPut, resPutFull, resDelete]) {
+  for (const res of [resPost, resWithPayment, resPut, resPutFull, resProductionColors, resDelete]) {
     assertEquals(res.status, 401);
   }
 });

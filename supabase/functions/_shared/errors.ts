@@ -344,6 +344,22 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
     "ORDER_CATALOG_MISSING_COMPOSITION:",
     (message) => new BusinessRuleError(message.replace(/^ORDER_CATALOG_MISSING_COMPOSITION:\s*/, "")),
   ],
+  // validate_catalog_production_structure_for_creation (2026-08-29, migration
+  // 20260829180000, pendente) — substitui o marcador acima: passa a exigir
+  // só estrutura produtiva (plate com peso/tempo), nunca mais filamento —
+  // filamentos/cores saíram do Produto e viraram uma escolha do Pedido,
+  // sempre opcional na criação.
+  [
+    "ORDER_CATALOG_MISSING_PRODUCTION_STRUCTURE:",
+    (message) => new BusinessRuleError(message.replace(/^ORDER_CATALOG_MISSING_PRODUCTION_STRUCTURE:\s*/, "")),
+  ],
+  // validate_order_production_readiness (mesma migration) — gate novo da
+  // transição IN_PRODUCTION_QUEUE -> IN_PRODUCTION: bloqueia enquanto
+  // qualquer item CATALOG tiver unidade/plate sem cor ativa definida.
+  [
+    "ORDER_PRODUCTION_COLORS_PENDING:",
+    (message) => new BusinessRuleError(message.replace(/^ORDER_PRODUCTION_COLORS_PENDING:\s*/, "")),
+  ],
   // set_product_production (20260829160000, estrutura produtiva por
   // plates): erros de entrada inválida (a Edge Function `products` já
   // valida tudo isso antes de chamar create_product_with_plates/

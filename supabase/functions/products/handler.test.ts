@@ -11,9 +11,10 @@
 //   - validadores puros já existentes (validateCompositionItems, inalterado
 //     por esta rodada — só mudou de arquivo, testado aqui pela primeira vez
 //     porque agora é importável sem abrir um servidor real);
-//   - validador novo desta rodada (validateFilamentCompositionItems —
-//     Módulo 3, Incremento 6A: peso teórico > 0, sem duplicidade de tipo,
-//     sem zero/negativo);
+//   - validadores da rodada de reorganização (2026-08-29, migration
+//     20260829180000, pendente): validatePlates (plate com peso direto,
+//     sem filamentos — removidos do cadastro do Produto) e
+//     validateCategories (múltiplas categorias, sem duplicidade);
 //   - handleRequest: preflight CORS, 401 sem Authorization, 404 rota
 //     desconhecida, 405 implícito (nenhuma rota reconhecida para métodos
 //     fora do mapeado cai em 404, mesmo padrão de accessories/handler.ts).
@@ -51,8 +52,9 @@ import { ValidationError } from "../_shared/errors.ts";
 import { isUuid } from "../_shared/validate.ts";
 import {
   handleRequest,
+  validateCategories,
   validateCompositionItems,
-  validateFilamentCompositionItems,
+  validatePlates,
 } from "./handler.ts";
 
 function assertEquals(actual: unknown, expected: unknown, msg?: string): void {
@@ -121,67 +123,101 @@ Deno.test("validateCompositionItems rejeita valor que não é array", () => {
 });
 
 // ---------------------------------------------------------------------------
-// validateFilamentCompositionItems — NOVO (Módulo 3, Incremento 6A)
+// validatePlates — a partir da rodada de reorganização (2026-08-29,
+// migration 20260829180000, pendente): plate NUNCA mais carrega
+// filamentos — só production_time_seconds + weight_grams direto.
 // ---------------------------------------------------------------------------
 
-Deno.test("validateFilamentCompositionItems aceita null/undefined como lista vazia", () => {
-  assertEquals(validateFilamentCompositionItems(undefined, "filaments"), []);
-  assertEquals(validateFilamentCompositionItems(null, "filaments"), []);
+Deno.test("validatePlates aceita null/undefined como lista vazia", () => {
+  assertEquals(validatePlates(undefined, "plates"), []);
+  assertEquals(validatePlates(null, "plates"), []);
 });
 
-Deno.test("validateFilamentCompositionItems aceita múltiplos tipos com peso teórico decimal", () => {
-  const result = validateFilamentCompositionItems(
+Deno.test("validatePlates aceita plates com peso direto e tempo", () => {
+  const result = validatePlates(
     [
-      { id: VALID_UUID_1, theoretical_weight_grams: 12.5 },
-      { id: VALID_UUID_2, theoretical_weight_grams: 3.75 },
+      { production_time_seconds: 4620, weight_grams: 37.16 },
+      { production_time_seconds: 10440, weight_grams: 97.34 },
     ],
-    "filaments",
+    "plates",
   );
   assertEquals(result, [
-    { id: VALID_UUID_1, theoretical_weight_grams: 12.5 },
-    { id: VALID_UUID_2, theoretical_weight_grams: 3.75 },
+    { production_time_seconds: 4620, weight_grams: 37.16 },
+    { production_time_seconds: 10440, weight_grams: 97.34 },
   ]);
 });
 
-Deno.test("validateFilamentCompositionItems rejeita filament_type_id duplicado no mesmo array", () => {
+Deno.test("validatePlates aceita weight_grams igual a 0 (nunca exige > 0)", () => {
+  const result = validatePlates([{ production_time_seconds: 0, weight_grams: 0 }], "plates");
+  assertEquals(result, [{ production_time_seconds: 0, weight_grams: 0 }]);
+});
+
+Deno.test("validatePlates rejeita weight_grams negativo", () => {
+  assertThrows(() => validatePlates([{ production_time_seconds: 0, weight_grams: -1 }], "plates"));
+});
+
+Deno.test("validatePlates rejeita weight_grams ausente/não numérico", () => {
+  assertThrows(() => validatePlates([{ production_time_seconds: 0 }], "plates"));
+  assertThrows(() => validatePlates([{ production_time_seconds: 0, weight_grams: "10" }], "plates"));
+});
+
+Deno.test("validatePlates rejeita production_time_seconds fracionado ou negativo", () => {
+  assertThrows(() => validatePlates([{ production_time_seconds: 1.5, weight_grams: 10 }], "plates"));
+  assertThrows(() => validatePlates([{ production_time_seconds: -1, weight_grams: 10 }], "plates"));
+});
+
+Deno.test("validatePlates rejeita valor que não é array", () => {
+  assertThrows(() => validatePlates({ production_time_seconds: 0 }, "plates"));
+});
+
+Deno.test("validatePlates rejeita item que não é objeto", () => {
+  assertThrows(() => validatePlates([42], "plates"));
+});
+
+// ---------------------------------------------------------------------------
+// validateCategories — NOVO (múltiplas categorias, 2026-08-29)
+// ---------------------------------------------------------------------------
+
+Deno.test("validateCategories aceita null/undefined como lista vazia", () => {
+  assertEquals(validateCategories(undefined, "categories"), []);
+  assertEquals(validateCategories(null, "categories"), []);
+});
+
+Deno.test("validateCategories aceita múltiplas categorias, preservando a ordem", () => {
+  assertEquals(validateCategories(["Gamer", "Geek", "Outro texto"], "categories"), [
+    "Gamer",
+    "Geek",
+    "Outro texto",
+  ]);
+});
+
+Deno.test("validateCategories remove espaços nas pontas (trim)", () => {
+  assertEquals(validateCategories(["  Gamer  "], "categories"), ["Gamer"]);
+});
+
+Deno.test("validateCategories rejeita categoria vazia ou só espaços", () => {
+  assertThrows(() => validateCategories([""], "categories"));
+  assertThrows(() => validateCategories(["   "], "categories"));
+});
+
+Deno.test("validateCategories rejeita categoria repetida no mesmo array", () => {
   assertThrows(
-    () =>
-      validateFilamentCompositionItems(
-        [
-          { id: VALID_UUID_1, theoretical_weight_grams: 10 },
-          { id: VALID_UUID_1, theoretical_weight_grams: 20 },
-        ],
-        "filaments",
-      ),
+    () => validateCategories(["Gamer", "Gamer"], "categories"),
     (err) => {
       if (!isValidationError(err)) throw new Error("esperado ValidationError");
-      if (!(err as ValidationError).message.includes("não pode repetir o mesmo id")) {
+      if (!(err as ValidationError).message.includes("não pode repetir a mesma categoria")) {
         throw new Error("mensagem não menciona duplicidade");
       }
     },
   );
 });
 
-Deno.test("validateFilamentCompositionItems rejeita peso zero ou negativo", () => {
-  assertThrows(() => validateFilamentCompositionItems([{ id: VALID_UUID_1, theoretical_weight_grams: 0 }], "filaments"));
-  assertThrows(() => validateFilamentCompositionItems([{ id: VALID_UUID_1, theoretical_weight_grams: -5 }], "filaments"));
+Deno.test("validateCategories rejeita entrada que não é string", () => {
+  assertThrows(() => validateCategories([42], "categories"));
 });
 
-Deno.test("validateFilamentCompositionItems rejeita peso ausente/não numérico", () => {
-  assertThrows(() => validateFilamentCompositionItems([{ id: VALID_UUID_1 }], "filaments"));
-  assertThrows(() => validateFilamentCompositionItems([{ id: VALID_UUID_1, theoretical_weight_grams: "10" }], "filaments"));
-});
-
-Deno.test("validateFilamentCompositionItems rejeita id que não é UUID", () => {
-  assertThrows(() => validateFilamentCompositionItems([{ id: "nao-e-uuid", theoretical_weight_grams: 10 }], "filaments"));
-});
-
-Deno.test("validateFilamentCompositionItems rejeita valor que não é array", () => {
-  assertThrows(() => validateFilamentCompositionItems({ id: VALID_UUID_1 }, "filaments"));
-});
-
-Deno.test("validateFilamentCompositionItems rejeita item que não é objeto", () => {
-  assertThrows(() => validateFilamentCompositionItems([42], "filaments"));
+Deno.test("validateCategories rejeita valor que não é array", () => {
+  assertThrows(() => validateCategories("Gamer", "categories"));
 });
 
 Deno.test("isUuid aceita um UUID v4 bem formado e rejeita string inválida", () => {
