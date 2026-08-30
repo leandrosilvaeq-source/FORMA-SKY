@@ -37,13 +37,26 @@ function ControlledPicker({
   items,
   filamentTypes,
   initialValue = {},
+  disabled,
+  frozenMessage,
 }: {
   items: ProductionColorItem[]
   filamentTypes: FilamentTypeSummary[]
   initialValue?: ProductionColorsValue
+  disabled?: boolean
+  frozenMessage?: string
 }) {
   const [value, setValue] = useState<ProductionColorsValue>(initialValue)
-  return <ProductionColorsPicker items={items} filamentTypes={filamentTypes} value={value} onChange={setValue} />
+  return (
+    <ProductionColorsPicker
+      items={items}
+      filamentTypes={filamentTypes}
+      value={value}
+      onChange={setValue}
+      disabled={disabled}
+      frozenMessage={frozenMessage}
+    />
+  )
 }
 
 async function openSection(user: ReturnType<typeof userEvent.setup>) {
@@ -235,5 +248,87 @@ describe('ProductionColorsPicker', () => {
     expect(screen.getByText('Suporte · 1 unidade')).toBeInTheDocument()
     expect(screen.getAllByText('Completo')).toHaveLength(1)
     expect(screen.getAllByText('Pendente')).toHaveLength(1)
+  })
+
+  // ---------------------------------------------------------------------
+  // Congelamento (rodada corretiva) — frozenMessage/disabled: usado pelo
+  // OrderManagementPanel.tsx quando o Pedido já passou do início real da
+  // produção (IN_PRODUCTION e além). O componente nunca decide sozinho
+  // quando congelar — só reflete o que o chamador manda via props.
+  // ---------------------------------------------------------------------
+  describe('congelamento (frozenMessage/disabled)', () => {
+    it('sem frozenMessage, nasce recolhido e mostra o aviso padrão', () => {
+      const items: ProductionColorItem[] = [{ key: 'row-1', label: 'Chaveiro', quantity: 1, plateCount: 1 }]
+      render(<ControlledPicker items={items} filamentTypes={[ftBlack]} />)
+
+      expect(screen.queryByText(/as cores podem ser definidas agora/i)).not.toBeInTheDocument()
+      expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    })
+
+    it('com frozenMessage, nasce ABERTO automaticamente (mostra os dados congelados sem exigir clique extra) e troca o aviso', () => {
+      const items: ProductionColorItem[] = [{ key: 'row-1', label: 'Chaveiro', quantity: 1, plateCount: 1 }]
+      render(
+        <ControlledPicker
+          items={items}
+          filamentTypes={[ftBlack]}
+          initialValue={{ [colorKey('row-1', 1, 1)]: ['ft1'] }}
+          disabled
+          frozenMessage="Configuração congelada — só para consulta."
+        />,
+      )
+
+      expect(screen.queryByText(/as cores podem ser definidas agora/i)).not.toBeInTheDocument()
+      expect(screen.getByText('Configuração congelada — só para consulta.')).toBeInTheDocument()
+      expect(screen.getByRole('checkbox', { name: /preto/i })).toHaveAttribute('aria-checked', 'true')
+    })
+
+    it('disabled=true desabilita todos os checkboxes de filamento, mesmo já selecionados', () => {
+      const items: ProductionColorItem[] = [{ key: 'row-1', label: 'Chaveiro', quantity: 1, plateCount: 1 }]
+      render(
+        <ControlledPicker
+          items={items}
+          filamentTypes={[ftBlack, ftWhite]}
+          initialValue={{ [colorKey('row-1', 1, 1)]: ['ft1'] }}
+          disabled
+          frozenMessage="Congelado."
+        />,
+      )
+
+      expect(screen.getByRole('checkbox', { name: /preto/i })).toBeDisabled()
+      expect(screen.getByRole('checkbox', { name: /branco/i })).toBeDisabled()
+    })
+
+    it('disabled=true desabilita "Aplicar cores da Unidade 1 a todas"', () => {
+      const items: ProductionColorItem[] = [{ key: 'row-1', label: 'Chaveiro', quantity: 2, plateCount: 1 }]
+      render(
+        <ControlledPicker
+          items={items}
+          filamentTypes={[ftBlack]}
+          initialValue={{ [colorKey('row-1', 1, 1)]: ['ft1'] }}
+          disabled
+          frozenMessage="Congelado."
+        />,
+      )
+
+      expect(screen.getByRole('button', { name: /aplicar cores da unidade 1 a todas/i })).toBeDisabled()
+    })
+
+    it('clicar num checkbox desabilitado não altera a seleção (o estado congelado nunca muda por interação do usuário)', async () => {
+      const user = userEvent.setup()
+      const items: ProductionColorItem[] = [{ key: 'row-1', label: 'Chaveiro', quantity: 1, plateCount: 1 }]
+      render(
+        <ControlledPicker
+          items={items}
+          filamentTypes={[ftBlack]}
+          initialValue={{ [colorKey('row-1', 1, 1)]: ['ft1'] }}
+          disabled
+          frozenMessage="Congelado."
+        />,
+      )
+
+      await user.click(screen.getByRole('checkbox', { name: /preto/i }))
+
+      expect(screen.getByRole('checkbox', { name: /preto/i })).toHaveAttribute('aria-checked', 'true')
+    })
   })
 })

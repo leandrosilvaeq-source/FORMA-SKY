@@ -41,6 +41,14 @@ export interface ProductionColorsPickerProps {
   value: ProductionColorsValue
   onChange: (next: ProductionColorsValue) => void
   disabled?: boolean
+  // Presente = o Pedido já passou do início da produção (congelamento —
+  // ver update_order_item_production_colors/ORDER_PRODUCTION_COLORS_FROZEN:
+  // na migration): o picker abre por padrão (mostra a configuração
+  // congelada sem exigir um clique extra) e troca o aviso informativo
+  // padrão por esta mensagem. O chamador continua responsável por também
+  // passar disabled=true junto — este prop só troca o texto/abertura
+  // inicial, nunca desabilita sozinho.
+  frozenMessage?: string
 }
 
 export function colorKey(itemKey: string, unit: number, plate: number): string {
@@ -247,8 +255,9 @@ export function ProductionColorsPicker({
   value,
   onChange,
   disabled,
+  frozenMessage,
 }: ProductionColorsPickerProps) {
-  const [isOpen, setIsOpen] = useState(false)
+  const [isOpen, setIsOpen] = useState(frozenMessage !== undefined)
 
   if (items.length === 0) return null
 
@@ -266,8 +275,8 @@ export function ProductionColorsPicker({
 
       {isOpen && (
         <div className="flex flex-col gap-3 px-1 pt-2">
-          <p className="text-muted-foreground text-xs">
-            As cores podem ser definidas agora ou antes de iniciar a produção.
+          <p className={cn('text-xs', frozenMessage ? 'text-destructive' : 'text-muted-foreground')}>
+            {frozenMessage ?? 'As cores podem ser definidas agora ou antes de iniciar a produção.'}
           </p>
           {items.map((item) => (
             <ProductionColorsItemSection

@@ -360,6 +360,15 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
     "ORDER_PRODUCTION_COLORS_PENDING:",
     (message) => new BusinessRuleError(message.replace(/^ORDER_PRODUCTION_COLORS_PENDING:\s*/, "")),
   ],
+  // update_order_item_production_colors (mesma migration, rodada corretiva
+  // de congelamento) — edição de cores só permitida em
+  // QUOTE/WAITING_APPROVAL/APPROVED/IN_PRODUCTION_QUEUE (allow-list);
+  // bloqueada em IN_PRODUCTION/WAITING_DELIVERY/DELIVERED/CANCELLED, a
+  // especificação fica congelada assim que a produção começa.
+  [
+    "ORDER_PRODUCTION_COLORS_FROZEN:",
+    (message) => new BusinessRuleError(message.replace(/^ORDER_PRODUCTION_COLORS_FROZEN:\s*/, "")),
+  ],
   // set_product_production (20260829160000, estrutura produtiva por
   // plates): erros de entrada inválida (a Edge Function `products` já
   // valida tudo isso antes de chamar create_product_with_plates/

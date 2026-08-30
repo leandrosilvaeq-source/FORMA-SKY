@@ -163,6 +163,34 @@ describe('OrderStatusControl', () => {
     expect(screen.getByText(/tem certeza que deseja avançar/i)).toBeInTheDocument()
   })
 
+  // Gate de cores pendentes (rodada corretiva, migration 20260829180000,
+  // ainda não aplicada) — change_order_status bloqueia IN_PRODUCTION_QUEUE
+  // -> IN_PRODUCTION enquanto qualquer item CATALOG tiver unidade/plate sem
+  // cor ativa; o erro chega pelo MESMO caminho genérico já testado acima
+  // (ApiError business_rule), então nenhuma mudança de código foi
+  // necessária aqui — este teste só confirma que a mensagem real do gate
+  // (com identificação de produto/unidade/plate) chega íntegra à tela,
+  // nunca reescrita ou genérica.
+  it('IN_PRODUCTION_QUEUE -> IN_PRODUCTION bloqueado por cor pendente: mostra a mensagem real com a identificação da pendência', async () => {
+    changeOrderStatusMock.mockRejectedValue(
+      new ApiError(
+        'business_rule',
+        409,
+        'Defina as cores antes de iniciar a produção — Chaveiro — Unidade 1, Plate 1: cor pendente.',
+      ),
+    )
+    const user = userEvent.setup()
+    renderControl('IN_PRODUCTION_QUEUE')
+
+    await user.click(screen.getByRole('button', { name: 'Fila de produção' }))
+    await user.click(screen.getByRole('button', { name: /avançar para/i }))
+    await user.click(screen.getByRole('button', { name: /^confirmar$/i }))
+
+    expect(
+      await screen.findByText('Defina as cores antes de iniciar a produção — Chaveiro — Unidade 1, Plate 1: cor pendente.'),
+    ).toBeInTheDocument()
+  })
+
   it('fechar o diálogo sem confirmar não chama changeOrderStatus nem onChanged', async () => {
     const user = userEvent.setup()
     const onChanged = renderControl('QUOTE')

@@ -44,6 +44,22 @@ export function canCancelOrder(current: OrderStatus): boolean {
   return index !== -1 && index < inProductionIndex
 }
 
+// Congelamento das cores/filamentos por unidade+plate (rodada corretiva,
+// migration 20260829180000_add_categories_plate_weight_and_order_colors.sql,
+// ainda não aplicada) — espelha exatamente a allow-list de
+// update_order_item_production_colors() na RPC: editável só em
+// QUOTE/WAITING_APPROVAL/APPROVED/IN_PRODUCTION_QUEUE (antes do início real
+// da produção); bloqueado em IN_PRODUCTION/WAITING_DELIVERY/DELIVERED/
+// CANCELLED. CANCELLED nunca está em ORDER_STATUS_SEQUENCE (indexOf = -1),
+// então cai fora corretamente, igual a canCancelOrder. Função própria
+// (mesmo cálculo de canCancelOrder hoje) para o caso de as duas regras
+// divergirem no futuro — nunca combine as duas condições no chamador.
+export function canEditProductionColors(current: OrderStatus): boolean {
+  const index = ORDER_STATUS_SEQUENCE.indexOf(current)
+  const inProductionIndex = ORDER_STATUS_SEQUENCE.indexOf('IN_PRODUCTION')
+  return index !== -1 && index < inProductionIndex
+}
+
 // DELIVERED e CANCELLED nunca mostram avanço de status nem cancelamento —
 // exigência explícita desta rodada, redundante com getNextOrderStatus
 // retornando null e canCancelOrder retornando false para os dois, mas

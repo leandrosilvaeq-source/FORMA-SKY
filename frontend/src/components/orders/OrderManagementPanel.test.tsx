@@ -491,5 +491,93 @@ describe('OrderManagementPanel', () => {
       expect(await screen.findByText('Não é possível alterar cores.')).toBeInTheDocument()
       expect(toastMock.success).not.toHaveBeenCalled()
     })
+
+    // ---------------------------------------------------------------------
+    // Congelamento (rodada corretiva) — a edição de cores só é permitida
+    // ANTES do início real da produção. A partir de IN_PRODUCTION a
+    // configuração fica congelada: sem botão "Salvar cores", sem checkbox
+    // clicável, mas os dados continuam visíveis (nunca escondidos).
+    // ---------------------------------------------------------------------
+    const filamentPreto = {
+      filament_type_id: 'ft1',
+      material: 'PLA' as const,
+      manufacturer: 'Voolt3D',
+      line: 'Sólida',
+      commercial_color: 'Preto',
+      color_code: null,
+      minimum_stock_grams: null,
+      is_active: true,
+      total_available_grams: 1000,
+      usable_spool_count: 1,
+      total_spool_count: 1,
+    }
+
+    it.each(['QUOTE', 'WAITING_APPROVAL', 'APPROVED', 'IN_PRODUCTION_QUEUE'] as const)(
+      '%s: cores editáveis — mostra "Salvar cores" e checkboxes clicáveis',
+      async (orderStatus) => {
+        const user = userEvent.setup()
+        mockHook({ summary: { ...baseSummary, order_status: orderStatus } })
+        useFilamentTypesMock.mockReturnValue({
+          types: [filamentPreto],
+          isLoading: false,
+          error: null,
+          refetch: vi.fn(),
+          create: vi.fn(),
+          update: vi.fn(),
+          delete: vi.fn(),
+        })
+        mockProductionColorsHook({
+          items: [{ key: 'oi1', label: 'Chaveiro', quantity: 1, plateCount: 1 }],
+          value: {},
+        })
+        renderPanel()
+
+        expect(screen.getByRole('button', { name: /^salvar cores$/i })).toBeInTheDocument()
+        await user.click(screen.getByRole('button', { name: /cores e filamentos/i }))
+        expect(screen.getByRole('checkbox', { name: /preto/i })).not.toBeDisabled()
+        expect(screen.queryByText(/configuração de cores foi congelada/i)).not.toBeInTheDocument()
+      },
+    )
+
+    it.each(['IN_PRODUCTION', 'WAITING_DELIVERY', 'DELIVERED', 'CANCELLED'] as const)(
+      '%s: cores congeladas — sem "Salvar cores", checkboxes desabilitados, dados continuam visíveis',
+      (orderStatus) => {
+        mockHook({ summary: { ...baseSummary, order_status: orderStatus } })
+        useFilamentTypesMock.mockReturnValue({
+          types: [filamentPreto],
+          isLoading: false,
+          error: null,
+          refetch: vi.fn(),
+          create: vi.fn(),
+          update: vi.fn(),
+          delete: vi.fn(),
+        })
+        mockProductionColorsHook({
+          items: [{ key: 'oi1', label: 'Chaveiro', quantity: 1, plateCount: 1 }],
+          value: { 'oi1:1:1': ['ft1'] },
+        })
+        renderPanel()
+
+        // Painel abre automaticamente em estado congelado (mostra os dados
+        // sem exigir um clique extra) — nunca precisa clicar em "Cores e
+        // filamentos" para ver a configuração já salva.
+        expect(screen.queryByRole('button', { name: /^salvar cores$/i })).not.toBeInTheDocument()
+        expect(screen.getByRole('checkbox', { name: /preto/i })).toBeDisabled()
+        expect(screen.getByRole('checkbox', { name: /preto/i })).toHaveAttribute('aria-checked', 'true')
+        expect(screen.getByText(/configuração de cores foi congelada ao iniciar a produção/i)).toBeInTheDocument()
+      },
+    )
+
+    it('estado congelado nunca chama save() mesmo que o draft local seja manipulado (defesa em profundidade — backend é a autoridade)', () => {
+      mockHook({ summary: { ...baseSummary, order_status: 'IN_PRODUCTION' } })
+      const { save } = mockProductionColorsHook({
+        items: [{ key: 'oi1', label: 'Chaveiro', quantity: 1, plateCount: 1 }],
+        value: { 'oi1:1:1': ['ft1'] },
+      })
+      renderPanel()
+
+      expect(screen.queryByRole('button', { name: /^salvar cores$/i })).not.toBeInTheDocument()
+      expect(save).not.toHaveBeenCalled()
+    })
   })
 })

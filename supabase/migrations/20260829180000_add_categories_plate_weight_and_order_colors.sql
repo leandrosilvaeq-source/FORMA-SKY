@@ -1428,6 +1428,22 @@ grant execute on function public.remove_order_item(uuid, uuid) to service_role;
 --     altera order_status, nunca toca order_item_plates (snapshot
 --     permanece congelado), nunca reserva/consome estoque.
 --
+--     CONGELAMENTO (regra revisada nesta rodada corretiva) — a edição de
+--     cores só é permitida enquanto o Pedido ainda não começou a ser
+--     produzido de fato: QUOTE, WAITING_APPROVAL, APPROVED,
+--     IN_PRODUCTION_QUEUE (allow-list explícita, nunca uma lista de
+--     bloqueio — um status novo que venha a existir no futuro fica
+--     bloqueado por padrão, nunca liberado por omissão). Bloqueada em
+--     IN_PRODUCTION, WAITING_DELIVERY, DELIVERED e CANCELLED — a
+--     especificação de cores fica congelada assim que a produção começa,
+--     nunca editável depois (marcador estável
+--     ORDER_PRODUCTION_COLORS_FROZEN:, mapeado em _shared/errors.ts para
+--     BusinessRuleError/409, sem detalhe interno além do status atual —
+--     mesmo padrão de erro de negócio já usado no restante do projeto).
+--     Falha em QUALQUER validação (status congelado, seleção inválida)
+--     nunca grava nada — toda a função roda numa única transação
+--     implícita, sem UPDATE/INSERT parcial.
+--
 --     Regra de filamento inativo: uma seleção que JÁ EXISTIA antes desta
 --     chamada é preservada mesmo que o filamento tenha ficado inativo
 --     entretanto (nunca removida silenciosamente); só uma seleção
@@ -1470,8 +1486,12 @@ begin
   if not found then
     raise exception 'orders.id % não encontrado', p_order_id;
   end if;
-  if v_order_status in ('DELIVERED', 'CANCELLED') then
-    raise exception 'Não é possível alterar cores de um pedido % (status atual: %)', p_order_id, v_order_status;
+  -- Allow-list explícita (nunca uma lista de bloqueio) — só os 4 estados
+  -- anteriores ao início real da produção permitem editar cores; qualquer
+  -- outro status (IN_PRODUCTION, WAITING_DELIVERY, DELIVERED, CANCELLED, ou
+  -- um status futuro ainda não previsto) é bloqueado por padrão.
+  if v_order_status not in ('QUOTE', 'WAITING_APPROVAL', 'APPROVED', 'IN_PRODUCTION_QUEUE') then
+    raise exception 'ORDER_PRODUCTION_COLORS_FROZEN: A configuração de cores foi congelada ao iniciar a produção (status atual: %).', v_order_status;
   end if;
 
   select coalesce(array_agg(
@@ -1533,7 +1553,7 @@ end;
 $$;
 
 comment on function public.update_order_item_production_colors(uuid, jsonb, uuid) is
-  'Substitui atomicamente TODAS as cores (order_item_unit_plate_filaments) dos itens CATALOG de um Pedido a partir do payload (unit_number 1..quantity, plate_number existente no snapshot order_item_plates, filament_type_id ativo — exceto uma seleção que já existia antes desta chamada, preservada mesmo que o filamento tenha ficado inativo entretanto). Nunca altera order_status, nunca toca order_item_plates, nunca reserva/consome estoque. Bloqueado em DELIVERED/CANCELLED.';
+  'Substitui atomicamente TODAS as cores (order_item_unit_plate_filaments) dos itens CATALOG de um Pedido a partir do payload (unit_number 1..quantity, plate_number existente no snapshot order_item_plates, filament_type_id ativo — exceto uma seleção que já existia antes desta chamada, preservada mesmo que o filamento tenha ficado inativo entretanto). Nunca altera order_status, nunca toca order_item_plates, nunca reserva/consome estoque. Permitida só em QUOTE/WAITING_APPROVAL/APPROVED/IN_PRODUCTION_QUEUE (allow-list) — bloqueada em IN_PRODUCTION/WAITING_DELIVERY/DELIVERED/CANCELLED (ORDER_PRODUCTION_COLORS_FROZEN:), a configuração fica congelada assim que a produção começa.';
 
 revoke execute on function public.update_order_item_production_colors(uuid, jsonb, uuid) from public, anon, authenticated;
 grant execute on function public.update_order_item_production_colors(uuid, jsonb, uuid) to service_role;

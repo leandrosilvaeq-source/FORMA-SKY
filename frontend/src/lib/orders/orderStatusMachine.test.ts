@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canCancelOrder, getNextOrderStatus, isTerminalOrderStatus } from './orderStatusMachine'
+import { canCancelOrder, canEditProductionColors, getNextOrderStatus, isTerminalOrderStatus } from './orderStatusMachine'
 import type { OrderStatus } from '@/types/domain'
 
 describe('getNextOrderStatus', () => {
@@ -35,6 +35,25 @@ describe('canCancelOrder', () => {
     '%s bloqueia cancelamento (a partir de IN_PRODUCTION, inclusive, ou já terminal)',
     (status) => {
       expect(canCancelOrder(status)).toBe(false)
+    },
+  )
+})
+
+// Congelamento de cores (rodada corretiva, migration 20260829180000, ainda
+// não aplicada) — espelha exatamente a allow-list de
+// update_order_item_production_colors() na RPC.
+describe('canEditProductionColors', () => {
+  it.each(['QUOTE', 'WAITING_APPROVAL', 'APPROVED', 'IN_PRODUCTION_QUEUE'] satisfies OrderStatus[])(
+    '%s permite editar cores (antes do início real da produção)',
+    (status) => {
+      expect(canEditProductionColors(status)).toBe(true)
+    },
+  )
+
+  it.each(['IN_PRODUCTION', 'WAITING_DELIVERY', 'DELIVERED', 'CANCELLED'] satisfies OrderStatus[])(
+    '%s bloqueia edição de cores (configuração congelada a partir de IN_PRODUCTION, inclusive, ou já terminal)',
+    (status) => {
+      expect(canEditProductionColors(status)).toBe(false)
     },
   )
 })

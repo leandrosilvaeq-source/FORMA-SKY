@@ -11,7 +11,12 @@ import { useFilamentTypes } from '@/hooks/useFilamentTypes'
 import { useOrderManagement } from '@/hooks/useOrderManagement'
 import { useOrderProductionColors } from '@/hooks/useOrderProductionColors'
 import { ApiError } from '@/lib/api/errors'
-import { canCancelOrder, getNextOrderStatus, isTerminalOrderStatus } from '@/lib/orders/orderStatusMachine'
+import {
+  canCancelOrder,
+  canEditProductionColors,
+  getNextOrderStatus,
+  isTerminalOrderStatus,
+} from '@/lib/orders/orderStatusMachine'
 import type { OrderStatus, PaymentMethod, PaymentStatus, PaymentType } from '@/types/domain'
 
 // Mesmos rótulos de OrdersPage.tsx/OrderEditForm.tsx — duplicados de
@@ -269,6 +274,15 @@ export function OrderManagementPanel({ orderId, clientLabel, onClose, onChanged 
   const canCancel = canCancelOrder(summary.order_status)
   const terminal = isTerminalOrderStatus(summary.order_status)
   const historyRows = buildHistoryRows(statusHistory, paymentStatusHistory, payments)
+  // Congelamento das cores/filamentos (rodada corretiva, migration
+  // 20260829180000, ainda não aplicada) — espelha exatamente a allow-list
+  // do backend (update_order_item_production_colors): editável só antes do
+  // início real da produção. A partir de IN_PRODUCTION o painel vira
+  // somente leitura para este bloco — nunca esconde os dados já
+  // congelados, só impede nova edição (defesa em profundidade: o backend
+  // já rejeita com ORDER_PRODUCTION_COLORS_FROZEN:, isto só evita oferecer
+  // um controle que o banco certamente rejeitaria).
+  const canEditColors = canEditProductionColors(summary.order_status)
 
   return (
     <div className="flex flex-col gap-4">
@@ -411,16 +425,26 @@ export function OrderManagementPanel({ orderId, clientLabel, onClose, onChanged 
                   filamentTypes={filamentTypesHook.types}
                   value={productionColorsDraft}
                   onChange={setProductionColorsDraft}
+                  disabled={!canEditColors}
+                  frozenMessage={
+                    canEditColors
+                      ? undefined
+                      : `A configuração de cores foi congelada ao iniciar a produção (status atual: "${ORDER_STATUS_LABELS[summary.order_status]}"). Os dados abaixo são só para consulta.`
+                  }
                 />
-                {productionColorsError && <p className="text-destructive text-sm">{productionColorsError}</p>}
-                <Button
-                  type="button"
-                  onClick={() => void handleSaveProductionColors()}
-                  disabled={productionColorsHook.isSaving}
-                  className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark self-start"
-                >
-                  {productionColorsHook.isSaving ? 'Salvando...' : 'Salvar cores'}
-                </Button>
+                {canEditColors && productionColorsError && (
+                  <p className="text-destructive text-sm">{productionColorsError}</p>
+                )}
+                {canEditColors && (
+                  <Button
+                    type="button"
+                    onClick={() => void handleSaveProductionColors()}
+                    disabled={productionColorsHook.isSaving}
+                    className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark self-start"
+                  >
+                    {productionColorsHook.isSaving ? 'Salvando...' : 'Salvar cores'}
+                  </Button>
+                )}
               </>
             )}
           </CardContent>

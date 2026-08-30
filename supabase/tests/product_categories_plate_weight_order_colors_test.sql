@@ -8,6 +8,15 @@
 -- + production_colors opcionais —, update_order_item_production_colors,
 -- validate_order_production_readiness e o gate novo em change_order_status).
 --
+-- AMPLIADO NESTA RODADA CORRETIVA (2026-08-30) — Seção 7 (nova): a regra de
+-- congelamento de cores foi revisada — update_order_item_production_colors
+-- passa a usar uma allow-list explícita (QUOTE/WAITING_APPROVAL/APPROVED/
+-- IN_PRODUCTION_QUEUE), nunca uma lista de bloqueio; testados os 8 status
+-- reais da máquina de estados individualmente, unit_number/plate_number/
+-- filament_type_id inexistentes na atualização pós-criação, e a limpeza de
+-- cores antigas ao editar itens (update_quote_order) por mudança de
+-- quantidade.
+--
 -- ESTE ARQUIVO NÃO É UMA MIGRATION. Roda inteiro dentro de UMA ÚNICA
 -- transação, terminada sempre com ROLLBACK — nenhum dado criado por este
 -- script persiste no banco. Usa somente cliente/produto/tipo de filamento
@@ -995,7 +1004,364 @@ begin
 end $$;
 
 -- =============================================================================
--- SEÇÃO 7 — grants (funções internas sem NENHUM EXECUTE; RPCs públicas só
+-- SEÇÃO 7 — CONGELAMENTO de cores por status (rodada corretiva 2026-08-30):
+-- update_order_item_production_colors só é permitida em
+-- QUOTE/WAITING_APPROVAL/APPROVED/IN_PRODUCTION_QUEUE (allow-list, nunca
+-- uma lista de bloqueio) — bloqueada em
+-- IN_PRODUCTION/WAITING_DELIVERY/DELIVERED/CANCELLED
+-- (ORDER_PRODUCTION_COLORS_FROZEN:). Os 8 status reais da máquina de
+-- estados (auditados em ORDER_STATUS_SEQUENCE/change_order_status) são
+-- testados individualmente abaixo — o status é forçado via UPDATE direto
+-- em public.orders (nunca via change_order_status, que exigiria percorrer
+-- toda a máquina/aprovações CUSTOM só para chegar num estado — aqui o
+-- objetivo é isolar e testar exclusivamente o gate de
+-- update_order_item_production_colors, não a máquina de estados inteira,
+-- já testada em bloco1_integration_test.sql/order_initial_status_test.sql).
+-- =============================================================================
+
+-- 7.1 — permitido em QUOTE, WAITING_APPROVAL, APPROVED, IN_PRODUCTION_QUEUE:
+-- a chamada grava normalmente, sem nenhum erro.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_ft_a uuid;
+  v_status text;
+  v_allowed_statuses text[] := array['QUOTE', 'WAITING_APPROVAL', 'APPROVED', 'IN_PRODUCTION_QUEUE'];
+  v_order_id uuid;
+  v_order_item_id uuid;
+  v_color_count integer;
+  v_all_pass boolean := true;
+  v_details text := '';
+begin
+  select value::uuid into v_user_id from zz_cpo_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_cpo_fixtures where key = 'customer_id';
+  select value::uuid into v_product_id from zz_cpo_fixtures where key = 'product_id';
+  select value::uuid into v_ft_a from zz_cpo_fixtures where key = 'ft_a';
+
+  foreach v_status in array v_allowed_statuses
+  loop
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'TESTE OPS Cores — congelamento 7.1 (' || v_status || ')',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item teste', 'quantity', 1, 'unit_price', 50
+      )),
+      v_user_id
+    );
+    select id into v_order_item_id from public.order_items where order_id = v_order_id;
+    update public.orders set order_status = v_status where id = v_order_id;
+
+    begin
+      perform public.update_order_item_production_colors(
+        v_order_id,
+        jsonb_build_array(jsonb_build_object(
+          'order_item_id', v_order_item_id, 'plate_number', 1, 'unit_number', 1, 'filament_type_ids', jsonb_build_array(v_ft_a)
+        )),
+        v_user_id
+      );
+      select count(*) into v_color_count from public.order_item_unit_plate_filaments where order_item_id = v_order_item_id;
+      if v_color_count <> 1 then
+        v_all_pass := false;
+        v_details := v_details || v_status || ': esperava 1 cor gravada, achou ' || v_color_count || '; ';
+      end if;
+    exception when others then
+      v_all_pass := false;
+      v_details := v_details || v_status || ': rejeitado indevidamente (' || sqlerrm || '); ';
+    end;
+  end loop;
+
+  insert into zz_cpo_test_results(section, test_name, status, details)
+    values ('7', '7.1 update_order_item_production_colors PERMITIDA em QUOTE/WAITING_APPROVAL/APPROVED/IN_PRODUCTION_QUEUE',
+      case when v_all_pass then 'PASS' else 'FAIL' end, nullif(v_details, ''));
+end $$;
+
+-- 7.2 — bloqueado em IN_PRODUCTION, WAITING_DELIVERY, DELIVERED, CANCELLED:
+-- a chamada é rejeitada com ORDER_PRODUCTION_COLORS_FROZEN:, e NENHUMA
+-- alteração residual sobra (zero linhas gravadas, seleção anterior — se
+-- houver — permanece intacta).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_ft_a uuid;
+  v_ft_b uuid;
+  v_status text;
+  v_blocked_statuses text[] := array['IN_PRODUCTION', 'WAITING_DELIVERY', 'DELIVERED', 'CANCELLED'];
+  v_order_id uuid;
+  v_order_item_id uuid;
+  v_color_count_before integer;
+  v_color_count_after integer;
+  v_raised boolean;
+  v_message text;
+  v_all_pass boolean := true;
+  v_details text := '';
+begin
+  select value::uuid into v_user_id from zz_cpo_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_cpo_fixtures where key = 'customer_id';
+  select value::uuid into v_product_id from zz_cpo_fixtures where key = 'product_id';
+  select value::uuid into v_ft_a from zz_cpo_fixtures where key = 'ft_a';
+  select value::uuid into v_ft_b from zz_cpo_fixtures where key = 'ft_b';
+
+  foreach v_status in array v_blocked_statuses
+  loop
+    v_order_id := public.create_order(
+      v_customer_id, null, null, null, null, 0, 0, 'TESTE OPS Cores — congelamento 7.2 (' || v_status || ')',
+      jsonb_build_array(jsonb_build_object(
+        'item_type', 'CATALOG', 'product_id', v_product_id,
+        'item_name', 'Item teste', 'quantity', 1, 'unit_price', 50,
+        -- Já nasce com 1 cor (enquanto ainda IN_PRODUCTION_QUEUE, criação
+        -- sempre permitida) — prova que a tentativa bloqueada preserva
+        -- essa seleção anterior intacta, nunca a apaga.
+        'production_colors', jsonb_build_array(jsonb_build_object(
+          'plate_number', 1, 'unit_number', 1, 'filament_type_ids', jsonb_build_array(v_ft_a)
+        ))
+      )),
+      v_user_id
+    );
+    select id into v_order_item_id from public.order_items where order_id = v_order_id;
+    update public.orders set order_status = v_status where id = v_order_id;
+
+    select count(*) into v_color_count_before from public.order_item_unit_plate_filaments where order_item_id = v_order_item_id;
+
+    v_raised := false;
+    begin
+      perform public.update_order_item_production_colors(
+        v_order_id,
+        jsonb_build_array(jsonb_build_object(
+          'order_item_id', v_order_item_id, 'plate_number', 1, 'unit_number', 1, 'filament_type_ids', jsonb_build_array(v_ft_b)
+        )),
+        v_user_id
+      );
+    exception when others then
+      v_raised := true;
+      v_message := sqlerrm;
+    end;
+
+    select count(*) into v_color_count_after from public.order_item_unit_plate_filaments where order_item_id = v_order_item_id;
+
+    if not (v_raised and v_message ilike 'ORDER_PRODUCTION_COLORS_FROZEN:%' and v_message ilike '%' || v_status || '%'
+            and v_color_count_before = 1 and v_color_count_after = 1) then
+      v_all_pass := false;
+      v_details := v_details || v_status || ': raised=' || v_raised || ' msg=' || coalesce(v_message, '') ||
+        ' before=' || v_color_count_before || ' after=' || v_color_count_after || '; ';
+    end if;
+  end loop;
+
+  insert into zz_cpo_test_results(section, test_name, status, details)
+    values ('7', '7.2 update_order_item_production_colors BLOQUEADA em IN_PRODUCTION/WAITING_DELIVERY/DELIVERED/CANCELLED (ORDER_PRODUCTION_COLORS_FROZEN:), zero alteração residual, seleção anterior preservada',
+      case when v_all_pass then 'PASS' else 'FAIL' end, nullif(v_details, ''));
+end $$;
+
+-- 7.3 — unit_number inexistente (fora de 1..quantity) é rejeitado também
+-- na atualização pós-criação (mesma validação de create_order, agora no
+-- caminho de update_order_item_production_colors).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_ft_a uuid;
+  v_order_id uuid;
+  v_order_item_id uuid;
+  v_raised boolean := false;
+  v_message text;
+begin
+  select value::uuid into v_user_id from zz_cpo_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_cpo_fixtures where key = 'customer_id';
+  select value::uuid into v_product_id from zz_cpo_fixtures where key = 'product_id';
+  select value::uuid into v_ft_a from zz_cpo_fixtures where key = 'ft_a';
+
+  v_order_id := public.create_order(
+    v_customer_id, null, null, null, null, 0, 0, 'TESTE OPS Cores — 7.3 unit inexistente',
+    jsonb_build_array(jsonb_build_object(
+      'item_type', 'CATALOG', 'product_id', v_product_id,
+      'item_name', 'Item teste', 'quantity', 1, 'unit_price', 50
+    )),
+    v_user_id
+  );
+  select id into v_order_item_id from public.order_items where order_id = v_order_id;
+
+  begin
+    perform public.update_order_item_production_colors(
+      v_order_id,
+      jsonb_build_array(jsonb_build_object(
+        'order_item_id', v_order_item_id, 'plate_number', 1, 'unit_number', 5, 'filament_type_ids', jsonb_build_array(v_ft_a)
+      )),
+      v_user_id
+    );
+  exception when others then
+    v_raised := true;
+    v_message := sqlerrm;
+  end;
+
+  insert into zz_cpo_test_results(section, test_name, status, details)
+    values ('7', '7.3 update_order_item_production_colors: unit_number fora de 1..quantity é rejeitado',
+      case when v_raised and v_message ilike '%unit_number%' then 'PASS' else 'FAIL' end,
+      'raised=' || v_raised || ' message=' || coalesce(v_message, ''));
+end $$;
+
+-- 7.4 — plate_number inexistente no snapshot do item é rejeitado na
+-- atualização pós-criação.
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_ft_a uuid;
+  v_order_id uuid;
+  v_order_item_id uuid;
+  v_raised boolean := false;
+  v_message text;
+begin
+  select value::uuid into v_user_id from zz_cpo_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_cpo_fixtures where key = 'customer_id';
+  select value::uuid into v_product_id from zz_cpo_fixtures where key = 'product_id';
+  select value::uuid into v_ft_a from zz_cpo_fixtures where key = 'ft_a';
+
+  v_order_id := public.create_order(
+    v_customer_id, null, null, null, null, 0, 0, 'TESTE OPS Cores — 7.4 plate inexistente',
+    jsonb_build_array(jsonb_build_object(
+      'item_type', 'CATALOG', 'product_id', v_product_id,
+      'item_name', 'Item teste', 'quantity', 1, 'unit_price', 50
+    )),
+    v_user_id
+  );
+  select id into v_order_item_id from public.order_items where order_id = v_order_id;
+
+  begin
+    perform public.update_order_item_production_colors(
+      v_order_id,
+      jsonb_build_array(jsonb_build_object(
+        'order_item_id', v_order_item_id, 'plate_number', 99, 'unit_number', 1, 'filament_type_ids', jsonb_build_array(v_ft_a)
+      )),
+      v_user_id
+    );
+  exception when others then
+    v_raised := true;
+    v_message := sqlerrm;
+  end;
+
+  insert into zz_cpo_test_results(section, test_name, status, details)
+    values ('7', '7.4 update_order_item_production_colors: plate_number fora do snapshot é rejeitado',
+      case when v_raised and v_message ilike '%plate_number%' then 'PASS' else 'FAIL' end,
+      'raised=' || v_raised || ' message=' || coalesce(v_message, ''));
+end $$;
+
+-- 7.5 — filament_type_id inexistente é rejeitado na atualização
+-- pós-criação (mesma validação de create_order).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_order_id uuid;
+  v_order_item_id uuid;
+  v_raised boolean := false;
+  v_message text;
+begin
+  select value::uuid into v_user_id from zz_cpo_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_cpo_fixtures where key = 'customer_id';
+  select value::uuid into v_product_id from zz_cpo_fixtures where key = 'product_id';
+
+  v_order_id := public.create_order(
+    v_customer_id, null, null, null, null, 0, 0, 'TESTE OPS Cores — 7.5 filamento inexistente',
+    jsonb_build_array(jsonb_build_object(
+      'item_type', 'CATALOG', 'product_id', v_product_id,
+      'item_name', 'Item teste', 'quantity', 1, 'unit_price', 50
+    )),
+    v_user_id
+  );
+  select id into v_order_item_id from public.order_items where order_id = v_order_id;
+
+  begin
+    perform public.update_order_item_production_colors(
+      v_order_id,
+      jsonb_build_array(jsonb_build_object(
+        'order_item_id', v_order_item_id, 'plate_number', 1, 'unit_number', 1, 'filament_type_ids', jsonb_build_array(gen_random_uuid())
+      )),
+      v_user_id
+    );
+  exception when others then
+    v_raised := true;
+    v_message := sqlerrm;
+  end;
+
+  insert into zz_cpo_test_results(section, test_name, status, details)
+    values ('7', '7.5 update_order_item_production_colors: filament_type_id inexistente é rejeitado',
+      case when v_raised and v_message ilike '%não encontrado%' then 'PASS' else 'FAIL' end,
+      'raised=' || v_raised || ' message=' || coalesce(v_message, ''));
+end $$;
+
+-- 7.6 — editar itens via update_quote_order (mudança de quantidade) limpa
+-- as cores antigas e re-snapshota os plates — nenhuma cor órfã sobrevive
+-- referenciando um order_item_plates já apagado (a FK RESTRICT exigiria
+-- essa ordem de limpeza; este teste prova que a ordem está correta).
+do $$
+declare
+  v_user_id uuid;
+  v_customer_id uuid;
+  v_product_id uuid;
+  v_ft_a uuid;
+  v_order_id uuid;
+  v_order_item_id_before uuid;
+  v_order_item_id_after uuid;
+  v_color_count_after integer;
+  v_snapshot_count_after integer;
+  v_new_quantity integer;
+begin
+  select value::uuid into v_user_id from zz_cpo_fixtures where key = 'user_id';
+  select value::uuid into v_customer_id from zz_cpo_fixtures where key = 'customer_id';
+  select value::uuid into v_product_id from zz_cpo_fixtures where key = 'product_id';
+  select value::uuid into v_ft_a from zz_cpo_fixtures where key = 'ft_a';
+
+  -- Nasce em QUOTE (item CUSTOM misturado só para forçar QUOTE — depois
+  -- removido na própria edição, já que update_quote_order só aceita
+  -- CATALOG) — mais simples: usa quantity=1 e força QUOTE via UPDATE
+  -- direto (mesmo raciocínio de isolamento da Seção 7.1/7.2 — testar só
+  -- update_quote_order, não a máquina de estados inteira).
+  v_order_id := public.create_order(
+    v_customer_id, null, null, null, null, 0, 0, 'TESTE OPS Cores — 7.6 quantidade alterada',
+    jsonb_build_array(jsonb_build_object(
+      'item_type', 'CATALOG', 'product_id', v_product_id,
+      'item_name', 'Item teste', 'quantity', 1, 'unit_price', 50,
+      'production_colors', jsonb_build_array(jsonb_build_object(
+        'plate_number', 1, 'unit_number', 1, 'filament_type_ids', jsonb_build_array(v_ft_a)
+      ))
+    )),
+    v_user_id
+  );
+  select id into v_order_item_id_before from public.order_items where order_id = v_order_id;
+  update public.orders set order_status = 'QUOTE' where id = v_order_id;
+
+  perform public.update_quote_order(
+    v_order_id, v_customer_id, null, null, null, null, null, null, null,
+    'quantidade alterada de 1 para 3',
+    jsonb_build_array(jsonb_build_object(
+      'item_type', 'CATALOG', 'product_id', v_product_id,
+      'item_name', 'Item teste', 'quantity', 3, 'unit_price', 50
+    )),
+    v_user_id
+  );
+
+  select id, quantity into v_order_item_id_after, v_new_quantity from public.order_items where order_id = v_order_id;
+  select count(*) into v_color_count_after from public.order_item_unit_plate_filaments where order_item_id = v_order_item_id_after;
+  select count(*) into v_snapshot_count_after from public.order_item_plates where order_item_id = v_order_item_id_after;
+
+  insert into zz_cpo_test_results(section, test_name, status, details)
+    values ('7', '7.6 editar itens (quantidade 1->3) via update_quote_order limpa cores antigas e re-snapshota plates, zero cor órfã',
+      case when v_new_quantity = 3 and v_color_count_after = 0 and v_snapshot_count_after = 2
+             and v_order_item_id_after <> v_order_item_id_before
+           then 'PASS' else 'FAIL' end,
+      'new_quantity=' || v_new_quantity || ' color_count_after=' || v_color_count_after ||
+      ' snapshot_count_after=' || v_snapshot_count_after ||
+      ' item_id_changed=' || (v_order_item_id_after <> v_order_item_id_before));
+end $$;
+
+-- =============================================================================
+-- SEÇÃO 8 — grants (funções internas sem NENHUM EXECUTE; RPCs públicas só
 -- para service_role)
 -- =============================================================================
 do $$
@@ -1033,11 +1399,11 @@ begin
   end loop;
 
   insert into zz_cpo_test_results(section, test_name, status, details)
-    values ('7', '7.1 grants corretos: 3 funções internas com zero grants, update_order_item_production_colors só service_role',
+    values ('8', '8.1 grants corretos: 3 funções internas com zero grants, update_order_item_production_colors só service_role',
       case when v_all_pass then 'PASS' else 'FAIL' end, nullif(v_details, ''));
 exception when others then
   insert into zz_cpo_test_results(section, test_name, status, details)
-    values ('7', '7.1 grants', 'FAIL', sqlerrm);
+    values ('8', '8.1 grants', 'FAIL', sqlerrm);
 end $$;
 
 -- =============================================================================
