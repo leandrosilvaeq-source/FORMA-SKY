@@ -76,7 +76,11 @@ function renderForm(overrides: Partial<Parameters<typeof ProductCompositionForm>
   return { onSubmit, onCancel }
 }
 
-async function chooseOption(user: ReturnType<typeof userEvent.setup>, comboboxName: string, optionName: string) {
+async function chooseOption(
+  user: ReturnType<typeof userEvent.setup>,
+  comboboxName: string,
+  optionName: string,
+) {
   await user.click(screen.getByRole('combobox', { name: comboboxName }))
   await user.click(await screen.findByRole('option', { name: optionName }))
 }
@@ -153,7 +157,10 @@ describe('ProductCompositionForm', () => {
 
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
-    expect(onSubmit).toHaveBeenCalledWith({ accessories: [{ id: 'a1', quantity: 7 }], packaging: [] })
+    expect(onSubmit).toHaveBeenCalledWith({
+      accessories: [{ id: 'a1', quantity: 7 }],
+      packaging: [],
+    })
   })
 
   it('renderiza sem nenhuma composição prévia (0 acessórios, 0 embalagens)', () => {
@@ -191,7 +198,9 @@ describe('ProductCompositionForm', () => {
 
     await user.click(removeButton)
 
-    expect(screen.queryByRole('combobox', { name: 'Quantidade do acessório' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('combobox', { name: 'Quantidade do acessório' }),
+    ).not.toBeInTheDocument()
   })
 
   it('linha nova sem item selecionado tem nome acessível de remoção baseado na posição', async () => {
@@ -259,7 +268,15 @@ describe('ProductCompositionForm', () => {
     expect(screen.queryByText('Ímã descontinuado')).not.toBeInTheDocument()
   })
 
-  describe('item inativo já vinculado à composição', () => {
+  // Item inativo VINCULADO ANTERIORMENTE (rodada corretiva 2026-08-30) —
+  // NUNCA mais bloqueia o salvamento: o usuário não pode ser obrigado a
+  // remover um vínculo histórico só para editar outro campo/salvar outra
+  // alteração. Continua visível, marcado como inativo, com quantidade
+  // editável e removível voluntariamente; se permanecer na linha, o
+  // payload o inclui normalmente. Um item inativo SEM vínculo anterior
+  // continua nunca aparecendo como opção nova (ver "não oferece um
+  // acessório inativo como opção para uma linha nova" acima, inalterado).
+  describe('item inativo já vinculado à composição (preservável, nunca bloqueia)', () => {
     const accessoriesWithInactive: Accessory[] = [
       ...accessories,
       { ...accessories[0], id: 'a3', name: 'Ímã descontinuado', is_active: false },
@@ -276,10 +293,12 @@ describe('ProductCompositionForm', () => {
       })
 
       expect(screen.getByText('Ímã descontinuado (inativo)')).toBeInTheDocument()
-      expect(screen.getByRole('combobox', { name: 'Quantidade do acessório' })).toHaveTextContent('4')
+      expect(screen.getByRole('combobox', { name: 'Quantidade do acessório' })).toHaveTextContent(
+        '4',
+      )
     })
 
-    it('aviso: exibe a mensagem explicando que o item precisa ser removido antes de salvar', () => {
+    it('aviso: explica que o item é preservado, nunca que precisa ser removido', () => {
       renderForm({
         accessories: accessoriesWithInactive,
         initialAccessories: initialWithInactive,
@@ -287,35 +306,56 @@ describe('ProductCompositionForm', () => {
       })
 
       expect(
-        screen.getByText('Este item está inativo. Remova-o da composição para poder salvar.'),
+        screen.getByText(/foi preservado por já fazer parte da composição/i),
       ).toBeInTheDocument()
+      expect(screen.queryByText(/precisa ser removido/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/remova-o.*para poder salvar/i)).not.toBeInTheDocument()
     })
 
-    it('bloqueio: o botão Salvar fica desabilitado enquanto o item inativo permanecer na composição', () => {
+    it('Salvar permanece habilitado com o item inativo presente (nunca bloqueia)', () => {
       renderForm({
         accessories: accessoriesWithInactive,
         initialAccessories: initialWithInactive,
         initialPackaging: [],
       })
 
-      expect(screen.getByRole('button', { name: /^salvar$/i })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /^salvar$/i })).not.toBeDisabled()
     })
 
-    it('bloqueio: submeter o formulário diretamente (defesa extra) também não chama onSubmit', () => {
+    it('salvar sem remover preserva o vínculo: onSubmit é chamado com o item inativo no payload', async () => {
+      const user = userEvent.setup()
       const { onSubmit } = renderForm({
         accessories: accessoriesWithInactive,
         initialAccessories: initialWithInactive,
         initialPackaging: [],
       })
 
-      const form = screen.getByRole('button', { name: /cancelar/i }).closest('form') as HTMLFormElement
-      fireEvent.submit(form)
+      await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
-      expect(onSubmit).not.toHaveBeenCalled()
-      expect(screen.getByText('Remova os itens inativos da composição antes de salvar.')).toBeInTheDocument()
+      expect(onSubmit).toHaveBeenCalledWith({
+        accessories: [{ id: 'a3', quantity: 4 }],
+        packaging: [],
+      })
     })
 
-    it('liberação: depois de remover o item inativo, Salvar fica habilitado e a composição é enviada normalmente', async () => {
+    it('alterar só a quantidade do item inativo é permitido e preserva o vínculo com o novo valor', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm({
+        accessories: accessoriesWithInactive,
+        initialAccessories: initialWithInactive,
+        initialPackaging: [],
+      })
+
+      await chooseOption(user, 'Quantidade do acessório', '7')
+      await user.click(screen.getByRole('button', { name: /^salvar$/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith({
+        accessories: [{ id: 'a3', quantity: 7 }],
+        packaging: [],
+      })
+    })
+
+    it('remover o item inativo é permitido (voluntário, nunca exigido) e a composição é enviada sem ele', async () => {
       const user = userEvent.setup()
       const { onSubmit } = renderForm({
         accessories: accessoriesWithInactive,
@@ -324,13 +364,25 @@ describe('ProductCompositionForm', () => {
       })
 
       await user.click(screen.getByRole('button', { name: 'Remover Ímã descontinuado' }))
+      expect(screen.queryByText('Ímã descontinuado (inativo)')).not.toBeInTheDocument()
 
-      const saveButton = screen.getByRole('button', { name: /^salvar$/i })
-      expect(saveButton).not.toBeDisabled()
-
-      await user.click(saveButton)
+      await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
       expect(onSubmit).toHaveBeenCalledWith({ accessories: [], packaging: [] })
+    })
+
+    it('depois de removido, o item inativo não pode ser selecionado novamente em nenhuma linha', async () => {
+      const user = userEvent.setup()
+      renderForm({
+        accessories: accessoriesWithInactive,
+        initialAccessories: initialWithInactive,
+        initialPackaging: [],
+      })
+
+      await user.click(screen.getByRole('button', { name: 'Remover Ímã descontinuado' }))
+      await user.click(screen.getByRole('button', { name: /adicionar acessório/i }))
+
+      expect(screen.queryByText('Ímã descontinuado')).not.toBeInTheDocument()
     })
   })
 
@@ -342,14 +394,18 @@ describe('ProductCompositionForm', () => {
     it('exibição: mantém o valor atual visível, sem correção/truncamento silencioso', () => {
       renderForm({ initialAccessories: initialOutOfRangeQuantity, initialPackaging: [] })
 
-      expect(screen.getByRole('combobox', { name: 'Quantidade do acessório' })).toHaveTextContent('50')
+      expect(screen.getByRole('combobox', { name: 'Quantidade do acessório' })).toHaveTextContent(
+        '50',
+      )
     })
 
     it('aviso: exibe orientação para selecionar uma quantidade entre 1 e 20', () => {
       renderForm({ initialAccessories: initialOutOfRangeQuantity, initialPackaging: [] })
 
       expect(
-        screen.getByText('Quantidade fora do intervalo permitido (1 a 20). Selecione um valor válido para salvar.'),
+        screen.getByText(
+          'Quantidade fora do intervalo permitido (1 a 20). Selecione um valor válido para salvar.',
+        ),
       ).toBeInTheDocument()
     })
 
@@ -360,18 +416,28 @@ describe('ProductCompositionForm', () => {
     })
 
     it('bloqueio: submeter o formulário diretamente (defesa extra) também não chama onSubmit', () => {
-      const { onSubmit } = renderForm({ initialAccessories: initialOutOfRangeQuantity, initialPackaging: [] })
+      const { onSubmit } = renderForm({
+        initialAccessories: initialOutOfRangeQuantity,
+        initialPackaging: [],
+      })
 
-      const form = screen.getByRole('button', { name: /cancelar/i }).closest('form') as HTMLFormElement
+      const form = screen
+        .getByRole('button', { name: /cancelar/i })
+        .closest('form') as HTMLFormElement
       fireEvent.submit(form)
 
       expect(onSubmit).not.toHaveBeenCalled()
-      expect(screen.getByText('Selecione uma quantidade entre 1 e 20 antes de salvar.')).toBeInTheDocument()
+      expect(
+        screen.getByText('Selecione uma quantidade entre 1 e 20 antes de salvar.'),
+      ).toBeInTheDocument()
     })
 
     it('liberação: escolher uma quantidade válida no Select libera o salvamento e envia o novo valor', async () => {
       const user = userEvent.setup()
-      const { onSubmit } = renderForm({ initialAccessories: initialOutOfRangeQuantity, initialPackaging: [] })
+      const { onSubmit } = renderForm({
+        initialAccessories: initialOutOfRangeQuantity,
+        initialPackaging: [],
+      })
 
       await chooseOption(user, 'Quantidade do acessório', '10')
 
@@ -380,7 +446,10 @@ describe('ProductCompositionForm', () => {
 
       await user.click(saveButton)
 
-      expect(onSubmit).toHaveBeenCalledWith({ accessories: [{ id: 'a1', quantity: 10 }], packaging: [] })
+      expect(onSubmit).toHaveBeenCalledWith({
+        accessories: [{ id: 'a1', quantity: 10 }],
+        packaging: [],
+      })
     })
   })
 })

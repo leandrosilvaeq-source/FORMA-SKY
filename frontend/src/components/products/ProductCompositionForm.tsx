@@ -4,7 +4,6 @@ import { DialogFooter } from '@/components/ui/dialog'
 import { CompositionRowsField } from '@/components/products/CompositionRowsField'
 import {
   accessoryRowsFrom,
-  hasInactiveSelection,
   hasOutOfRangeQuantity,
   isQuantityOutOfRange,
   nextRowKey,
@@ -15,7 +14,6 @@ import {
 import type { UpdateProductCompositionInput } from '@/lib/api/productComposition'
 import type { Accessory, Packaging, ProductAccessory, ProductPackaging } from '@/types/domain'
 
-const BLOCKED_BY_INACTIVE_MESSAGE = 'Remova os itens inativos da composição antes de salvar.'
 const BLOCKED_BY_INVALID_QUANTITY_MESSAGE = 'Selecione uma quantidade entre 1 e 20 antes de salvar.'
 
 interface ProductCompositionFormProps {
@@ -60,23 +58,27 @@ export function ProductCompositionForm({
     return map
   })
 
-  // Bloqueia o salvamento inteiro enquanto QUALQUER linha (acessório ou
-  // embalagem) apontar para um item hoje inativo — o backend
-  // (set_product_composition) rejeita a composição inteira nesse caso, então
-  // barramos aqui antes de tentar, com uma mensagem clara em vez do erro cru
-  // do banco. O item nunca é removido automaticamente: só some da tela
-  // quando o próprio usuário clica em Remover.
-  const hasInactiveItem =
-    hasInactiveSelection(accessoryRows, accessories) ||
-    hasInactiveSelection(packagingRows, packaging)
+  // Item inativo VINCULADO ANTERIORMENTE (rodada corretiva 2026-08-30) —
+  // deliberadamente NUNCA bloqueia o salvamento aqui: permanece visível
+  // marcado como inativo (itemLabel), editável na quantidade e removível a
+  // qualquer momento, mas o usuário não é obrigado a removê-lo só para
+  // salvar outra alteração. Continuar selecionado e ainda assim tentar
+  // salvar É permitido pelo frontend — se o item permanecer na linha, o
+  // payload o envia normalmente (set_product_composition é quem decide se
+  // aceita ou rejeita um accessory_id/packaging_id hoje inativo; um erro
+  // real do backend, se houver, aparece via submitError, nunca escondido).
+  // filterSelectableItems (lib/forms/productComposition.ts) já garante que
+  // um item inativo NUNCA aparece como opção NOVA em nenhuma linha (nem
+  // aqui nem depois de removido) — a única forma de ele existir numa linha
+  // é ter sido carregado de um vínculo já existente.
 
-  // Mesma lógica de bloqueio do item inativo, mas para uma quantidade
-  // pré-existente fora de 1-20 (a coluna no banco só exige > 0, sem teto) —
-  // nunca corrigida/truncada automaticamente, só o usuário escolhendo um
-  // valor válido no Select libera o salvamento.
+  // Quantidade pré-existente fora de 1-20 (a coluna no banco só exige > 0,
+  // sem teto) — nunca corrigida/truncada automaticamente, só o usuário
+  // escolhendo um valor válido no Select libera o salvamento. Regra
+  // inalterada nesta rodada (só o bloqueio por item inativo foi removido).
   const hasInvalidQuantity =
     hasOutOfRangeQuantity(accessoryRows) || hasOutOfRangeQuantity(packagingRows)
-  const isBlocked = hasInactiveItem || hasInvalidQuantity
+  const isBlocked = hasInvalidQuantity
 
   function addAccessoryRow() {
     setAccessoryRows((rows) => [...rows, { key: nextRowKey(), itemId: null, quantity: '' }])
@@ -105,10 +107,6 @@ export function ProductCompositionForm({
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
-    if (hasInactiveItem) {
-      setBlockedMessage(BLOCKED_BY_INACTIVE_MESSAGE)
-      return
-    }
     if (hasInvalidQuantity) {
       setBlockedMessage(BLOCKED_BY_INVALID_QUANTITY_MESSAGE)
       return

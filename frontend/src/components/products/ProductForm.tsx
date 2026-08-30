@@ -25,7 +25,6 @@ import {
 import { formatSecondsToHHMM, parseDurationToSeconds } from '@/lib/forms/durationField'
 import { parseNumberField } from '@/lib/forms/numberField'
 import {
-  hasInactiveSelection,
   hasOutOfRangeQuantity,
   isQuantityOutOfRange,
   nextRowKey,
@@ -100,8 +99,9 @@ const ADD_BUTTON_CLASSNAME =
 // usada em outras telas (AppLayout/ProductsPage). Nunca uma nova biblioteca
 // de UI: só classes Tailwind já em uso no projeto.
 // Padding/gap compactados nesta rodada (2026-08-30, largura ampliada do
-// Dialog em troca): objetivo é caber sem rolagem própria com até 2 plates —
-// ver needsScrollRegion mais abaixo.
+// Dialog em troca): objetivo é caber sem rolagem própria em desktop com
+// conteúdo compacto (até 2 plates, até 1 acessório, até 1 embalagem) — ver
+// hasExtendedContent mais abaixo.
 const SECTION_CARD_CLASSNAME =
   'border-brand-primary/20 bg-brand-primary-soft/15 flex flex-col gap-3 rounded-xl border p-3 md:p-4'
 const SECTION_TITLE_CLASSNAME =
@@ -407,9 +407,12 @@ export function ProductForm({
     return map
   })
 
-  const hasInactiveCompositionItem =
-    hasInactiveSelection(accessoryRows, accessoriesList) ||
-    hasInactiveSelection(packagingRows, packagingList)
+  // Item inativo VINCULADO ANTERIORMENTE (rodada corretiva 2026-08-30) —
+  // deliberadamente nunca bloqueia o salvamento: continua visível, marcado
+  // como inativo, com quantidade editável e removível a qualquer momento,
+  // mas o usuário não é obrigado a removê-lo só para editar outro campo do
+  // Produto (nome, preço, plates etc.). Mesma decisão de
+  // ProductCompositionForm.tsx — ver comentário lá para o porquê completo.
   const hasInvalidCompositionQuantity =
     hasOutOfRangeQuantity(accessoryRows) || hasOutOfRangeQuantity(packagingRows)
 
@@ -497,14 +500,13 @@ export function ProductForm({
       setManualTimeError(null)
     }
 
-    // Acessórios e Embalagem: mesmo bloqueio/validação de
-    // ProductCompositionForm.tsx (item inativo/quantidade fora de 1-20 nunca
-    // são corrigidos em silêncio; item/quantidade ausentes bloqueiam o
-    // envio) — só que agora faz parte da MESMA validação/submit deste
-    // formulário, nunca de um segundo <form>.
-    if (hasInactiveCompositionItem) {
-      errors.composition = 'Remova os itens inativos da composição antes de salvar.'
-    } else if (hasInvalidCompositionQuantity) {
+    // Acessórios e Embalagem: mesma validação de ProductCompositionForm.tsx
+    // — item/quantidade ausentes bloqueiam o envio, quantidade fora de 1-20
+    // nunca é corrigida em silêncio — só que agora faz parte da MESMA
+    // validação/submit deste formulário, nunca de um segundo <form>. Item
+    // inativo vinculado anteriormente NUNCA bloqueia aqui (ver comentário
+    // junto de hasInvalidCompositionQuantity acima).
+    if (hasInvalidCompositionQuantity) {
       errors.composition = 'Selecione uma quantidade entre 1 e 20 antes de salvar.'
     }
     const accessoryResult = validateRows(accessoryRows, 'um acessório')
@@ -548,22 +550,38 @@ export function ProductForm({
       })()
     : autoTimeSeconds
 
-  // Rolagem vertical própria (rodada corretiva 2026-08-30): com até 2
-  // plates, o layout compacto/mais largo cabe sem rolagem em desktop — a
-  // classe de rolagem só é aplicada com 3+ plates, quando o conteúdo
-  // realmente pode ultrapassar o viewport. Escopo deliberadamente só as 3
-  // seções (nunca o rodapé Cancelar/Salvar, que fica sempre visível fora
-  // desta área) — cabeçalho do Dialog também fica de fora (renderizado por
-  // ProductsPage.tsx, antes deste formulário).
-  const needsScrollRegion = plates.length >= 3
+  // Rolagem vertical própria (rodada corretiva 2026-08-30 — revisada para
+  // considerar Acessórios/Embalagens, não só plates): "conteúdo estendido"
+  // é 3+ plates OU mais de 1 acessório OU mais de 1 embalagem — qualquer um
+  // desses já é o suficiente para o layout compacto deixar de caber em
+  // desktop. Escopo deliberadamente só as 3 seções (nunca o rodapé
+  // Cancelar/Salvar, que fica sempre visível fora desta área) — cabeçalho
+  // do Dialog também fica de fora (renderizado por ProductsPage.tsx, antes
+  // deste formulário).
+  //
+  // 3 estados responsivos (nunca overflow-hidden, que esconderia conteúdo):
+  // - mobile (sem prefixo): SEMPRE max-h+overflow-y-auto — tela pequena
+  //   quase sempre precisa rolar, independente do conteúdo;
+  // - desktop compacto (md:, conteúdo NÃO estendido): max-h removido e
+  //   overflow visível — o layout compacto/mais largo cabe sem rolagem;
+  // - desktop estendido (md:, conteúdo estendido): max-h+overflow-y-auto
+  //   de volta, agora em telas maiores também.
+  // md: sempre VENCE o valor sem prefixo no CSS gerado pelo Tailwind (a
+  // camada @media é emitida depois da base, mesma especificidade, ganha por
+  // ordem) — é essa mesma mecânica que corrigiu a largura da Dialog na
+  // rodada anterior, usada aqui de propósito, não por acidente.
+  const hasExtendedContent =
+    plates.length >= 3 || accessoryRows.length > 1 || packagingRows.length > 1
 
   return (
     <form className="flex w-full max-w-full flex-col gap-4" onSubmit={handleSubmit}>
       <div
         data-testid="product-form-sections"
         className={cn(
-          'flex flex-col gap-4',
-          needsScrollRegion && 'max-h-[65vh] overflow-y-auto pr-1',
+          'flex max-h-[85vh] flex-col gap-4 overflow-y-auto pr-1',
+          hasExtendedContent
+            ? 'md:max-h-[65vh] md:overflow-y-auto md:pr-1'
+            : 'md:max-h-none md:overflow-visible md:pr-0',
         )}
       >
         {/* ------------------------------------------------------------- */}

@@ -33,7 +33,13 @@ const REMOVE_BUTTON_CLASSNAME =
   'border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0'
 const ADD_BUTTON_CLASSNAME =
   'border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark'
-const INACTIVE_ITEM_MESSAGE = 'Este item está inativo. Remova-o da composição para poder salvar.'
+// Item vinculado antes de ser inativado (rodada corretiva 2026-08-30) —
+// mensagem deliberadamente NÃO exige remoção: o vínculo histórico pode ser
+// preservado, ter a quantidade alterada, ou removido, à escolha do usuário
+// (quem decide se bloqueia ou não o salvamento é o chamador, nunca esta
+// mensagem).
+const INACTIVE_ITEM_MESSAGE =
+  'Este item está inativo — foi preservado por já fazer parte da composição. Você pode manter, ajustar a quantidade ou remover.'
 const QUANTITY_OUT_OF_RANGE_MESSAGE =
   'Quantidade fora do intervalo permitido (1 a 20). Selecione um valor válido para salvar.'
 

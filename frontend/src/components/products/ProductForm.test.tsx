@@ -198,46 +198,106 @@ describe('ProductForm', () => {
   // ESTRUTURA/CLASSES condicionais — a confirmação visual final (sem
   // rolagem de fato a 1920×1080/100%) depende de validação manual em
   // navegador real, registrada no roadmap.
-  describe('rolagem vertical condicionada ao número de plates', () => {
-    it('com 1 plate, a seção não tem classe de rolagem vertical', () => {
+  // Rolagem vertical responsiva (rodada corretiva 2026-08-30 — revisada
+  // para considerar Acessórios/Embalagens, não só plates). 3 estados
+  // testáveis por classe (jsdom não avalia @media, então a distinção entre
+  // "desktop compacto" e "desktop estendido" é feita pela PRESENÇA de
+  // classes md: complementares, nunca pela ausência das classes mobile —
+  // essas ficam sempre presentes, de propósito, como rede de segurança para
+  // telas pequenas): mobile sempre com max-h+overflow-y-auto (sem prefixo);
+  // desktop compacto com md:max-h-none/md:overflow-visible; desktop
+  // estendido com md:max-h-[65vh]/md:overflow-y-auto. A confirmação visual
+  // final (comportamento real em cada breakpoint) depende de validação
+  // manual em navegador real, registrada no roadmap.
+  describe('rolagem vertical responsiva (mobile sempre; desktop só com conteúdo estendido)', () => {
+    it('mobile: a região sempre tem max-height + rolagem, mesmo com conteúdo compacto', () => {
       renderForm()
       const region = screen.getByTestId('product-form-sections')
-      expect(region).not.toHaveClass('overflow-y-auto')
-      expect(region.className).not.toMatch(/max-h-/)
-    })
-
-    it('com 2 plates, a seção ainda não tem classe de rolagem vertical', async () => {
-      const user = userEvent.setup()
-      renderForm()
-      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
-
-      const region = screen.getByTestId('product-form-sections')
-      expect(region).not.toHaveClass('overflow-y-auto')
-      expect(region.className).not.toMatch(/max-h-/)
-    })
-
-    it('com 3 plates, a rolagem vertical é habilitada', async () => {
-      const user = userEvent.setup()
-      renderForm()
-      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
-      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
-
-      const region = screen.getByTestId('product-form-sections')
+      expect(region).toHaveClass('max-h-[85vh]')
       expect(region).toHaveClass('overflow-y-auto')
-      expect(region.className).toMatch(/max-h-/)
     })
 
-    it('reduzir de volta para 2 plates desativa a rolagem novamente', async () => {
+    it('desktop com 1 plate, sem acessórios/embalagens: conteúdo compacto, sem rolagem', () => {
+      renderForm()
+      const region = screen.getByTestId('product-form-sections')
+      expect(region).toHaveClass('md:max-h-none')
+      expect(region).toHaveClass('md:overflow-visible')
+      expect(region.className).not.toMatch(/md:max-h-\[65vh\]/)
+    })
+
+    it('desktop com 2 plates, 1 acessório e 1 embalagem: ainda conteúdo compacto, sem rolagem', async () => {
+      const user = userEvent.setup()
+      renderForm()
+      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
+      await user.click(screen.getByRole('button', { name: /adicionar acessório/i }))
+      await user.click(screen.getByRole('button', { name: /adicionar embalagem/i }))
+
+      const region = screen.getByTestId('product-form-sections')
+      expect(region).toHaveClass('md:max-h-none')
+      expect(region).toHaveClass('md:overflow-visible')
+    })
+
+    it('desktop com 3 plates: conteúdo estendido, rolagem habilitada', async () => {
       const user = userEvent.setup()
       renderForm()
       await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
       await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
-      expect(screen.getByTestId('product-form-sections')).toHaveClass('overflow-y-auto')
+
+      const region = screen.getByTestId('product-form-sections')
+      expect(region).toHaveClass('md:max-h-[65vh]')
+      expect(region).toHaveClass('md:overflow-y-auto')
+      expect(region.className).not.toMatch(/md:overflow-visible/)
+    })
+
+    it('desktop com mais de 1 acessório (2): conteúdo estendido, rolagem habilitada', async () => {
+      const user = userEvent.setup()
+      renderForm()
+      await user.click(screen.getByRole('button', { name: /adicionar acessório/i }))
+      await user.click(screen.getByRole('button', { name: /adicionar acessório/i }))
+
+      const region = screen.getByTestId('product-form-sections')
+      expect(region).toHaveClass('md:max-h-[65vh]')
+      expect(region).toHaveClass('md:overflow-y-auto')
+    })
+
+    it('desktop com mais de 1 embalagem (2): conteúdo estendido, rolagem habilitada', async () => {
+      const user = userEvent.setup()
+      renderForm()
+      await user.click(screen.getByRole('button', { name: /adicionar embalagem/i }))
+      await user.click(screen.getByRole('button', { name: /adicionar embalagem/i }))
+
+      const region = screen.getByTestId('product-form-sections')
+      expect(region).toHaveClass('md:max-h-[65vh]')
+      expect(region).toHaveClass('md:overflow-y-auto')
+    })
+
+    it('reduzir de volta a 2 plates (sem acessório/embalagem extra) volta ao conteúdo compacto', async () => {
+      const user = userEvent.setup()
+      renderForm()
+      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
+      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
+      expect(screen.getByTestId('product-form-sections')).toHaveClass('md:max-h-[65vh]')
 
       await user.click(screen.getByRole('button', { name: /diminuir número de plates/i }))
 
       const region = screen.getByTestId('product-form-sections')
-      expect(region).not.toHaveClass('overflow-y-auto')
+      expect(region).toHaveClass('md:max-h-none')
+      expect(region).toHaveClass('md:overflow-visible')
+    })
+
+    it('rodapé (Cancelar/Salvar) fica fora da região rolável e permanece acessível mesmo com conteúdo estendido', async () => {
+      const user = userEvent.setup()
+      renderForm()
+      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
+      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
+
+      const region = screen.getByTestId('product-form-sections')
+      const cancelButton = screen.getByRole('button', { name: /^cancelar$/i })
+      const saveButton = screen.getByRole('button', { name: /^salvar$/i })
+      expect(region.contains(cancelButton)).toBe(false)
+      expect(region.contains(saveButton)).toBe(false)
+      expect(cancelButton).toBeEnabled()
+      expect(saveButton).toBeEnabled()
     })
   })
 
@@ -703,6 +763,17 @@ describe('ProductForm', () => {
   // — a própria linha (Select do item + Select de quantidade + Remover) É
   // o estado, exatamente como um plate.
   describe('Acessórios e Embalagem (campos inline, sem segunda janela)', () => {
+    it('Novo Produto: um item inativo nunca aparece como opção (nenhum vínculo histórico existe ainda para preservar)', async () => {
+      const user = userEvent.setup()
+      renderForm()
+
+      await user.click(screen.getByRole('button', { name: /adicionar acessório/i }))
+      expect(screen.queryByText('Ímã de geladeira')).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: /adicionar embalagem/i }))
+      expect(screen.queryByText('Caixa de papelão')).not.toBeInTheDocument()
+    })
+
     it('"Adicionar acessório" insere uma linha na própria seção, sem abrir nenhum dialog', async () => {
       const user = userEvent.setup()
       renderForm()
@@ -821,7 +892,7 @@ describe('ProductForm', () => {
       )
     })
 
-    it('modo edição: um acessório inativo já vinculado permanece visível na linha, marcado como inativo, e bloqueia o salvamento até ser removido', async () => {
+    it('modo edição: um acessório inativo já vinculado permanece visível na linha, marcado como inativo, e NUNCA bloqueia o salvamento (editar outro campo não exige removê-lo)', async () => {
       const user = userEvent.setup()
       const { onSubmit } = renderForm({
         mode: 'edit',
@@ -835,13 +906,60 @@ describe('ProductForm', () => {
         'Ímã de geladeira (inativo)',
       )
 
+      // Edita só o nome — nunca toca no acessório inativo — e ainda assim
+      // consegue salvar; o vínculo histórico é preservado no payload.
+      await user.clear(screen.getByLabelText(/^nome$/i))
+      await user.type(screen.getByLabelText(/^nome$/i), 'Suporte PS5 Editado')
       await user.click(screen.getByRole('button', { name: /salvar alterações/i }))
-      expect(await screen.findByText(/remova os itens inativos/i)).toBeInTheDocument()
-      expect(onSubmit).not.toHaveBeenCalled()
+
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Suporte PS5 Editado',
+          accessories: [{ id: 'a2', quantity: 1 }],
+        }),
+      )
+    })
+
+    it('modo edição: remover o acessório inativo é voluntário — depois de removido, ele some do payload e não pode ser selecionado de novo', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm({
+        mode: 'edit',
+        initialValues: baseEditInitialValues({
+          plates: [{ key: 'plate-1', timeInput: '01:00', weightInput: '10' }],
+          accessories: [{ id: 'a2', quantity: 1 }],
+        }),
+      })
 
       await user.click(screen.getByRole('button', { name: 'Remover Ímã de geladeira' }))
+      expect(screen.queryByRole('combobox', { name: 'Acessório' })).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: /adicionar acessório/i }))
+      expect(screen.queryByText('Ímã de geladeira')).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Remover acessório (linha 1)' }))
       await user.click(screen.getByRole('button', { name: /salvar alterações/i }))
-      expect(onSubmit).toHaveBeenCalled()
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ accessories: [] }))
+    })
+
+    it('modo edição: uma embalagem inativa já vinculada permanece visível na linha, marcada como inativa, e não bloqueia o salvamento', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm({
+        mode: 'edit',
+        initialValues: baseEditInitialValues({
+          plates: [{ key: 'plate-1', timeInput: '01:00', weightInput: '10' }],
+          packaging: [{ id: 'k2', quantity: 2 }],
+        }),
+      })
+
+      expect(screen.getByRole('combobox', { name: 'Embalagem' })).toHaveTextContent(
+        'Caixa de papelão (inativo)',
+      )
+
+      await user.click(screen.getByRole('button', { name: /salvar alterações/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ packaging: [{ id: 'k2', quantity: 2 }] }),
+      )
     })
 
     it('erro de submissão (submitError) não apaga as linhas de acessório/embalagem já preenchidas', async () => {
