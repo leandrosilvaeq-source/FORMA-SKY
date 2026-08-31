@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { FilterIcon, XIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
@@ -19,7 +20,8 @@ import {
 } from '@/components/products/ProductForm'
 import { ProductPriceForm } from '@/components/products/ProductPriceForm'
 import { ProductPriceHistoryList } from '@/components/products/ProductPriceHistoryList'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -27,6 +29,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -98,6 +101,14 @@ const PRODUCT_TYPE_LABELS: Record<ProductType, string> = {
   CUSTOM: 'Personalizado',
   SPOT: 'SPOT',
 }
+
+// Filtro "Filtros" (Categoria/Tipo, 2026-08-31) — Tipo lista TODOS os tipos
+// reais do domínio (o enum inteiro, nunca só os presentes nos produtos
+// carregados no momento — diferente de Categoria, que lista só o que está
+// de fato em uso, ver availableCategories abaixo), nos mesmos rótulos em
+// português já usados na coluna Tipo/PRODUCT_TYPE_LABELS — nunca um tipo
+// fictício.
+const FILTERABLE_PRODUCT_TYPES: ProductType[] = ['CATALOG', 'CUSTOM', 'SPOT']
 
 const PRODUCT_NAME_LINK_CLASSNAME =
   'text-brand-primary hover:text-brand-primary-dark focus-visible:ring-brand-accent rounded outline-none hover:underline focus-visible:ring-2'
@@ -181,6 +192,22 @@ export function ProductsPage() {
   const [pendingToggleId, setPendingToggleId] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [sort, setSort] = useState<SortState<ProductSortColumn> | null>(null)
+
+  // Filtro "Filtros" (Categoria/Tipo, 2026-08-31) — estado próprio da
+  // página, nunca persistido (localStorage fica só para larguras de coluna,
+  // ver usePersistentColumnWidths acima). Categoria usa string (o próprio
+  // texto da categoria) como identidade — o modelo atual (product_categories)
+  // não tem uma tabela de categorias com id próprio; "id" ali é só a chave
+  // primária da linha produto+categoria, nunca a identidade da categoria em
+  // si. Duas linhas com o mesmo texto de categoria SÃO a mesma categoria
+  // (não há homônimos com identidades diferentes neste modelo) — por isso um
+  // Set<string> já garante "não duplicar categorias" e nunca confunde
+  // categorias por id. "Sem categoria" é um flag à parte (nunca uma string
+  // mágica dentro do Set, que poderia colidir com uma categoria real digitada
+  // literalmente como "Sem categoria").
+  const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set())
+  const [includeProductsWithoutCategory, setIncludeProductsWithoutCategory] = useState(false)
+  const [selectedTypes, setSelectedTypes] = useState<Set<ProductType>>(new Set())
 
   // "Editar produto" — três seções independentes no mesmo diálogo: o
   // formulário completo por plates (ProductForm mode="edit" ->
@@ -281,16 +308,100 @@ export function ProductsPage() {
     })
   }, [products, searchTerm, allCategories.categoriesByProductId])
 
-  // Ordenação aplicada DEPOIS do filtro de busca (filtra primeiro, ordena o
-  // resultado filtrado em seguida). Nunca muta `products` (o array vindo
-  // do hook) — sortByColumn sempre retorna uma cópia nova.
+  // Categorias disponíveis no filtro: só as que estão de fato em uso em
+  // algum Produto carregado (nunca um catálogo à parte — o modelo atual não
+  // tem um) — deduplicadas via Set (o próprio texto já é a identidade, ver
+  // comentário no estado acima) e ordenadas alfabeticamente (localeCompare
+  // 'pt-BR', mesmo critério já usado em joinedCategoriesText).
+  const availableCategories = useMemo(() => {
+    const seen = new Set<string>()
+    for (const categories of allCategories.categoriesByProductId.values()) {
+      for (const category of categories) seen.add(category)
+    }
+    return Array.from(seen).sort((a, b) => a.localeCompare(b, 'pt-BR'))
+  }, [allCategories.categoriesByProductId])
+
+  // "Sem categoria" só aparece como opção quando existe pelo menos um
+  // Produto carregado sem nenhuma linha em categoriesByProductId — nunca
+  // oferecida como opção morta quando todo Produto tem categoria.
+  const hasProductsWithoutCategory = useMemo(
+    () =>
+      products.some(
+        (product) => (allCategories.categoriesByProductId.get(product.id) ?? []).length === 0,
+      ),
+    [products, allCategories.categoriesByProductId],
+  )
+
+  // Filtro de Categoria/Tipo aplicado DEPOIS da busca, ANTES da ordenação
+  // (ordem conceitual: dados -> busca -> Categoria -> Tipo -> ordenação).
+  // Nunca muta `filteredProducts`/`products` — .filter sempre retorna uma
+  // cópia nova. Dentro de cada grupo (Categoria, Tipo) a regra é OR — um
+  // Produto passa se tiver QUALQUER uma das opções selecionadas daquele
+  // grupo (interseção não vazia entre as categorias do Produto e as
+  // selecionadas, para Categoria); ENTRE os dois grupos a regra é AND — só
+  // filtra por um grupo se ele tiver alguma seleção (grupo vazio nunca
+  // restringe, index nenhuma seleção em nenhum grupo = mostra tudo que a
+  // busca já deixou passar).
+  const categoryAndTypeFilteredProducts = useMemo(() => {
+    return filteredProducts.filter((product) => {
+      if (selectedCategories.size > 0 || includeProductsWithoutCategory) {
+        const productCategories = allCategories.categoriesByProductId.get(product.id) ?? []
+        const categoryMatch =
+          productCategories.length === 0
+            ? includeProductsWithoutCategory
+            : productCategories.some((category) => selectedCategories.has(category))
+        if (!categoryMatch) return false
+      }
+      if (selectedTypes.size > 0 && !selectedTypes.has(product.product_type)) return false
+      return true
+    })
+  }, [
+    filteredProducts,
+    selectedCategories,
+    includeProductsWithoutCategory,
+    selectedTypes,
+    allCategories.categoriesByProductId,
+  ])
+
+  // Ordenação aplicada DEPOIS de busca + Categoria + Tipo (filtra primeiro,
+  // ordena o resultado filtrado em seguida). Nunca muta `products` (o array
+  // vindo do hook) — sortByColumn sempre retorna uma cópia nova.
   const sortedProducts = useMemo(
     () =>
-      sortByColumn(filteredProducts, sort, (product, column) =>
+      sortByColumn(categoryAndTypeFilteredProducts, sort, (product, column) =>
         getProductSortValue(product, column, allCategories.categoriesByProductId),
       ),
-    [filteredProducts, sort, allCategories.categoriesByProductId],
+    [categoryAndTypeFilteredProducts, sort, allCategories.categoriesByProductId],
   )
+
+  const activeCategoryOrTypeFilterCount =
+    selectedCategories.size + (includeProductsWithoutCategory ? 1 : 0) + selectedTypes.size
+
+  function toggleCategoryFilter(category: string) {
+    setSelectedCategories((current) => {
+      const next = new Set(current)
+      if (next.has(category)) next.delete(category)
+      else next.add(category)
+      return next
+    })
+  }
+
+  function toggleTypeFilter(type: ProductType) {
+    setSelectedTypes((current) => {
+      const next = new Set(current)
+      if (next.has(type)) next.delete(type)
+      else next.add(type)
+      return next
+    })
+  }
+
+  // "Limpar filtros" remove só Categoria e Tipo — busca (searchTerm) e
+  // ordenação (sort) nunca são tocados aqui.
+  function clearCategoryAndTypeFilters() {
+    setSelectedCategories(new Set())
+    setIncludeProductsWithoutCategory(false)
+    setSelectedTypes(new Set())
+  }
 
   // Sugestões do autocomplete: mesma lista já filtrada+ordenada que a
   // tabela mostra (respeita a ordenação visual ativa), deduplicada por
@@ -481,19 +592,165 @@ export function ProductsPage() {
         </div>
       )}
 
-      <SearchAutocomplete
-        className="mt-4 max-w-xs"
-        value={searchTerm}
-        onValueChange={setSearchTerm}
-        suggestions={suggestions}
-        onSelect={setSearchTerm}
-        ariaLabel="Buscar produto"
-        placeholder="Buscar produto..."
-        clearLabel="Limpar busca"
-        listboxId={PRODUCT_SEARCH_LISTBOX_ID}
-        listboxAriaLabel="Sugestões de produto"
-        noResultsText="Nenhum produto encontrado."
-      />
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <SearchAutocomplete
+          className="max-w-xs"
+          value={searchTerm}
+          onValueChange={setSearchTerm}
+          suggestions={suggestions}
+          onSelect={setSearchTerm}
+          ariaLabel="Buscar produto"
+          placeholder="Buscar produto..."
+          clearLabel="Limpar busca"
+          listboxId={PRODUCT_SEARCH_LISTBOX_ID}
+          listboxAriaLabel="Sugestões de produto"
+          noResultsText="Nenhum produto encontrado."
+        />
+
+        {/* Popover não-modal (fecha sozinho no Escape e ao clicar fora,
+            comportamento padrão do Base UI Popover) — nunca navega para
+            outra página, nunca abre um diálogo grande. Nome acessível vem
+            só do texto visível do próprio botão ("Filtros"/"Filtros (N)"),
+            sem aria-label redundante — evita a mesma colisão com
+            getByLabelText já documentada em ResizableTableHead.tsx. */}
+        <Popover>
+          <PopoverTrigger
+            className={cn(
+              buttonVariants({ variant: 'outline', size: 'sm' }),
+              'gap-1.5',
+              activeCategoryOrTypeFilterCount > 0 &&
+                'border-brand-primary bg-brand-primary-soft text-brand-primary-dark',
+            )}
+          >
+            <FilterIcon />
+            {activeCategoryOrTypeFilterCount > 0
+              ? `Filtros (${activeCategoryOrTypeFilterCount})`
+              : 'Filtros'}
+          </PopoverTrigger>
+          <PopoverContent aria-label="Filtrar produtos">
+            <div className="flex flex-col gap-4">
+              <fieldset className="flex flex-col gap-2">
+                <legend className="text-sm font-semibold">Categorias</legend>
+                {availableCategories.length === 0 && !hasProductsWithoutCategory ? (
+                  <p className="text-muted-foreground text-xs">Nenhuma categoria cadastrada.</p>
+                ) : (
+                  <div className="flex max-h-48 flex-col gap-1.5 overflow-y-auto">
+                    {availableCategories.map((category) => {
+                      const checkboxId = `product-filter-category-${category}`
+                      return (
+                        <label
+                          key={category}
+                          htmlFor={checkboxId}
+                          className="flex cursor-pointer items-center gap-2 text-sm"
+                        >
+                          <Checkbox
+                            id={checkboxId}
+                            checked={selectedCategories.has(category)}
+                            onCheckedChange={() => toggleCategoryFilter(category)}
+                          />
+                          <span className="truncate">{category}</span>
+                        </label>
+                      )
+                    })}
+                    {hasProductsWithoutCategory && (
+                      <label
+                        htmlFor="product-filter-category-none"
+                        className="text-muted-foreground flex cursor-pointer items-center gap-2 text-sm"
+                      >
+                        <Checkbox
+                          id="product-filter-category-none"
+                          checked={includeProductsWithoutCategory}
+                          onCheckedChange={(checked) => setIncludeProductsWithoutCategory(checked)}
+                        />
+                        <span>Sem categoria</span>
+                      </label>
+                    )}
+                  </div>
+                )}
+              </fieldset>
+
+              <fieldset className="flex flex-col gap-2">
+                <legend className="text-sm font-semibold">Tipo de produto</legend>
+                <div className="flex flex-col gap-1.5">
+                  {FILTERABLE_PRODUCT_TYPES.map((type) => {
+                    const checkboxId = `product-filter-type-${type}`
+                    return (
+                      <label
+                        key={type}
+                        htmlFor={checkboxId}
+                        className="flex cursor-pointer items-center gap-2 text-sm"
+                      >
+                        <Checkbox
+                          id={checkboxId}
+                          checked={selectedTypes.has(type)}
+                          onCheckedChange={() => toggleTypeFilter(type)}
+                        />
+                        <span>{PRODUCT_TYPE_LABELS[type]}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </fieldset>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={clearCategoryAndTypeFilters}
+                disabled={activeCategoryOrTypeFilterCount === 0}
+                className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark self-start"
+              >
+                Limpar filtros
+              </Button>
+            </div>
+          </PopoverContent>
+        </Popover>
+      </div>
+
+      {activeCategoryOrTypeFilterCount > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2" aria-label="Filtros ativos">
+          {Array.from(selectedCategories)
+            .sort((a, b) => a.localeCompare(b, 'pt-BR'))
+            .map((category) => (
+              <button
+                key={`chip-category-${category}`}
+                type="button"
+                onClick={() => toggleCategoryFilter(category)}
+                aria-label={`Remover filtro Categoria: ${category}`}
+                title={`Remover filtro Categoria: ${category}`}
+                className="border-brand-primary bg-brand-primary-soft text-brand-primary-dark hover:bg-brand-primary-soft/70 focus-visible:ring-brand-accent inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium outline-none focus-visible:ring-2"
+              >
+                Categoria: {category}
+                <XIcon className="size-3" />
+              </button>
+            ))}
+          {includeProductsWithoutCategory && (
+            <button
+              type="button"
+              onClick={() => setIncludeProductsWithoutCategory(false)}
+              aria-label="Remover filtro Categoria: Sem categoria"
+              title="Remover filtro Categoria: Sem categoria"
+              className="border-brand-primary bg-brand-primary-soft text-brand-primary-dark hover:bg-brand-primary-soft/70 focus-visible:ring-brand-accent inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium outline-none focus-visible:ring-2"
+            >
+              Categoria: Sem categoria
+              <XIcon className="size-3" />
+            </button>
+          )}
+          {FILTERABLE_PRODUCT_TYPES.filter((type) => selectedTypes.has(type)).map((type) => (
+            <button
+              key={`chip-type-${type}`}
+              type="button"
+              onClick={() => toggleTypeFilter(type)}
+              aria-label={`Remover filtro Tipo: ${PRODUCT_TYPE_LABELS[type]}`}
+              title={`Remover filtro Tipo: ${PRODUCT_TYPE_LABELS[type]}`}
+              className="border-brand-primary bg-brand-primary-soft text-brand-primary-dark hover:bg-brand-primary-soft/70 focus-visible:ring-brand-accent inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium outline-none focus-visible:ring-2"
+            >
+              Tipo: {PRODUCT_TYPE_LABELS[type]}
+              <XIcon className="size-3" />
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="mt-3">
         {isLoading ? (

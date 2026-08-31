@@ -1832,4 +1832,275 @@ describe('ProductsPage', () => {
       expect(getVisibleProductNamesInOrder()).toContain('Chaveiro')
     })
   })
+
+  // Filtro "Filtros" (Categoria/Tipo, 2026-08-31) — popover não-modal com
+  // dois grupos de checkboxes. Regras exercitadas aqui:
+  //  - Categoria lista só o que está em uso nos produtos carregados (nunca
+  //    um catálogo à parte); Tipo lista sempre o enum inteiro.
+  //  - "Sem categoria" só aparece quando há produto sem nenhuma categoria.
+  //  - Dentro de cada grupo a regra é OR; entre os dois grupos é AND.
+  //  - O filtro roda depois da busca e antes da ordenação.
+  //  - Contador no botão, chips removíveis e "Limpar filtros" (que nunca
+  //    toca na busca).
+  describe('Filtro "Filtros" (Categoria e Tipo)', () => {
+    const vasoDecoracao = {
+      ...product,
+      id: 'flt1',
+      name: 'Vaso Grande',
+      category: 'Decoração',
+      product_type: 'CATALOG' as const,
+    }
+    const chaveiroDecoracao = {
+      ...product,
+      id: 'flt2',
+      name: 'Chaveiro Redondo',
+      category: 'Decoração',
+      product_type: 'CUSTOM' as const,
+    }
+    const suporteUtilidades = {
+      ...product,
+      id: 'flt3',
+      name: 'Suporte Celular',
+      category: 'Utilidades',
+      product_type: 'SPOT' as const,
+    }
+    const blocoSemCategoria = {
+      ...product,
+      id: 'flt4',
+      name: 'Bloco Neutro',
+      category: null,
+      product_type: 'CATALOG' as const,
+    }
+
+    beforeEach(() => {
+      mockProducts([vasoDecoracao, chaveiroDecoracao, suporteUtilidades, blocoSemCategoria])
+    })
+
+    // Abre o popover de filtros e espera o conteúdo montar (o botão
+    // "Limpar filtros" só existe dentro do popover aberto).
+    async function openFilters(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+      await user.click(screen.getByRole('button', { name: /^Filtros/ }))
+      await screen.findByRole('button', { name: 'Limpar filtros' })
+    }
+
+    it('o botão "Filtros" abre um popover com as seções Categorias e Tipo de produto', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      expect(screen.queryByRole('button', { name: 'Limpar filtros' })).not.toBeInTheDocument()
+
+      await openFilters(user)
+
+      expect(screen.getByText('Categorias')).toBeInTheDocument()
+      expect(screen.getByText('Tipo de produto')).toBeInTheDocument()
+    })
+
+    it('Categorias lista só as categorias em uso pelos produtos carregados, em ordem alfabética, mais "Sem categoria"', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+
+      expect(screen.getByRole('checkbox', { name: 'Decoração' })).toBeInTheDocument()
+      expect(screen.getByRole('checkbox', { name: 'Utilidades' })).toBeInTheDocument()
+      expect(screen.getByRole('checkbox', { name: 'Sem categoria' })).toBeInTheDocument()
+      expect(screen.queryByRole('checkbox', { name: 'Presentes' })).not.toBeInTheDocument()
+    })
+
+    it('Tipo de produto sempre lista os três tipos do domínio (mesmo os ausentes na lista atual), com os rótulos em português', async () => {
+      const user = userEvent.setup()
+      mockProducts([vasoDecoracao]) // só CATALOG carregado
+      renderPage()
+      await openFilters(user)
+
+      expect(screen.getByRole('checkbox', { name: 'Catálogo' })).toBeInTheDocument()
+      expect(screen.getByRole('checkbox', { name: 'Personalizado' })).toBeInTheDocument()
+      expect(screen.getByRole('checkbox', { name: 'SPOT' })).toBeInTheDocument()
+    })
+
+    it('"Sem categoria" só aparece quando existe algum produto sem nenhuma categoria', async () => {
+      const user = userEvent.setup()
+      mockProducts([vasoDecoracao, chaveiroDecoracao, suporteUtilidades])
+      renderPage()
+      await openFilters(user)
+
+      expect(screen.queryByRole('checkbox', { name: 'Sem categoria' })).not.toBeInTheDocument()
+    })
+
+    it('sem nenhuma categoria em uso e sem produtos sem categoria, mostra "Nenhuma categoria cadastrada."', async () => {
+      const user = userEvent.setup()
+      mockProducts([])
+      renderPage()
+      await openFilters(user)
+
+      expect(screen.getByText('Nenhuma categoria cadastrada.')).toBeInTheDocument()
+    })
+
+    it('marcar uma categoria filtra a tabela para só os produtos daquela categoria', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+
+      await user.click(screen.getByRole('checkbox', { name: 'Decoração' }))
+
+      expect(getVisibleProductNamesInOrder()).toEqual(['Vaso Grande', 'Chaveiro Redondo'])
+    })
+
+    it('duas categorias marcadas se combinam por OR (união das duas)', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+
+      await user.click(screen.getByRole('checkbox', { name: 'Decoração' }))
+      await user.click(screen.getByRole('checkbox', { name: 'Utilidades' }))
+
+      expect(getVisibleProductNamesInOrder()).toEqual([
+        'Vaso Grande',
+        'Chaveiro Redondo',
+        'Suporte Celular',
+      ])
+    })
+
+    it('"Sem categoria" traz só os produtos sem nenhuma categoria vinculada', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+
+      await user.click(screen.getByRole('checkbox', { name: 'Sem categoria' }))
+
+      expect(getVisibleProductNamesInOrder()).toEqual(['Bloco Neutro'])
+    })
+
+    it('marcar um tipo filtra a tabela para só os produtos daquele tipo', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+
+      await user.click(screen.getByRole('checkbox', { name: 'Personalizado' }))
+
+      expect(getVisibleProductNamesInOrder()).toEqual(['Chaveiro Redondo'])
+    })
+
+    it('Categoria e Tipo se combinam por AND: o produto precisa passar nos dois grupos', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+
+      await user.click(screen.getByRole('checkbox', { name: 'Decoração' }))
+      await user.click(screen.getByRole('checkbox', { name: 'Catálogo' }))
+
+      // Chaveiro Redondo é Decoração mas CUSTOM -> barrado pelo grupo Tipo.
+      expect(getVisibleProductNamesInOrder()).toEqual(['Vaso Grande'])
+    })
+
+    it('quando nenhum produto passa nos filtros, mostra o estado vazio da listagem filtrada (sem tabela)', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+
+      await user.click(screen.getByRole('checkbox', { name: 'Utilidades' }))
+      await user.click(screen.getByRole('checkbox', { name: 'Catálogo' }))
+
+      expect(screen.queryByRole('table')).not.toBeInTheDocument()
+      expect(screen.getByText('Nenhum produto encontrado para esta busca.')).toBeInTheDocument()
+    })
+
+    it('o botão "Filtros" mostra a contagem total de seleções (categorias + "sem categoria" + tipos)', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+
+      await user.click(screen.getByRole('checkbox', { name: 'Decoração' }))
+      await user.click(screen.getByRole('checkbox', { name: 'SPOT' }))
+      expect(screen.getByRole('button', { name: 'Filtros (2)' })).toBeInTheDocument()
+
+      await user.click(screen.getByRole('checkbox', { name: 'Sem categoria' }))
+      expect(screen.getByRole('button', { name: 'Filtros (3)' })).toBeInTheDocument()
+    })
+
+    it('cada seleção vira um chip removível; remover um chip desmarca só aquele filtro', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+
+      await user.click(screen.getByRole('checkbox', { name: 'Decoração' }))
+      await user.click(screen.getByRole('checkbox', { name: 'Catálogo' }))
+
+      expect(
+        screen.getByRole('button', { name: 'Remover filtro Categoria: Decoração' }),
+      ).toBeInTheDocument()
+      expect(
+        screen.getByRole('button', { name: 'Remover filtro Tipo: Catálogo' }),
+      ).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Remover filtro Categoria: Decoração' }))
+
+      // Só o filtro de Tipo "Catálogo" continua ativo.
+      expect(
+        screen.queryByRole('button', { name: 'Remover filtro Categoria: Decoração' }),
+      ).not.toBeInTheDocument()
+      expect(getVisibleProductNamesInOrder()).toEqual(['Vaso Grande', 'Bloco Neutro'])
+    })
+
+    it('"Limpar filtros" remove Categoria e Tipo mas preserva a busca ativa', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.type(screen.getByRole('combobox', { name: 'Buscar produto' }), 'nd')
+      expect(getVisibleProductNamesInOrder()).toEqual(['Vaso Grande', 'Chaveiro Redondo'])
+
+      await openFilters(user)
+      await user.click(screen.getByRole('checkbox', { name: 'Catálogo' }))
+      expect(getVisibleProductNamesInOrder()).toEqual(['Vaso Grande'])
+
+      await user.click(screen.getByRole('button', { name: 'Limpar filtros' }))
+
+      expect(screen.getByRole('combobox', { name: 'Buscar produto' })).toHaveValue('nd')
+      expect(getVisibleProductNamesInOrder()).toEqual(['Vaso Grande', 'Chaveiro Redondo'])
+      expect(screen.getByRole('button', { name: 'Filtros' })).toBeInTheDocument()
+    })
+
+    it('"Limpar filtros" fica desabilitado enquanto não houver nenhuma seleção', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+
+      expect(screen.getByRole('button', { name: 'Limpar filtros' })).toBeDisabled()
+
+      await user.click(screen.getByRole('checkbox', { name: 'Decoração' }))
+      expect(screen.getByRole('button', { name: 'Limpar filtros' })).toBeEnabled()
+    })
+
+    it('o filtro é aplicado antes da ordenação: ordena só o subconjunto filtrado', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+
+      await user.click(screen.getByRole('checkbox', { name: 'Decoração' }))
+      await applySort(user, 'Produto', 'Ordenar decrescente')
+
+      expect(getVisibleProductNamesInOrder()).toEqual(['Vaso Grande', 'Chaveiro Redondo'])
+    })
+
+    it('um produto passa no filtro de Categoria se QUALQUER uma das suas categorias estiver marcada', async () => {
+      const user = userEvent.setup()
+      // Vaso Grande vinculado a duas categorias: "Decoração" e "Presentes".
+      useAllProductCategoriesMock.mockReturnValue({
+        categoriesByProductId: new Map<string, string[]>([
+          ['flt1', ['Decoração', 'Presentes']],
+          ['flt2', ['Decoração']],
+          ['flt3', ['Utilidades']],
+        ]),
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+      })
+      mockProducts([vasoDecoracao, chaveiroDecoracao, suporteUtilidades])
+      renderPage()
+      await openFilters(user)
+
+      await user.click(screen.getByRole('checkbox', { name: 'Presentes' }))
+
+      expect(getVisibleProductNamesInOrder()).toEqual(['Vaso Grande'])
+    })
+  })
 })
