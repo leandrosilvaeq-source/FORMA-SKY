@@ -284,7 +284,12 @@ begin
   select value::uuid into v_a_hist from zz_pcil_fixtures where key = 'a_hist';
 
   begin
-    select public.update_product_full(
+    -- v_row := fn(...), nunca `select fn(...) into v_row` — esta última forma
+    -- dispara "invalid input syntax for type uuid" para uma função SECURITY
+    -- DEFINER que retorna public.products (achado e corrigido em
+    -- product_categories_plate_weight_order_colors_test.sql numa rodada
+    -- anterior; mesma causa, mesma correção aplicada aqui de propósito).
+    v_row := public.update_product_full(
       v_product_a, jsonb_build_object('description', 'descrição editada, cores/composição não tocadas'),
       jsonb_build_array('teste'), v_plates, null, null,
       jsonb_build_array(
@@ -292,7 +297,7 @@ begin
         jsonb_build_object('id', v_a_active, 'quantity', 3)
       ),
       '[]'::jsonb, v_user_id
-    ) into v_row;
+    );
     select count(*) into v_count from public.product_accessories where product_id = v_product_a and accessory_id = v_a_hist;
 
     insert into zz_pcil_test_results(section, test_name, status, details)
@@ -634,7 +639,9 @@ begin
   select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
   begin
-    select public.update_product_full(
+    -- v_row := fn(...), nunca `select fn(...) into v_row` — mesma correção
+    -- de 1.4 (ver comentário lá para o motivo completo).
+    v_row := public.update_product_full(
       v_product_a, jsonb_build_object('name', 'TESTE OPS PCIL — Produto A (nome editado)'),
       jsonb_build_array('teste'), v_plates, null, null,
       '[]'::jsonb,
@@ -643,7 +650,7 @@ begin
         jsonb_build_object('id', v_k_active, 'quantity', 4)
       ),
       v_user_id
-    ) into v_row;
+    );
     select count(*) into v_count from public.product_packaging where product_id = v_product_a and packaging_id = v_k_hist;
 
     insert into zz_pcil_test_results(section, test_name, status, details)
