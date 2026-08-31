@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { FilterIcon, XIcon } from 'lucide-react'
 import { toast } from 'sonner'
@@ -208,6 +208,16 @@ export function ProductsPage() {
   const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set())
   const [includeProductsWithoutCategory, setIncludeProductsWithoutCategory] = useState(false)
   const [selectedTypes, setSelectedTypes] = useState<Set<ProductType>>(new Set())
+
+  // Prefixo técnico e estável desta instância da página (React useId, uma
+  // única chamada — nunca um hook dentro do map). Todos os `id`/`htmlFor`
+  // dos checkboxes do painel Filtros são derivados só deste prefixo + um
+  // índice posicional; o texto cru da Categoria NUNCA entra em `id`,
+  // `htmlFor`, `aria-labelledby` ou qualquer IDREF (um nome como "Peças
+  // Grandes / Cachepôs (2cm)" quebraria o `aria-labelledby`, que é uma
+  // lista separada por espaços). O nome real da Categoria continua só no
+  // conteúdo visível/nome acessível (<span>) e nos rótulos dos chips.
+  const filterIdPrefix = useId()
 
   // "Editar produto" — três seções independentes no mesmo diálogo: o
   // formulário completo por plates (ProductForm mode="edit" ->
@@ -635,8 +645,8 @@ export function ProductsPage() {
                   <p className="text-muted-foreground text-xs">Nenhuma categoria cadastrada.</p>
                 ) : (
                   <div className="flex max-h-48 flex-col gap-1.5 overflow-y-auto">
-                    {availableCategories.map((category) => {
-                      const checkboxId = `product-filter-category-${category}`
+                    {availableCategories.map((category, index) => {
+                      const checkboxId = `${filterIdPrefix}-category-${index}`
                       return (
                         <label
                           key={category}
@@ -654,11 +664,11 @@ export function ProductsPage() {
                     })}
                     {hasProductsWithoutCategory && (
                       <label
-                        htmlFor="product-filter-category-none"
+                        htmlFor={`${filterIdPrefix}-category-none`}
                         className="text-muted-foreground flex cursor-pointer items-center gap-2 text-sm"
                       >
                         <Checkbox
-                          id="product-filter-category-none"
+                          id={`${filterIdPrefix}-category-none`}
                           checked={includeProductsWithoutCategory}
                           onCheckedChange={(checked) => setIncludeProductsWithoutCategory(checked)}
                         />
@@ -672,8 +682,8 @@ export function ProductsPage() {
               <fieldset className="flex flex-col gap-2">
                 <legend className="text-sm font-semibold">Tipo de produto</legend>
                 <div className="flex flex-col gap-1.5">
-                  {FILTERABLE_PRODUCT_TYPES.map((type) => {
-                    const checkboxId = `product-filter-type-${type}`
+                  {FILTERABLE_PRODUCT_TYPES.map((type, index) => {
+                    const checkboxId = `${filterIdPrefix}-type-${index}`
                     return (
                       <label
                         key={type}

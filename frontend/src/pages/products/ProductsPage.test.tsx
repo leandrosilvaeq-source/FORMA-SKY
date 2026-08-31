@@ -2102,5 +2102,175 @@ describe('ProductsPage', () => {
 
       expect(getVisibleProductNamesInOrder()).toEqual(['Vaso Grande'])
     })
+
+    // Regressão de acessibilidade: o texto cru da Categoria não pode entrar
+    // em nenhum IDREF (id/htmlFor/aria-labelledby). Um nome com espaço
+    // quebrava o aria-labelledby (lista separada por espaços) e deixava o
+    // checkbox sem nome acessível. Os ids agora vêm de um prefixo técnico
+    // (useId) + índice posicional; o nome real fica só no conteúdo visível.
+    it('categoria com espaço, barra, acento e parênteses: checkbox nomeado, selecionável e com id técnico seguro', async () => {
+      const especial = 'Peças Grandes / Cachepôs (2cm)'
+      const pecaEspecial = {
+        ...product,
+        id: 'flt5',
+        name: 'Peça Especial',
+        category: especial,
+        product_type: 'CATALOG' as const,
+      }
+      const updateSpy = vi.fn()
+      const updateFullSpy = vi.fn()
+      const createSpy = vi.fn()
+      useProductsMock.mockReturnValue({
+        products: [pecaEspecial, vasoDecoracao, blocoSemCategoria],
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+        create: createSpy,
+        createWithPlates: createSpy,
+        changePrice: vi.fn(),
+        update: updateSpy,
+        updateFull: updateFullSpy,
+      })
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+
+      const checkbox = screen.getByRole('checkbox', { name: especial })
+      expect(checkbox).toHaveAccessibleName(especial)
+
+      // O IDREF do rótulo (aria-labelledby) precisa ser um único id válido,
+      // sem espaços e sem o texto cru da categoria, e precisa resolver.
+      const labelledBy = checkbox.getAttribute('aria-labelledby') ?? ''
+      expect(labelledBy).not.toBe('')
+      expect(labelledBy).not.toMatch(/\s/)
+      expect(labelledBy).not.toMatch(/Peças|Cachepôs|2cm|\//)
+      const labelEl = document.getElementById(labelledBy)
+      expect(labelEl?.tagName).toBe('LABEL')
+      expect(labelEl).toHaveTextContent(especial)
+      // htmlFor e todos os ids dentro do rótulo: técnicos, sem espaços.
+      const forId = labelEl?.getAttribute('for') ?? ''
+      expect(forId).not.toMatch(/\s/)
+      expect(forId).not.toMatch(/Peças|Cachepôs|2cm|\//)
+      expect(labelledBy.startsWith(forId)).toBe(true)
+      labelEl
+        ?.querySelectorAll('[id]')
+        .forEach((el) => expect(el.getAttribute('id')).not.toMatch(/\s/))
+
+      // Selecionar filtra corretamente.
+      await user.click(checkbox)
+      expect(getVisibleProductNamesInOrder()).toEqual(['Peça Especial'])
+
+      // Chip mostra o nome integral e remove só aquele filtro.
+      const chip = screen.getByRole('button', {
+        name: `Remover filtro Categoria: ${especial}`,
+      })
+      expect(chip).toHaveTextContent(especial)
+      await user.click(chip)
+      expect(getVisibleProductNamesInOrder()).toEqual([
+        'Peça Especial',
+        'Vaso Grande',
+        'Bloco Neutro',
+      ])
+
+      // Nenhuma categoria/produto foi alterado (filtro é só leitura).
+      expect(updateSpy).not.toHaveBeenCalled()
+      expect(updateFullSpy).not.toHaveBeenCalled()
+      expect(createSpy).not.toHaveBeenCalled()
+    })
+
+    it('categorias com nomes semelhantes geram checkboxes distintos e selecionáveis', async () => {
+      const catA = 'Vaso'
+      const catB = 'Vaso Grande'
+      useProductsMock.mockReturnValue({
+        products: [
+          {
+            ...product,
+            id: 'sim1',
+            name: 'Item A',
+            category: catA,
+            product_type: 'CATALOG' as const,
+          },
+          {
+            ...product,
+            id: 'sim2',
+            name: 'Item B',
+            category: catB,
+            product_type: 'CATALOG' as const,
+          },
+        ],
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+        create: vi.fn(),
+        createWithPlates: vi.fn(),
+        changePrice: vi.fn(),
+        update: vi.fn(),
+        updateFull: vi.fn(),
+      })
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+
+      const boxA = screen.getByRole('checkbox', { name: catA })
+      const boxB = screen.getByRole('checkbox', { name: catB })
+      expect(boxA.getAttribute('aria-labelledby')).not.toBe(boxB.getAttribute('aria-labelledby'))
+
+      await user.click(boxB)
+      expect(getVisibleProductNamesInOrder()).toEqual(['Item B'])
+    })
+
+    it('o popover de filtros fecha ao pressionar Escape', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+      await user.click(screen.getByRole('checkbox', { name: 'Decoração' }))
+
+      await user.keyboard('{Escape}')
+
+      await waitFor(() => {
+        expect(screen.queryByRole('checkbox', { name: 'Decoração' })).not.toBeInTheDocument()
+      })
+      // A seleção feita antes de fechar continua valendo.
+      expect(screen.getByRole('button', { name: 'Filtros (1)' })).toBeInTheDocument()
+    })
+
+    it('o popover de filtros fecha ao clicar fora dele', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+      expect(screen.getByRole('checkbox', { name: 'Decoração' })).toBeInTheDocument()
+
+      await user.click(screen.getByRole('heading', { name: 'Produtos' }))
+
+      await waitFor(() => {
+        expect(screen.queryByRole('checkbox', { name: 'Decoração' })).not.toBeInTheDocument()
+      })
+    })
+
+    it('as seleções permanecem ao fechar e reabrir o popover na mesma sessão, e o botão mantém a contagem', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      await openFilters(user)
+
+      await user.click(screen.getByRole('checkbox', { name: 'Decoração' }))
+      await user.click(screen.getByRole('checkbox', { name: 'Catálogo' }))
+      expect(screen.getByRole('button', { name: 'Filtros (2)' })).toBeInTheDocument()
+      expect(getVisibleProductNamesInOrder()).toEqual(['Vaso Grande'])
+
+      await user.keyboard('{Escape}')
+      await waitFor(() => {
+        expect(screen.queryByRole('checkbox', { name: 'Decoração' })).not.toBeInTheDocument()
+      })
+
+      // Popover fechado: contador e filtragem da tabela seguem valendo.
+      expect(screen.getByRole('button', { name: 'Filtros (2)' })).toBeInTheDocument()
+      expect(getVisibleProductNamesInOrder()).toEqual(['Vaso Grande'])
+
+      // Reabre: as mesmas caixas continuam marcadas.
+      await user.click(screen.getByRole('button', { name: /^Filtros/ }))
+      expect(await screen.findByRole('checkbox', { name: 'Decoração' })).toBeChecked()
+      expect(screen.getByRole('checkbox', { name: 'Catálogo' })).toBeChecked()
+      expect(screen.getByRole('checkbox', { name: 'Utilidades' })).not.toBeChecked()
+    })
   })
 })
