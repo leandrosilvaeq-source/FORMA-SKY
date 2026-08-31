@@ -11,29 +11,23 @@
 -- algum dia"), nunca em Produto novo, nunca vínculo pertencente só a OUTRO
 -- produto, nunca depois de já ter sido removido numa chamada anterior.
 --
--- IMPORTANTE — set_product_composition SEMPRE substitui o conjunto INTEIRO
--- (delete + reinsert, nunca incremental — comportamento pré-existente,
--- inalterado por esta migration). Por isso cada chamada abaixo reenvia
--- TODOS os itens que devem continuar vinculados, nunca só o item novo —
--- exatamente como o frontend real já faz (ProductForm sempre envia o estado
--- completo das linhas, nunca um delta). O comentário de cada bloco registra
--- o payload completo enviado e o estado resultante esperado.
+-- IMPORTANTE — update_product_full SEMPRE substitui os DOIS arrays
+-- (acessórios E embalagens) na MESMA chamada, mesmo quando só um dos dois
+-- está sendo testado (comportamento pré-existente, inalterado por esta
+-- migration — set_product_composition sempre recebe os dois parâmetros).
+-- Por isso TODA chamada abaixo reenvia o conjunto completo de AMBOS os
+-- arrays — mesmo nas seções focadas só em acessórios ou só em embalagens, o
+-- array do "outro lado" precisa ser resubmetido EXATAMENTE como estava, ou a
+-- composição dele seria apagada silenciosamente. Cada bloco comenta o
+-- payload completo de accessories/packaging enviado e o estado resultante
+-- esperado dos DOIS.
 --
 -- ESTE ARQUIVO NÃO É UMA MIGRATION. Roda inteiro dentro de UMA ÚNICA
 -- transação, terminada sempre com ROLLBACK — nenhum dado criado por este
 -- script persiste no banco. Usa somente Produto/acessório/embalagem/cliente
 -- "TESTE%", nunca dados oficiais ou Petlink.
 --
--- IMPORTANTE — a migration 20260830120000 ainda NÃO foi aplicada ao projeto
--- Supabase remoto nesta rodada (restrição explícita desta tarefa: "não
--- aplique a nova migration"). Por isso este script NÃO PÔDE ser executado
--- nesta rodada — a regra de preservação testada aqui ainda não existe no
--- banco remoto (set_product_composition ainda rejeita qualquer item inativo,
--- histórico ou não). Escrito seguindo a mesma disciplina/estrutura já usada
--- nos demais arquivos deste diretório — pronto para ser executado assim que
--- a migration for aplicada, numa rodada futura autorizada.
---
--- Execução (quando a migration estiver aplicada):
+-- Execução:
 --   npx supabase db query --linked --file supabase/tests/product_composition_inactive_links_test.sql
 
 begin;
@@ -159,17 +153,20 @@ end $$;
 
 -- =============================================================================
 -- SEÇÃO 1 — ACESSÓRIOS: os 10 cenários pedidos, em sequência narrativa sobre
--- o Produto A (cada teste parte do estado deixado pelo anterior; payload de
--- cada chamada é sempre o CONJUNTO COMPLETO desejado, nunca um delta — ver
--- nota "IMPORTANTE" no topo do arquivo).
--- Estado inicial: {a_hist:1}.
+-- o Produto A. update_product_full sempre substitui os DOIS arrays na mesma
+-- chamada — por isso o array de EMBALAGEM é reenviado como {k_hist:1} SEM
+-- MUDANÇA em toda esta seção (nunca '[]', ou a embalagem histórica seria
+-- apagada silenciosamente antes da Seção 2 sequer começar). Estado inicial:
+-- accessories={a_hist:1}, packaging={k_hist:1} (packaging nunca muda nesta
+-- seção).
 -- =============================================================================
 
--- 1.1 — {a_hist:1, a_active:3}: ativo novo (nunca vinculado antes) é
--- permitido, coexistindo com o histórico já existente. Estado -> {a_hist:1, a_active:3}.
+-- 1.1 — accessories={a_hist:1, a_active:3}, packaging={k_hist:1} (mantido):
+-- ativo novo é permitido, coexistindo com o histórico já existente. Estado
+-- -> accessories={a_hist:1, a_active:3}.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid; v_k_hist uuid;
   v_count integer; v_qty_active integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
@@ -177,6 +174,7 @@ begin
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
   select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_a_hist from zz_pcil_fixtures where key = 'a_hist';
+  select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
   begin
     perform public.update_product_full(
@@ -185,7 +183,8 @@ begin
         jsonb_build_object('id', v_a_hist, 'quantity', 1),
         jsonb_build_object('id', v_a_active, 'quantity', 3)
       ),
-      '[]'::jsonb, v_user_id
+      jsonb_build_array(jsonb_build_object('id', v_k_hist, 'quantity', 1)),
+      v_user_id
     );
     select count(*) into v_count from public.product_accessories where product_id = v_product_a;
     select quantity into v_qty_active from public.product_accessories where product_id = v_product_a and accessory_id = v_a_active;
@@ -200,12 +199,13 @@ begin
   end;
 end $$;
 
--- 1.2 — resenvia {a_hist:1, a_active:3} sem alteração: confirma que o item
--- INATIVO já vinculado ao MESMO Produto é genuinamente aceito (join contra
--- accessories.is_active prova que o item aceito está mesmo inativo agora).
+-- 1.2 — resenvia {a_hist:1, a_active:3} sem alteração (packaging={k_hist:1}
+-- mantido): confirma que o item INATIVO já vinculado ao MESMO Produto é
+-- genuinamente aceito (join contra accessories.is_active prova que o item
+-- aceito está mesmo inativo agora).
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid; v_k_hist uuid;
   v_is_active boolean;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
@@ -213,6 +213,7 @@ begin
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
   select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_a_hist from zz_pcil_fixtures where key = 'a_hist';
+  select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
   begin
     perform public.update_product_full(
@@ -221,7 +222,8 @@ begin
         jsonb_build_object('id', v_a_hist, 'quantity', 1),
         jsonb_build_object('id', v_a_active, 'quantity', 3)
       ),
-      '[]'::jsonb, v_user_id
+      jsonb_build_array(jsonb_build_object('id', v_k_hist, 'quantity', 1)),
+      v_user_id
     );
     select acc.is_active into v_is_active
       from public.product_accessories pa join public.accessories acc on acc.id = pa.accessory_id
@@ -236,11 +238,12 @@ begin
   end;
 end $$;
 
--- 1.3 — {a_hist:9, a_active:3}: alteração de quantidade do inativo
--- histórico é permitida. Estado -> {a_hist:9, a_active:3}.
+-- 1.3 — accessories={a_hist:9, a_active:3}, packaging={k_hist:1} (mantido):
+-- alteração de quantidade do inativo histórico é permitida. Estado ->
+-- accessories={a_hist:9, a_active:3}.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid; v_k_hist uuid;
   v_quantity integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
@@ -248,6 +251,7 @@ begin
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
   select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_a_hist from zz_pcil_fixtures where key = 'a_hist';
+  select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
   begin
     perform public.update_product_full(
@@ -256,7 +260,8 @@ begin
         jsonb_build_object('id', v_a_hist, 'quantity', 9),
         jsonb_build_object('id', v_a_active, 'quantity', 3)
       ),
-      '[]'::jsonb, v_user_id
+      jsonb_build_array(jsonb_build_object('id', v_k_hist, 'quantity', 1)),
+      v_user_id
     );
     select quantity into v_quantity from public.product_accessories where product_id = v_product_a and accessory_id = v_a_hist;
 
@@ -269,12 +274,13 @@ begin
   end;
 end $$;
 
--- 1.4 — editar outro campo do Produto (descrição), reenviando a mesma
--- composição {a_hist:9, a_active:3}: preserva o vínculo, sem exigir tocar
--- na composição para poder salvar outro campo.
+-- 1.4 — editar outro campo do Produto (descrição), reenviando
+-- accessories={a_hist:9, a_active:3}, packaging={k_hist:1} (mantido):
+-- preserva o vínculo, sem exigir tocar na composição para poder salvar
+-- outro campo.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid; v_k_hist uuid;
   v_row public.products; v_count integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
@@ -282,11 +288,12 @@ begin
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
   select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_a_hist from zz_pcil_fixtures where key = 'a_hist';
+  select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
   begin
-    -- v_row := fn(...), nunca `select fn(...) into v_row` — esta última forma
-    -- dispara "invalid input syntax for type uuid" para uma função SECURITY
-    -- DEFINER que retorna public.products (achado e corrigido em
+    -- v_row := fn(...), nunca `select fn(...) into v_row` — esta última
+    -- forma dispara "invalid input syntax for type uuid" para uma função
+    -- SECURITY DEFINER que retorna public.products (achado e corrigido em
     -- product_categories_plate_weight_order_colors_test.sql numa rodada
     -- anterior; mesma causa, mesma correção aplicada aqui de propósito).
     v_row := public.update_product_full(
@@ -296,7 +303,8 @@ begin
         jsonb_build_object('id', v_a_hist, 'quantity', 9),
         jsonb_build_object('id', v_a_active, 'quantity', 3)
       ),
-      '[]'::jsonb, v_user_id
+      jsonb_build_array(jsonb_build_object('id', v_k_hist, 'quantity', 1)),
+      v_user_id
     );
     select count(*) into v_count from public.product_accessories where product_id = v_product_a and accessory_id = v_a_hist;
 
@@ -329,12 +337,13 @@ begin
       case when v_count = 2 then 'PASS' else 'FAIL' end, 'count=' || v_count);
 end $$;
 
--- 1.6 — {a_hist:9, a_active:3, a_never:1}: inativo NUNCA vinculado a nenhum
--- produto é rejeitado. Rollback integral: composição anterior (2 linhas)
--- permanece intacta.
+-- 1.6 — accessories={a_hist:9, a_active:3, a_never:1} (inválido),
+-- packaging={k_hist:1} (mantido): inativo NUNCA vinculado a nenhum produto
+-- é rejeitado. Rollback integral: composição anterior (2 linhas de
+-- accessories, 1 de packaging) permanece intacta.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid; v_a_never uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid; v_a_never uuid; v_k_hist uuid;
   v_raised boolean := false; v_message text; v_count_after integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
@@ -343,6 +352,7 @@ begin
   select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_a_hist from zz_pcil_fixtures where key = 'a_hist';
   select value::uuid into v_a_never from zz_pcil_fixtures where key = 'a_never';
+  select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
   begin
     perform public.update_product_full(
@@ -352,7 +362,8 @@ begin
         jsonb_build_object('id', v_a_active, 'quantity', 3),
         jsonb_build_object('id', v_a_never, 'quantity', 1)
       ),
-      '[]'::jsonb, v_user_id
+      jsonb_build_array(jsonb_build_object('id', v_k_hist, 'quantity', 1)),
+      v_user_id
     );
   exception when others then
     v_raised := true;
@@ -368,11 +379,12 @@ begin
       'raised=' || v_raised || ' message=' || coalesce(v_message, '') || ' count_after=' || v_count_after);
 end $$;
 
--- 1.7 — {a_hist:9, a_active:3, a_other:1}: inativo vinculado SÓ a outro
--- Produto (a_other, histórico de B) é rejeitado para o Produto A.
+-- 1.7 — accessories={a_hist:9, a_active:3, a_other:1} (inválido),
+-- packaging={k_hist:1} (mantido): inativo vinculado SÓ a outro Produto
+-- (a_other, histórico de B) é rejeitado para o Produto A.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid; v_a_other uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid; v_a_other uuid; v_k_hist uuid;
   v_raised boolean := false; v_message text; v_count_after integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
@@ -381,6 +393,7 @@ begin
   select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_a_hist from zz_pcil_fixtures where key = 'a_hist';
   select value::uuid into v_a_other from zz_pcil_fixtures where key = 'a_other';
+  select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
   begin
     perform public.update_product_full(
@@ -390,7 +403,8 @@ begin
         jsonb_build_object('id', v_a_active, 'quantity', 3),
         jsonb_build_object('id', v_a_other, 'quantity', 1)
       ),
-      '[]'::jsonb, v_user_id
+      jsonb_build_array(jsonb_build_object('id', v_k_hist, 'quantity', 1)),
+      v_user_id
     );
   exception when others then
     v_raised := true;
@@ -407,7 +421,9 @@ begin
 end $$;
 
 -- 1.8 — inativo em Produto NOVO é rejeitado (nenhum vínculo anterior pode
--- existir para um produto que ainda não existia).
+-- existir para um produto que ainda não existia). Produto isolado, nunca
+-- toca o Produto A — packaging='[]' aqui é correto (produto nunca chega a
+-- existir).
 do $$
 declare
   v_user_id uuid; v_plates jsonb; v_a_hist uuid;
@@ -443,11 +459,12 @@ begin
       ' products_before=' || v_products_before || ' products_after=' || v_products_after);
 end $$;
 
--- 1.9 — {a_active:3}: remover o inativo histórico é permitido (voluntário).
--- Estado -> {a_active:3}.
+-- 1.9 — accessories={a_active:3} (remove a_hist), packaging={k_hist:1}
+-- (mantido): remover o inativo histórico é permitido (voluntário). Estado
+-- -> accessories={a_active:3}.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid; v_k_hist uuid;
   v_count integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
@@ -455,12 +472,14 @@ begin
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
   select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_a_hist from zz_pcil_fixtures where key = 'a_hist';
+  select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
   begin
     perform public.update_product_full(
       v_product_a, '{}'::jsonb, jsonb_build_array('teste'), v_plates, null, null,
       jsonb_build_array(jsonb_build_object('id', v_a_active, 'quantity', 3)),
-      '[]'::jsonb, v_user_id
+      jsonb_build_array(jsonb_build_object('id', v_k_hist, 'quantity', 1)),
+      v_user_id
     );
     select count(*) into v_count from public.product_accessories where product_id = v_product_a and accessory_id = v_a_hist;
 
@@ -473,12 +492,14 @@ begin
   end;
 end $$;
 
--- 1.10 — {a_active:3, a_hist:1}: depois de removido, tentar reintroduzir o
--- MESMO item (ainda inativo) é rejeitado — ele deixou de ser histórico
--- deste Produto na chamada anterior (1.9). Estado permanece {a_active:3}.
+-- 1.10 — accessories={a_active:3, a_hist:1} (inválido), packaging={k_hist:1}
+-- (mantido): depois de removido, tentar reintroduzir o MESMO item (ainda
+-- inativo) é rejeitado — ele deixou de ser histórico deste Produto na
+-- chamada anterior (1.9). Estado permanece accessories={a_active:3},
+-- packaging={k_hist:1}.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_hist uuid; v_k_hist uuid;
   v_raised boolean := false; v_message text; v_count_hist_after integer; v_qty_active_after integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
@@ -486,6 +507,7 @@ begin
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
   select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_a_hist from zz_pcil_fixtures where key = 'a_hist';
+  select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
   begin
     perform public.update_product_full(
@@ -494,7 +516,8 @@ begin
         jsonb_build_object('id', v_a_active, 'quantity', 3),
         jsonb_build_object('id', v_a_hist, 'quantity', 1)
       ),
-      '[]'::jsonb, v_user_id
+      jsonb_build_array(jsonb_build_object('id', v_k_hist, 'quantity', 1)),
+      v_user_id
     );
   exception when others then
     v_raised := true;
@@ -516,26 +539,31 @@ end $$;
 -- =============================================================================
 -- SEÇÃO 2 — EMBALAGENS: os mesmos 10 cenários, mesma disciplina de payload
 -- completo a cada chamada (cobre qualquer assimetria de copy/paste entre os
--- dois loops da RPC). Estado inicial: {k_hist:1}.
+-- dois loops da RPC). O array de ACESSÓRIOS é reenviado como {a_active:3}
+-- SEM MUDANÇA em toda esta seção (estado deixado pela Seção 1 — nunca
+-- '{}'/'[]', ou apagaria a_active silenciosamente). Estado inicial:
+-- accessories={a_active:3} (fixo nesta seção), packaging={k_hist:1}.
 -- =============================================================================
 
--- 2.1 — {k_hist:1, k_active:4}: ativa nova é permitida, coexistindo com a
--- histórica. Estado -> {k_hist:1, k_active:4}.
+-- 2.1 — accessories={a_active:3} (mantido), packaging={k_hist:1, k_active:4}:
+-- ativa nova é permitida, coexistindo com a histórica. Estado ->
+-- packaging={k_hist:1, k_active:4}.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_k_active uuid; v_k_hist uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_k_active uuid; v_k_hist uuid;
   v_count integer; v_qty_active integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
   select value::uuid into v_product_a from zz_pcil_fixtures where key = 'product_a';
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
+  select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_k_active from zz_pcil_fixtures where key = 'k_active';
   select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
   begin
     perform public.update_product_full(
       v_product_a, '{}'::jsonb, jsonb_build_array('teste'), v_plates, null, null,
-      '[]'::jsonb,
+      jsonb_build_array(jsonb_build_object('id', v_a_active, 'quantity', 3)),
       jsonb_build_array(
         jsonb_build_object('id', v_k_hist, 'quantity', 1),
         jsonb_build_object('id', v_k_active, 'quantity', 4)
@@ -555,23 +583,25 @@ begin
   end;
 end $$;
 
--- 2.2 — resenvia {k_hist:1, k_active:4} sem alteração: confirma que a
--- embalagem INATIVA já vinculada ao MESMO Produto é genuinamente aceita.
+-- 2.2 — resenvia accessories={a_active:3} (mantido), packaging={k_hist:1,
+-- k_active:4} sem alteração: confirma que a embalagem INATIVA já vinculada
+-- ao MESMO Produto é genuinamente aceita.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_k_active uuid; v_k_hist uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_k_active uuid; v_k_hist uuid;
   v_is_active boolean;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
   select value::uuid into v_product_a from zz_pcil_fixtures where key = 'product_a';
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
+  select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_k_active from zz_pcil_fixtures where key = 'k_active';
   select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
   begin
     perform public.update_product_full(
       v_product_a, '{}'::jsonb, jsonb_build_array('teste'), v_plates, null, null,
-      '[]'::jsonb,
+      jsonb_build_array(jsonb_build_object('id', v_a_active, 'quantity', 3)),
       jsonb_build_array(
         jsonb_build_object('id', v_k_hist, 'quantity', 1),
         jsonb_build_object('id', v_k_active, 'quantity', 4)
@@ -591,23 +621,25 @@ begin
   end;
 end $$;
 
--- 2.3 — {k_hist:7, k_active:4}: alteração de quantidade da histórica é
--- permitida. Estado -> {k_hist:7, k_active:4}.
+-- 2.3 — accessories={a_active:3} (mantido), packaging={k_hist:7, k_active:4}:
+-- alteração de quantidade da histórica é permitida. Estado ->
+-- packaging={k_hist:7, k_active:4}.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_k_active uuid; v_k_hist uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_k_active uuid; v_k_hist uuid;
   v_quantity integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
   select value::uuid into v_product_a from zz_pcil_fixtures where key = 'product_a';
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
+  select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_k_active from zz_pcil_fixtures where key = 'k_active';
   select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
   begin
     perform public.update_product_full(
       v_product_a, '{}'::jsonb, jsonb_build_array('teste'), v_plates, null, null,
-      '[]'::jsonb,
+      jsonb_build_array(jsonb_build_object('id', v_a_active, 'quantity', 3)),
       jsonb_build_array(
         jsonb_build_object('id', v_k_hist, 'quantity', 7),
         jsonb_build_object('id', v_k_active, 'quantity', 4)
@@ -625,16 +657,17 @@ begin
   end;
 end $$;
 
--- 2.4 — editar outro campo (nome), reenviando {k_hist:7, k_active:4}:
--- preserva o vínculo.
+-- 2.4 — editar outro campo (nome), reenviando accessories={a_active:3}
+-- (mantido), packaging={k_hist:7, k_active:4}: preserva o vínculo.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_k_active uuid; v_k_hist uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_k_active uuid; v_k_hist uuid;
   v_row public.products; v_count integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
   select value::uuid into v_product_a from zz_pcil_fixtures where key = 'product_a';
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
+  select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_k_active from zz_pcil_fixtures where key = 'k_active';
   select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
@@ -644,7 +677,7 @@ begin
     v_row := public.update_product_full(
       v_product_a, jsonb_build_object('name', 'TESTE OPS PCIL — Produto A (nome editado)'),
       jsonb_build_array('teste'), v_plates, null, null,
-      '[]'::jsonb,
+      jsonb_build_array(jsonb_build_object('id', v_a_active, 'quantity', 3)),
       jsonb_build_array(
         jsonb_build_object('id', v_k_hist, 'quantity', 7),
         jsonb_build_object('id', v_k_active, 'quantity', 4)
@@ -663,17 +696,19 @@ begin
   end;
 end $$;
 
--- 2.5 — {k_hist:7, k_active:4, k_never:1}: embalagem NUNCA vinculada a
--- nenhum produto é rejeitada; rollback integral (composição anterior de 2
--- linhas intacta).
+-- 2.5 — accessories={a_active:3} (mantido), packaging={k_hist:7, k_active:4,
+-- k_never:1} (inválido): embalagem NUNCA vinculada a nenhum produto é
+-- rejeitada; rollback integral (composição anterior de 2 linhas em
+-- packaging, 1 em accessories, intacta).
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_k_active uuid; v_k_hist uuid; v_k_never uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_k_active uuid; v_k_hist uuid; v_k_never uuid;
   v_raised boolean := false; v_message text; v_count_after integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
   select value::uuid into v_product_a from zz_pcil_fixtures where key = 'product_a';
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
+  select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_k_active from zz_pcil_fixtures where key = 'k_active';
   select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
   select value::uuid into v_k_never from zz_pcil_fixtures where key = 'k_never';
@@ -681,7 +716,7 @@ begin
   begin
     perform public.update_product_full(
       v_product_a, '{}'::jsonb, jsonb_build_array('teste'), v_plates, null, null,
-      '[]'::jsonb,
+      jsonb_build_array(jsonb_build_object('id', v_a_active, 'quantity', 3)),
       jsonb_build_array(
         jsonb_build_object('id', v_k_hist, 'quantity', 7),
         jsonb_build_object('id', v_k_active, 'quantity', 4),
@@ -703,16 +738,18 @@ begin
       'raised=' || v_raised || ' message=' || coalesce(v_message, '') || ' count_after=' || v_count_after);
 end $$;
 
--- 2.6 — {k_hist:7, k_active:4, k_other:1}: embalagem vinculada SÓ a outro
--- Produto (k_other, histórico de B) é rejeitada para o Produto A.
+-- 2.6 — accessories={a_active:3} (mantido), packaging={k_hist:7, k_active:4,
+-- k_other:1} (inválido): embalagem vinculada SÓ a outro Produto (k_other,
+-- histórico de B) é rejeitada para o Produto A.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_k_active uuid; v_k_hist uuid; v_k_other uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_k_active uuid; v_k_hist uuid; v_k_other uuid;
   v_raised boolean := false; v_message text; v_count_after integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
   select value::uuid into v_product_a from zz_pcil_fixtures where key = 'product_a';
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
+  select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_k_active from zz_pcil_fixtures where key = 'k_active';
   select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
   select value::uuid into v_k_other from zz_pcil_fixtures where key = 'k_other';
@@ -720,7 +757,7 @@ begin
   begin
     perform public.update_product_full(
       v_product_a, '{}'::jsonb, jsonb_build_array('teste'), v_plates, null, null,
-      '[]'::jsonb,
+      jsonb_build_array(jsonb_build_object('id', v_a_active, 'quantity', 3)),
       jsonb_build_array(
         jsonb_build_object('id', v_k_hist, 'quantity', 7),
         jsonb_build_object('id', v_k_active, 'quantity', 4),
@@ -742,7 +779,9 @@ begin
       'raised=' || v_raised || ' message=' || coalesce(v_message, '') || ' count_after=' || v_count_after);
 end $$;
 
--- 2.7 — embalagem inativa em Produto NOVO é rejeitada.
+-- 2.7 — embalagem inativa em Produto NOVO é rejeitada. Produto isolado,
+-- nunca toca o Produto A — accessories='[]' aqui é correto (produto nunca
+-- chega a existir).
 do $$
 declare
   v_user_id uuid; v_plates jsonb; v_k_hist uuid;
@@ -778,23 +817,26 @@ begin
       ' products_before=' || v_products_before || ' products_after=' || v_products_after);
 end $$;
 
--- 2.8 — {k_active:4}: remover a embalagem histórica é permitido. Estado ->
--- {k_active:4}.
+-- 2.8 — accessories={a_active:3} (mantido), packaging={k_active:4} (remove
+-- k_hist): remover a embalagem histórica é permitido. Estado ->
+-- packaging={k_active:4}.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_k_active uuid; v_k_hist uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_k_active uuid; v_k_hist uuid;
   v_count integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
   select value::uuid into v_product_a from zz_pcil_fixtures where key = 'product_a';
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
+  select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_k_active from zz_pcil_fixtures where key = 'k_active';
   select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
   begin
     perform public.update_product_full(
       v_product_a, '{}'::jsonb, jsonb_build_array('teste'), v_plates, null, null,
-      '[]'::jsonb, jsonb_build_array(jsonb_build_object('id', v_k_active, 'quantity', 4)),
+      jsonb_build_array(jsonb_build_object('id', v_a_active, 'quantity', 3)),
+      jsonb_build_array(jsonb_build_object('id', v_k_active, 'quantity', 4)),
       v_user_id
     );
     select count(*) into v_count from public.product_packaging where product_id = v_product_a and packaging_id = v_k_hist;
@@ -808,23 +850,25 @@ begin
   end;
 end $$;
 
--- 2.9 — {k_active:4, k_hist:1}: depois de removida, tentar reintroduzi-la é
--- rejeitado. Estado permanece {k_active:4}.
+-- 2.9 — accessories={a_active:3} (mantido), packaging={k_active:4, k_hist:1}
+-- (inválido): depois de removida, tentar reintroduzi-la é rejeitado. Estado
+-- permanece packaging={k_active:4}.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_k_active uuid; v_k_hist uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_k_active uuid; v_k_hist uuid;
   v_raised boolean := false; v_message text; v_count_hist_after integer; v_qty_active_after integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
   select value::uuid into v_product_a from zz_pcil_fixtures where key = 'product_a';
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
+  select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_k_active from zz_pcil_fixtures where key = 'k_active';
   select value::uuid into v_k_hist from zz_pcil_fixtures where key = 'k_hist';
 
   begin
     perform public.update_product_full(
       v_product_a, '{}'::jsonb, jsonb_build_array('teste'), v_plates, null, null,
-      '[]'::jsonb,
+      jsonb_build_array(jsonb_build_object('id', v_a_active, 'quantity', 3)),
       jsonb_build_array(
         jsonb_build_object('id', v_k_active, 'quantity', 4),
         jsonb_build_object('id', v_k_hist, 'quantity', 1)
@@ -848,26 +892,27 @@ begin
       ' count_hist_after=' || v_count_hist_after || ' qty_active_after=' || v_qty_active_after);
 end $$;
 
--- 2.10 — {k_active:99, k_other:1}: mistura inválida (embalagem histórica de
--- OUTRO produto) continua rejeitada mesmo junto de uma seleção válida —
--- prova que a rejeição de UM item inválido barra a chamada inteira: a
--- quantidade de k_active NÃO vira 99, permanece 4 (nenhuma inserção
--- parcial).
+-- 2.10 — accessories={a_active:3} (mantido), packaging={k_active:99,
+-- k_other:1} (inválido): mistura inválida (embalagem histórica de OUTRO
+-- produto) continua rejeitada mesmo junto de uma seleção válida — prova que
+-- a rejeição de UM item inválido barra a chamada inteira: a quantidade de
+-- k_active NÃO vira 99, permanece 4 (nenhuma inserção parcial).
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_k_active uuid; v_k_other uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_k_active uuid; v_k_other uuid;
   v_raised boolean := false; v_message text; v_qty_active_after integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
   select value::uuid into v_product_a from zz_pcil_fixtures where key = 'product_a';
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
+  select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_k_active from zz_pcil_fixtures where key = 'k_active';
   select value::uuid into v_k_other from zz_pcil_fixtures where key = 'k_other';
 
   begin
     perform public.update_product_full(
       v_product_a, '{}'::jsonb, jsonb_build_array('teste'), v_plates, null, null,
-      '[]'::jsonb,
+      jsonb_build_array(jsonb_build_object('id', v_a_active, 'quantity', 3)),
       jsonb_build_array(
         jsonb_build_object('id', v_k_active, 'quantity', 99),
         jsonb_build_object('id', v_k_other, 'quantity', 1)
@@ -891,22 +936,26 @@ end $$;
 -- =============================================================================
 -- SEÇÃO 3 — ATOMICIDADE (erro não apaga/altera a composição anterior;
 -- duplicidade e quantidade inválida continuam rejeitadas; rollback integral;
--- zero mistura). Estado no início desta seção: acessórios={a_active:3},
--- embalagens={k_active:4}.
+-- zero mistura). O array de EMBALAGEM é reenviado como {k_active:4} SEM
+-- MUDANÇA em toda esta seção (estado deixado pela Seção 2). Estado no início
+-- desta seção: accessories={a_active:3}, packaging={k_active:4}.
 -- =============================================================================
 
--- 3.1 — duplicidade (mesmo accessory_id 2x no array) continua rejeitada
--- pela UNIQUE(product_id, accessory_id) — comportamento pré-existente,
--- inalterado por esta migration; quantidade anterior (3) intacta.
+-- 3.1 — accessories={a_active:1, a_active:2} (duplicidade, inválido),
+-- packaging={k_active:4} (mantido): duplicidade (mesmo accessory_id 2x no
+-- array) continua rejeitada pela UNIQUE(product_id, accessory_id) —
+-- comportamento pré-existente, inalterado por esta migration; quantidade
+-- anterior (3) intacta.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_k_active uuid;
   v_raised boolean := false; v_message text; v_quantity_after integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
   select value::uuid into v_product_a from zz_pcil_fixtures where key = 'product_a';
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
   select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
+  select value::uuid into v_k_active from zz_pcil_fixtures where key = 'k_active';
 
   begin
     perform public.update_product_full(
@@ -915,7 +964,8 @@ begin
         jsonb_build_object('id', v_a_active, 'quantity', 1),
         jsonb_build_object('id', v_a_active, 'quantity', 2)
       ),
-      '[]'::jsonb, v_user_id
+      jsonb_build_array(jsonb_build_object('id', v_k_active, 'quantity', 4)),
+      v_user_id
     );
   exception when others then
     v_raised := true;
@@ -930,23 +980,26 @@ begin
       'raised=' || v_raised || ' message=' || coalesce(v_message, '') || ' quantity_after=' || v_quantity_after);
 end $$;
 
--- 3.2 — quantidade inválida (0) continua rejeitada pela CHECK da tabela;
--- composição anterior intacta.
+-- 3.2 — accessories={a_active:0} (inválido), packaging={k_active:4}
+-- (mantido): quantidade inválida (0) continua rejeitada pela CHECK da
+-- tabela; composição anterior intacta.
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_k_active uuid;
   v_raised boolean := false; v_quantity_after integer;
 begin
   select value::uuid into v_user_id from zz_pcil_fixtures where key = 'user_id';
   select value::uuid into v_product_a from zz_pcil_fixtures where key = 'product_a';
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
   select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
+  select value::uuid into v_k_active from zz_pcil_fixtures where key = 'k_active';
 
   begin
     perform public.update_product_full(
       v_product_a, '{}'::jsonb, jsonb_build_array('teste'), v_plates, null, null,
       jsonb_build_array(jsonb_build_object('id', v_a_active, 'quantity', 0)),
-      '[]'::jsonb, v_user_id
+      jsonb_build_array(jsonb_build_object('id', v_k_active, 'quantity', 4)),
+      v_user_id
     );
   exception when others then
     v_raised := true;
@@ -960,13 +1013,14 @@ begin
       'raised=' || v_raised || ' quantity_after=' || v_quantity_after);
 end $$;
 
--- 3.3 — falha no MEIO do array (1º item válido, 2º inválido) não deixa o 1º
+-- 3.3 — accessories={a_active:55, a_never:1} (1º item válido, 2º inválido),
+-- packaging={k_active:4} (mantido): falha no MEIO do array não deixa o 1º
 -- item inserido sozinho — nem a composição fica "misturada" entre o
 -- conjunto antigo e o novo: volta inteiramente ao estado anterior (1 linha,
 -- {a_active:3}).
 do $$
 declare
-  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_never uuid;
+  v_user_id uuid; v_product_a uuid; v_plates jsonb; v_a_active uuid; v_a_never uuid; v_k_active uuid;
   v_raised boolean := false; v_count_before integer; v_count_after integer;
   v_ids_before uuid[]; v_ids_after uuid[];
 begin
@@ -975,6 +1029,7 @@ begin
   select value::jsonb into v_plates from zz_pcil_fixtures where key = 'plates';
   select value::uuid into v_a_active from zz_pcil_fixtures where key = 'a_active';
   select value::uuid into v_a_never from zz_pcil_fixtures where key = 'a_never';
+  select value::uuid into v_k_active from zz_pcil_fixtures where key = 'k_active';
 
   select count(*) into v_count_before from public.product_accessories where product_id = v_product_a;
   select coalesce(array_agg(accessory_id order by accessory_id), '{}') into v_ids_before
@@ -987,7 +1042,8 @@ begin
         jsonb_build_object('id', v_a_active, 'quantity', 55),
         jsonb_build_object('id', v_a_never, 'quantity', 1)
       ),
-      '[]'::jsonb, v_user_id
+      jsonb_build_array(jsonb_build_object('id', v_k_active, 'quantity', 4)),
+      v_user_id
     );
   exception when others then
     v_raised := true;
