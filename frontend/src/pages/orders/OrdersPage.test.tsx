@@ -2338,8 +2338,8 @@ describe('OrdersPage', () => {
       renderPage()
 
       const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
-      expect(within(row).getByRole('button', { name: /^alterar pedido$/i })).toBeInTheDocument()
-      expect(within(row).getByRole('button', { name: /^gerenciar pedido$/i })).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: 'Alterar pedido FS-26-001' })).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: 'Gerenciar pedido FS-26-001' })).toBeInTheDocument()
       const deleteButton = within(row).getByRole('button', { name: 'Excluir pedido FS-26-001' })
       expect(deleteButton).toBeInTheDocument()
       expect(deleteButton).toHaveAttribute('title', 'Excluir pedido FS-26-001')
@@ -2483,12 +2483,12 @@ describe('OrdersPage', () => {
   // visual final (1920×1080, 1366×768, tela menor com rolagem horizontal)
   // depende de validação manual em navegador real.
   describe('Ações em uma única linha, sem quebra (rodada corretiva 2026-08-31)', () => {
-    it('os 3 controles (Alterar pedido, Gerenciar pedido, Excluir) ficam no mesmo agrupamento, na ordem correta', () => {
+    it('os 3 controles (Alterar, Gerenciar, Excluir) ficam no mesmo agrupamento, na ordem correta', () => {
       renderPage()
 
       const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
-      const alterarButton = within(row).getByRole('button', { name: /^alterar pedido$/i })
-      const gerenciarButton = within(row).getByRole('button', { name: /^gerenciar pedido$/i })
+      const alterarButton = within(row).getByRole('button', { name: 'Alterar pedido FS-26-001' })
+      const gerenciarButton = within(row).getByRole('button', { name: 'Gerenciar pedido FS-26-001' })
       const excluirButton = within(row).getByRole('button', { name: 'Excluir pedido FS-26-001' })
 
       const container = alterarButton.parentElement as HTMLElement
@@ -2503,7 +2503,7 @@ describe('OrdersPage', () => {
       renderPage()
 
       const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
-      const alterarButton = within(row).getByRole('button', { name: /^alterar pedido$/i })
+      const alterarButton = within(row).getByRole('button', { name: 'Alterar pedido FS-26-001' })
       const container = alterarButton.parentElement as HTMLElement
 
       expect(container).toHaveClass('flex')
@@ -2528,12 +2528,40 @@ describe('OrdersPage', () => {
       expect(actionsHeader).toBeInTheDocument()
     })
 
-    it('"Alterar pedido" e "Gerenciar pedido" preservam o texto completo, nunca substituídos por ícone', () => {
+    // Rodada corretiva (2026-08-31): texto VISÍVEL compactado de "Alterar
+    // pedido"/"Gerenciar pedido" para só "Alterar"/"Gerenciar" — nome
+    // acessível completo e contextualizado (com o número do pedido)
+    // preservado via aria-label/title, mesmo padrão já usado no botão
+    // Excluir. Os diálogos abertos continuam com o título completo (testes
+    // dedicados logo abaixo).
+    it('texto visível dos botões é só "Alterar"/"Gerenciar" — os textos antigos "Alterar pedido"/"Gerenciar pedido" não aparecem mais como conteúdo da célula', () => {
       renderPage()
 
       const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
-      expect(within(row).getByRole('button', { name: 'Alterar pedido' })).toBeInTheDocument()
-      expect(within(row).getByRole('button', { name: 'Gerenciar pedido' })).toBeInTheDocument()
+      const alterarButton = within(row).getByRole('button', { name: 'Alterar pedido FS-26-001' })
+      const gerenciarButton = within(row).getByRole('button', { name: 'Gerenciar pedido FS-26-001' })
+
+      expect(alterarButton).toHaveTextContent('Alterar')
+      expect(alterarButton.textContent).toBe('Alterar')
+      expect(gerenciarButton).toHaveTextContent('Gerenciar')
+      expect(gerenciarButton.textContent).toBe('Gerenciar')
+
+      const actionsCell = alterarButton.closest('td') as HTMLElement
+      expect(within(actionsCell).queryByText('Alterar pedido')).not.toBeInTheDocument()
+      expect(within(actionsCell).queryByText('Gerenciar pedido')).not.toBeInTheDocument()
+    })
+
+    it('nome acessível completo dos botões "Alterar"/"Gerenciar" inclui "pedido" e o número do pedido, via aria-label e title', () => {
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      const alterarButton = within(row).getByRole('button', { name: 'Alterar pedido FS-26-001' })
+      const gerenciarButton = within(row).getByRole('button', { name: 'Gerenciar pedido FS-26-001' })
+
+      expect(alterarButton).toHaveAccessibleName('Alterar pedido FS-26-001')
+      expect(alterarButton).toHaveAttribute('title', 'Alterar pedido FS-26-001')
+      expect(gerenciarButton).toHaveAccessibleName('Gerenciar pedido FS-26-001')
+      expect(gerenciarButton).toHaveAttribute('title', 'Gerenciar pedido FS-26-001')
     })
 
     it('botão "Excluir pedido" mantém nome acessível e title, mesmo mais compacto (size="icon-sm")', () => {
@@ -2544,17 +2572,17 @@ describe('OrdersPage', () => {
       expect(deleteButton).toHaveAttribute('title', 'Excluir pedido FS-26-001')
     })
 
-    it('regressão: "Alterar pedido" e "Gerenciar pedido" continuam funcionais após o ajuste de layout', async () => {
+    it('regressão: "Alterar" e "Gerenciar" continuam funcionais após o ajuste de layout', async () => {
       const user = userEvent.setup()
       renderPage()
 
       const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
-      await user.click(within(row).getByRole('button', { name: /^alterar pedido$/i }))
+      await user.click(within(row).getByRole('button', { name: 'Alterar pedido FS-26-001' }))
       expect(await screen.findByRole('heading', { name: 'Alterar pedido' })).toBeInTheDocument()
       await user.click(screen.getByRole('button', { name: /^cancelar$/i }))
       expect(screen.queryByRole('heading', { name: 'Alterar pedido' })).not.toBeInTheDocument()
 
-      await user.click(within(row).getByRole('button', { name: /^gerenciar pedido$/i }))
+      await user.click(within(row).getByRole('button', { name: 'Gerenciar pedido FS-26-001' }))
       expect(await screen.findByRole('heading', { name: 'Gerenciar pedido' })).toBeInTheDocument()
     })
 
@@ -2761,16 +2789,16 @@ describe('OrdersPage', () => {
       expect(paymentBadge).not.toHaveClass('text-sm')
     })
 
-    it('botão de texto "Alterar pedido" usa a classe de ação compacta (text-xs, 12px)', () => {
+    it('botão de texto "Alterar" usa a classe de ação compacta (text-xs, 12px)', () => {
       renderPage()
-      const button = within(getTable()).getByRole('button', { name: 'Alterar pedido' })
+      const button = within(getTable()).getByRole('button', { name: 'Alterar pedido FS-26-001' })
       expect(button).toHaveClass('text-xs')
     })
 
     it('coluna Ações de Pedidos: os 2 botões de texto respeitam o piso de 12px (nenhum abaixo disso)', () => {
       renderPage()
-      expect(within(getTable()).getByRole('button', { name: 'Alterar pedido' })).toHaveClass('text-xs')
-      expect(within(getTable()).getByRole('button', { name: 'Gerenciar pedido' })).toHaveClass('text-xs')
+      expect(within(getTable()).getByRole('button', { name: 'Alterar pedido FS-26-001' })).toHaveClass('text-xs')
+      expect(within(getTable()).getByRole('button', { name: 'Gerenciar pedido FS-26-001' })).toHaveClass('text-xs')
     })
 
     it('regressão: fora da tabela (botão "Novo pedido", diálogos) nenhuma classe de tipografia compacta é aplicada', () => {

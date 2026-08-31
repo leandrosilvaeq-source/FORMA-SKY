@@ -849,32 +849,45 @@ export function OrdersPage() {
                             contra compressão. Padding horizontal dos 2
                             botões de texto reduzido de px-2.5 (padrão do
                             size="sm") para px-2 antes de mexer na fonte,
-                            conforme pedido — texto completo preservado nos
-                            dois, nunca substituído por ícone. */}
+                            conforme pedido. Rodada corretiva 2026-08-31:
+                            texto visível compactado de "Alterar pedido"/
+                            "Gerenciar pedido" para só "Alterar"/"Gerenciar"
+                            (o contexto "pedido" já é dado pela coluna/linha
+                            da tabela) — nome acessível completo e
+                            contextualizado com o número do pedido preservado
+                            via aria-label/title explícitos, mesmo padrão já
+                            usado no botão Excluir ao lado. Os diálogos
+                            abertos por estes botões continuam com o título
+                            completo "Alterar pedido"/"Gerenciar pedido"
+                            (DialogTitle abaixo, inalterado). */}
                         <div className="flex flex-nowrap items-center gap-1.5">
                           <Button
                             type="button"
                             variant="outline"
                             size="sm"
                             onClick={() => openEditDialog(order.order_id)}
+                            aria-label={`Alterar pedido ${order.order_number}`}
+                            title={`Alterar pedido ${order.order_number}`}
                             className={cn(
                               'border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0 px-2',
                               TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
                             )}
                           >
-                            Alterar pedido
+                            Alterar
                           </Button>
                           <Button
                             type="button"
                             variant="outline"
                             size="sm"
                             onClick={() => openManageDialog(order.order_id)}
+                            aria-label={`Gerenciar pedido ${order.order_number}`}
+                            title={`Gerenciar pedido ${order.order_number}`}
                             className={cn(
                               'border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0 px-2',
                               TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
                             )}
                           >
-                            Gerenciar pedido
+                            Gerenciar
                           </Button>
                           {/* Ícone de lixeira, variant="destructive" sutil
                               (mesmo padrão de CustomersPage.tsx/
