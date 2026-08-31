@@ -5,7 +5,10 @@ import { FilamentTypeForm, type FilamentTypeFormValues } from '@/components/inve
 import { FilamentTypeDrawer } from '@/components/inventory/FilamentTypeDrawer'
 import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
 import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
-import { TABLE_COMPACT_TEXT_CLASSNAME } from '@/components/dataTable/tableTypography'
+import {
+  TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+  TABLE_COMPACT_TEXT_CLASSNAME,
+} from '@/components/dataTable/tableTypography'
 import { StockLevelBadge, getStockLevel } from '@/components/inventory/StockMovementPanel'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -429,7 +432,10 @@ export function FilamentsInventoryPage() {
                             variant="outline"
                             size="sm"
                             onClick={() => openDrawer(type)}
-                            className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                            className={cn(
+                              'shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
+                              TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+                            )}
                           >
                             Ver rolos
                           </Button>
@@ -437,7 +443,10 @@ export function FilamentsInventoryPage() {
                             variant="outline"
                             size="sm"
                             onClick={() => openEditDialog(type)}
-                            className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                            className={cn(
+                              'shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
+                              TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+                            )}
                           >
                             Editar
                           </Button>
@@ -446,7 +455,7 @@ export function FilamentsInventoryPage() {
                             size="sm"
                             onClick={() => openDeleteDialog(type)}
                             aria-label={`Excluir tipo de filamento ${type.manufacturer} ${type.commercial_color}`}
-                            className="shrink-0"
+                            className={cn('shrink-0', TABLE_COMPACT_ACTION_TEXT_CLASSNAME)}
                           >
                             Excluir
                           </Button>

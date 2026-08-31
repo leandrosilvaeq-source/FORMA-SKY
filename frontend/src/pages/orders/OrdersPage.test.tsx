@@ -2730,6 +2730,56 @@ describe('OrdersPage', () => {
     })
   })
 
+  // Auditoria corretiva da redução de fonte (2026-08-31): comprova os
+  // tamanhos finais de cada tipo de texto da tabela — a célula comum herda
+  // 13.6px do <Table> (nenhum text-* próprio); badges/botões que já
+  // declaravam um text-* próprio (portanto imunes à cascata) precisam da
+  // classe de ação compacta (TABLE_COMPACT_ACTION_TEXT_CLASSNAME = text-xs,
+  // 12px) aplicada explicitamente — antes desta rodada, a constante existia
+  // mas não estava conectada a nenhum controle real.
+  describe('auditoria da redução de fonte (rodada corretiva 2026-08-31)', () => {
+    it('célula comum: TableCell não declara nenhum text-* próprio (herda 13.6px do <Table> pela cascata)', () => {
+      renderPage()
+      const clientCell = within(getTable()).getByText('Ana Cliente').closest('td')
+      expect(clientCell).not.toBeNull()
+      expect(clientCell?.className ?? '').not.toMatch(/text-\[|text-xs|text-sm|text-base/)
+    })
+
+    it('badge de status operacional (OrderStatusControl) usa a classe de ação compacta (text-xs, 12px) via compact', () => {
+      renderPage()
+      const statusBadge = within(getTable()).getByRole('button', { name: 'Orçamento' })
+      expect(statusBadge).toHaveClass('text-xs')
+      expect(statusBadge).not.toHaveClass('text-sm')
+    })
+
+    it('badge de status financeiro (OrderPaymentStatusControl) usa a classe de ação compacta (text-xs, 12px) via compact', () => {
+      renderPage()
+      const paymentBadge = within(getTable()).getByRole('button', {
+        name: /Registrar pagamento — status financeiro: Ag\. Pagamento/,
+      })
+      expect(paymentBadge).toHaveClass('text-xs')
+      expect(paymentBadge).not.toHaveClass('text-sm')
+    })
+
+    it('botão de texto "Alterar pedido" usa a classe de ação compacta (text-xs, 12px)', () => {
+      renderPage()
+      const button = within(getTable()).getByRole('button', { name: 'Alterar pedido' })
+      expect(button).toHaveClass('text-xs')
+    })
+
+    it('coluna Ações de Pedidos: os 2 botões de texto respeitam o piso de 12px (nenhum abaixo disso)', () => {
+      renderPage()
+      expect(within(getTable()).getByRole('button', { name: 'Alterar pedido' })).toHaveClass('text-xs')
+      expect(within(getTable()).getByRole('button', { name: 'Gerenciar pedido' })).toHaveClass('text-xs')
+    })
+
+    it('regressão: fora da tabela (botão "Novo pedido", diálogos) nenhuma classe de tipografia compacta é aplicada', () => {
+      renderPage()
+      const newOrderButton = screen.getByRole('button', { name: 'Novo pedido' })
+      expect(newOrderButton.className).not.toMatch(/text-\[13\.6px\]|text-xs/)
+    })
+  })
+
   describe('Cores dos status operacional e financeiro + "Atrasado" (2026-08-29)', () => {
     const ORDER_STATUS_LABELS_FOR_TEST = {
       QUOTE: 'Orçamento',

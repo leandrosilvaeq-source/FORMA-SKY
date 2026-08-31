@@ -6,7 +6,10 @@ import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
 import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
-import { TABLE_COMPACT_TEXT_CLASSNAME } from '@/components/dataTable/tableTypography'
+import {
+  TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+  TABLE_COMPACT_TEXT_CLASSNAME,
+} from '@/components/dataTable/tableTypography'
 import { SearchAutocomplete, type SearchAutocompleteOption } from '@/components/search/SearchAutocomplete'
 import { OrderEditForm } from '@/components/orders/OrderEditForm'
 import { OrderForm, type OrderFormSubmitValues } from '@/components/orders/OrderForm'
@@ -800,6 +803,7 @@ export function OrdersPage() {
                             orderNumber={order.order_number}
                             status={order.order_status}
                             onChanged={refetch}
+                            compact
                           />
                           {/* "Atrasado" — indicador visual derivado (nunca
                               um status persistido), sempre ao lado do
@@ -820,6 +824,7 @@ export function OrdersPage() {
                           totalPaid={order.total_paid}
                           balanceDue={order.balance_due}
                           onChanged={refetch}
+                          compact
                         />
                       </TableCell>
                       <TableCell className="truncate" title={paymentMethodText ?? undefined}>
@@ -852,7 +857,10 @@ export function OrdersPage() {
                             variant="outline"
                             size="sm"
                             onClick={() => openEditDialog(order.order_id)}
-                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0 px-2"
+                            className={cn(
+                              'border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0 px-2',
+                              TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+                            )}
                           >
                             Alterar pedido
                           </Button>
@@ -861,7 +869,10 @@ export function OrdersPage() {
                             variant="outline"
                             size="sm"
                             onClick={() => openManageDialog(order.order_id)}
-                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0 px-2"
+                            className={cn(
+                              'border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0 px-2',
+                              TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+                            )}
                           >
                             Gerenciar pedido
                           </Button>

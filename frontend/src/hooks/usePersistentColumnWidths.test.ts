@@ -155,4 +155,100 @@ describe('usePersistentColumnWidths', () => {
     rerender({ tableId: 'customers' })
     expect(result.current.getWidth('name')).toBe(333)
   })
+
+  // Auditoria corretiva (2026-08-31): troca de identidade (usuário ou
+  // tabela) SEM desmontar o componente — o padrão "ajustar estado durante a
+  // renderização" (usePersistentColumnWidths.ts) precisa reagir
+  // corretamente a essa troca via re-render (rerender), nunca só via
+  // mount/unmount. Cobre o roteiro explícito de 8 passos: renderizar com A,
+  // persistir, trocar para B sem desmontar, confirmar defaults/preferência
+  // de B, voltar para A, confirmar recuperação da largura de A, e o mesmo
+  // roteiro para a troca Acessórios/Embalagens (mesmo componente, tableId
+  // diferente).
+  it('troca de usuário sem desmontar: A persiste, B (sem preferência própria) recebe os defaults, voltar para A recupera a largura salva', () => {
+    const { result, rerender } = renderHook(
+      ({ userId }: { userId: string }) => usePersistentColumnWidths('orders', userId, specs),
+      { initialProps: { userId: 'user-A' } },
+    )
+
+    // 1-2. Usuário A: altera e persiste.
+    act(() => result.current.setColumnWidth('name', 310))
+    act(() => result.current.commitWidths())
+    expect(result.current.getWidth('name')).toBe(310)
+
+    // 3-4. Troca para B (mesmo componente, sem unmount) — B nunca vê a
+    // largura de A, recebe os próprios defaults (nunca persistiu nada).
+    rerender({ userId: 'user-B' })
+    expect(result.current.getWidth('name')).toBe(200)
+    expect(window.localStorage.getItem(buildStorageKey('orders', 'user-B'))).toBeNull()
+
+    // 5-6. Volta para A — a largura salva de A é recuperada integralmente,
+    // nunca sobrescrita pela passagem por B.
+    rerender({ userId: 'user-A' })
+    expect(result.current.getWidth('name')).toBe(310)
+  })
+
+  it('gravação após troca de usuário vai para a chave do usuário atual, nunca para a do usuário anterior', () => {
+    const { result, rerender } = renderHook(
+      ({ userId }: { userId: string }) => usePersistentColumnWidths('orders', userId, specs),
+      { initialProps: { userId: 'user-A' } },
+    )
+    act(() => result.current.setColumnWidth('name', 310))
+    act(() => result.current.commitWidths())
+
+    rerender({ userId: 'user-B' })
+    act(() => result.current.setColumnWidth('name', 450))
+    act(() => result.current.commitWidths())
+
+    const storedA = JSON.parse(window.localStorage.getItem(buildStorageKey('orders', 'user-A')) as string)
+    const storedB = JSON.parse(window.localStorage.getItem(buildStorageKey('orders', 'user-B')) as string)
+    expect(storedA.name).toBe(310)
+    expect(storedB.name).toBe(450)
+  })
+
+  it('alternar Acessórios e Embalagens no mesmo componente (troca de tableId sem desmontar) mantém isolamento total nos dois sentidos', () => {
+    const { result, rerender } = renderHook(
+      ({ tableId }: { tableId: string }) => usePersistentColumnWidths(tableId, 'user-1', specs),
+      { initialProps: { tableId: 'inventory-accessories' } },
+    )
+
+    // 7. Acessórios: altera e persiste.
+    act(() => result.current.setColumnWidth('name', 340))
+    act(() => result.current.commitWidths())
+    expect(result.current.getWidth('name')).toBe(340)
+
+    // 8. Troca para Embalagens sem desmontar — nunca herda a largura de
+    // Acessórios, recebe os próprios defaults.
+    rerender({ tableId: 'inventory-packaging' })
+    expect(result.current.getWidth('name')).toBe(200)
+
+    act(() => result.current.setColumnWidth('name', 260))
+    act(() => result.current.commitWidths())
+    expect(result.current.getWidth('name')).toBe(260)
+
+    // Volta para Acessórios — largura própria intacta, nunca sobrescrita
+    // pela gravação feita em Embalagens.
+    rerender({ tableId: 'inventory-accessories' })
+    expect(result.current.getWidth('name')).toBe(340)
+
+    // E de volta para Embalagens — idem, sua própria largura intacta.
+    rerender({ tableId: 'inventory-packaging' })
+    expect(result.current.getWidth('name')).toBe(260)
+  })
+
+  it('nenhum setState infinito durante a troca de identidade: a mesma identidade repetida no rerender não causa recarregamento redundante', () => {
+    const { result, rerender } = renderHook(
+      ({ tableId, userId }: { tableId: string; userId: string }) =>
+        usePersistentColumnWidths(tableId, userId, specs),
+      { initialProps: { tableId: 'orders', userId: 'user-1' } },
+    )
+
+    act(() => result.current.setColumnWidth('name', 280))
+    // Rerender com a MESMA identidade (tableId/userId inalterados) nunca
+    // deve descartar o ajuste em memória ainda não commitado — se o
+    // "ajustar estado durante a renderização" disparasse a cada render
+    // (bug de loop), isso reverteria para os defaults aqui.
+    rerender({ tableId: 'orders', userId: 'user-1' })
+    expect(result.current.getWidth('name')).toBe(280)
+  })
 })

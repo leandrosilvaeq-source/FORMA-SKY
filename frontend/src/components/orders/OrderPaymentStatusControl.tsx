@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { TABLE_COMPACT_ACTION_TEXT_CLASSNAME } from '@/components/dataTable/tableTypography'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { RegisterPaymentForm, type RegisterPaymentFormValues } from './RegisterPaymentForm'
 import { registerPayment } from '@/lib/api/payments'
@@ -58,6 +59,10 @@ export interface OrderPaymentStatusControlProps {
   // localmente) e as contagens dos filtros, sem nenhum estado duplicado
   // aqui.
   onChanged: () => void
+  // Padronização das listagens (redução de 15%/piso de 12px) — mesmo
+  // contrato de OrderStatusControl.tsx: default false preserva text-sm
+  // (14px) para qualquer uso futuro fora de uma tabela.
+  compact?: boolean
 }
 
 // Controle compacto de status financeiro na própria listagem — reaproveita
@@ -86,6 +91,7 @@ export function OrderPaymentStatusControl({
   totalPaid,
   balanceDue,
   onChanged,
+  compact = false,
 }: OrderPaymentStatusControlProps) {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -127,6 +133,7 @@ export function OrderPaymentStatusControl({
         onClick={() => setIsDialogOpen(true)}
         className={cn(
           STATUS_BADGE_BASE_CLASSNAME,
+          compact && TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
           PAYMENT_STATUS_COLOR_CLASSNAMES[paymentStatus],
           'focus-visible:ring-brand-accent hover:border-brand-primary hover:text-brand-primary-dark cursor-pointer transition-colors outline-none focus-visible:ring-2',
         )}

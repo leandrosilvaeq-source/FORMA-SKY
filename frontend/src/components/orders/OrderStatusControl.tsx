@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { TABLE_COMPACT_ACTION_TEXT_CLASSNAME } from '@/components/dataTable/tableTypography'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { changeOrderStatus } from '@/lib/api/orders'
@@ -66,6 +67,12 @@ export interface OrderStatusControlProps {
   // listagem inteira (mesmo pipeline reativo já existente, nenhum estado
   // duplicado aqui).
   onChanged: () => void
+  // Padronização das listagens (redução de 15%/piso de 12px): este
+  // controle só é usado dentro da tabela de Pedidos hoje, mas o prop existe
+  // para nunca acoplar esse fato ao componente — default false preserva
+  // text-sm (14px) para qualquer uso futuro fora de uma tabela (ex.: um
+  // diálogo), nunca reduz nada "por engano" fora de listagem.
+  compact?: boolean
 }
 
 // Controle compacto de status na própria listagem — reaproveita só as
@@ -76,7 +83,13 @@ export interface OrderStatusControlProps {
 // seria um custo de rede desnecessário só para trocar um status a partir da
 // linha da tabela; chama changeOrderStatus() diretamente, mesma função que
 // o hook usa por baixo.
-export function OrderStatusControl({ orderId, orderNumber, status, onChanged }: OrderStatusControlProps) {
+export function OrderStatusControl({
+  orderId,
+  orderNumber,
+  status,
+  onChanged,
+  compact = false,
+}: OrderStatusControlProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [confirmTarget, setConfirmTarget] = useState<OrderStatus | null>(null)
   const [isChanging, setIsChanging] = useState(false)
@@ -86,7 +99,13 @@ export function OrderStatusControl({ orderId, orderNumber, status, onChanged }: 
 
   if (terminal) {
     return (
-      <span className={cn(STATUS_BADGE_BASE_CLASSNAME, ORDER_STATUS_COLOR_CLASSNAMES[status])}>
+      <span
+        className={cn(
+          STATUS_BADGE_BASE_CLASSNAME,
+          compact && TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+          ORDER_STATUS_COLOR_CLASSNAMES[status],
+        )}
+      >
         {ORDER_STATUS_LABELS[status]}
       </span>
     )
@@ -129,6 +148,7 @@ export function OrderStatusControl({ orderId, orderNumber, status, onChanged }: 
         onClick={() => setIsMenuOpen(true)}
         className={cn(
           STATUS_BADGE_BASE_CLASSNAME,
+          compact && TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
           ORDER_STATUS_COLOR_CLASSNAMES[status],
           'focus-visible:ring-brand-accent hover:border-brand-primary hover:text-brand-primary-dark cursor-pointer transition-colors outline-none focus-visible:ring-2',
         )}

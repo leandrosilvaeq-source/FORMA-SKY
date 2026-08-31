@@ -5,7 +5,10 @@ import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
 import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
-import { TABLE_COMPACT_TEXT_CLASSNAME } from '@/components/dataTable/tableTypography'
+import {
+  TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+  TABLE_COMPACT_TEXT_CLASSNAME,
+} from '@/components/dataTable/tableTypography'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { CompanyForm, type CompanyFormValues, type ContactsStatus } from '@/components/companies/CompanyForm'
 import { Button } from '@/components/ui/button'
@@ -487,7 +490,10 @@ export function CompaniesPage() {
                           variant="outline"
                           size="sm"
                           onClick={() => openEditDialog(company)}
-                          className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                          className={cn(
+                            'border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
+                            TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+                          )}
                         >
                           Editar
                         </Button>

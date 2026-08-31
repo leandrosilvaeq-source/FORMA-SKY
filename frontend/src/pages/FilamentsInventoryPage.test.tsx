@@ -1023,3 +1023,31 @@ describe('FilamentsInventoryPage — colunas redimensionáveis e persistidas (pa
     expect(screen.getAllByRole('row')).toHaveLength(2) // header + 1 linha filtrada
   })
 })
+
+// Auditoria corretiva da redução de fonte (2026-08-31) — "uma listagem do
+// Estoque", conforme exigido: Filamentos tem tanto um badge que já estava
+// no piso de 12px (StockLevelBadge, text-xs, NUNCA reduzido de novo) quanto
+// botões de ação (size="sm", 12.8px) que agora recebem
+// TABLE_COMPACT_ACTION_TEXT_CLASSNAME (text-xs, 12px) explicitamente.
+describe('FilamentsInventoryPage — auditoria da redução de fonte (rodada corretiva 2026-08-31)', () => {
+  it('badge de situação de estoque (StockLevelBadge) já estava no piso de 12px — permanece text-xs, sem redução adicional', () => {
+    mockTypes([typeFixture()])
+    renderPage()
+    const badge = screen.getByText('Estoque normal')
+    expect(badge).toHaveClass('text-xs')
+  })
+
+  it('botão de texto "Ver rolos" (coluna Ações) usa a classe de ação compacta (text-xs, 12px)', () => {
+    mockTypes([typeFixture()])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Ver rolos' })).toHaveClass('text-xs')
+  })
+
+  it('célula comum (Fabricante) não declara text-* próprio — herda 13.6px do <Table>', () => {
+    mockTypes([typeFixture()])
+    renderPage()
+    const cell = screen.getByText('Voolt3D').closest('td')
+    expect(cell).not.toBeNull()
+    expect(cell?.className ?? '').not.toMatch(/text-\[|text-xs|text-sm|text-base/)
+  })
+})

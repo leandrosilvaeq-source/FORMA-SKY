@@ -6,7 +6,10 @@ import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
 import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
-import { TABLE_COMPACT_TEXT_CLASSNAME } from '@/components/dataTable/tableTypography'
+import {
+  TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+  TABLE_COMPACT_TEXT_CLASSNAME,
+} from '@/components/dataTable/tableTypography'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { ProductCompositionForm } from '@/components/products/ProductCompositionForm'
 import {
@@ -678,7 +681,10 @@ export function ProductsPage() {
                             variant="outline"
                             size="sm"
                             onClick={() => openEditDialog(product)}
-                            className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                            className={cn(
+                              'shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
+                              TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+                            )}
                           >
                             Editar produto
                           </Button>
@@ -686,7 +692,10 @@ export function ProductsPage() {
                             variant="outline"
                             size="sm"
                             onClick={() => openCompositionDialog(product)}
-                            className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                            className={cn(
+                              'shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
+                              TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+                            )}
                           >
                             Acessórios e Embalagem
                           </Button>
