@@ -2460,6 +2460,126 @@ describe('OrdersPage', () => {
     })
   })
 
+  // Rodada corretiva (2026-08-31): a coluna Ações quebrava "Alterar
+  // pedido"/"Gerenciar pedido"/"Excluir" em 2 linhas — causa raiz era o
+  // agrupamento usar flex-wrap (permitindo quebra) combinado com w-[14%]
+  // (largura insuficiente para os 3 controles). Corrigido para
+  // flex-nowrap + coluna mais larga (w-[22%]). jsdom não mede layout real
+  // (não reproduz a quebra visual em si), então estes testes verificam a
+  // ESTRUTURA/CLASSES responsáveis pelo comportamento — a confirmação
+  // visual final (1920×1080, 1366×768, tela menor com rolagem horizontal)
+  // depende de validação manual em navegador real.
+  describe('Ações em uma única linha, sem quebra (rodada corretiva 2026-08-31)', () => {
+    it('os 3 controles (Alterar pedido, Gerenciar pedido, Excluir) ficam no mesmo agrupamento, na ordem correta', () => {
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      const alterarButton = within(row).getByRole('button', { name: /^alterar pedido$/i })
+      const gerenciarButton = within(row).getByRole('button', { name: /^gerenciar pedido$/i })
+      const excluirButton = within(row).getByRole('button', { name: 'Excluir pedido FS-26-001' })
+
+      const container = alterarButton.parentElement as HTMLElement
+      expect(container).toContainElement(gerenciarButton)
+      expect(container).toContainElement(excluirButton)
+
+      const buttonsInOrder = within(container).getAllByRole('button')
+      expect(buttonsInOrder).toEqual([alterarButton, gerenciarButton, excluirButton])
+    })
+
+    it('o agrupamento das ações usa flex-nowrap (nunca flex-wrap) e centraliza os controles verticalmente', () => {
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      const alterarButton = within(row).getByRole('button', { name: /^alterar pedido$/i })
+      const container = alterarButton.parentElement as HTMLElement
+
+      expect(container).toHaveClass('flex')
+      expect(container).toHaveClass('flex-nowrap')
+      expect(container).toHaveClass('items-center')
+      expect(container.className).not.toMatch(/(?<!-)flex-wrap/)
+    })
+
+    it('a coluna Ações reserva w-[22%] — mais que o dobro da largura anterior (w-[14%]), suficiente para os 3 controles', () => {
+      renderPage()
+
+      const actionsHeader = screen.getByRole('columnheader', { name: 'Ações' })
+      expect(actionsHeader).toHaveClass('w-[22%]')
+      expect(actionsHeader).not.toHaveClass('w-[14%]')
+    })
+
+    it('a tabela usa min-w-[1600px] (ampliada de 1460px) para acomodar a coluna Ações mais larga', () => {
+      renderPage()
+
+      const table = screen.getByRole('table')
+      expect(table).toHaveClass('min-w-[1600px]')
+    })
+
+    it('"Alterar pedido" e "Gerenciar pedido" preservam o texto completo, nunca substituídos por ícone', () => {
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      expect(within(row).getByRole('button', { name: 'Alterar pedido' })).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: 'Gerenciar pedido' })).toBeInTheDocument()
+    })
+
+    it('botão "Excluir pedido" mantém nome acessível e title, mesmo mais compacto (size="icon-sm")', () => {
+      renderPage()
+
+      const deleteButton = screen.getByRole('button', { name: 'Excluir pedido FS-26-001' })
+      expect(deleteButton).toHaveAccessibleName('Excluir pedido FS-26-001')
+      expect(deleteButton).toHaveAttribute('title', 'Excluir pedido FS-26-001')
+    })
+
+    it('regressão: "Alterar pedido" e "Gerenciar pedido" continuam funcionais após o ajuste de layout', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
+      await user.click(within(row).getByRole('button', { name: /^alterar pedido$/i }))
+      expect(await screen.findByRole('heading', { name: 'Alterar pedido' })).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: /^cancelar$/i }))
+      expect(screen.queryByRole('heading', { name: 'Alterar pedido' })).not.toBeInTheDocument()
+
+      await user.click(within(row).getByRole('button', { name: /^gerenciar pedido$/i }))
+      expect(await screen.findByRole('heading', { name: 'Gerenciar pedido' })).toBeInTheDocument()
+    })
+
+    it('regressão: a tabela continua renderizando todas as colunas e todos os dados de cada Pedido', () => {
+      renderPage()
+
+      expect(screen.getByRole('columnheader', { name: /Nº pedido/ })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Cliente' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Tipo(s)' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Produto(s)' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Status' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Status financeiro' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Método de pagamento' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Forma de entrega' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Total' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Saldo devedor' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: /Prazo/ })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Ações' })).toBeInTheDocument()
+      expect(screen.getByText('FS-26-001')).toBeInTheDocument()
+    })
+
+    it('regressão: ordenação por Nº pedido continua funcional após o ajuste de layout', async () => {
+      const user = userEvent.setup()
+      const orderB = { ...orderSummary, order_id: 'o2', order_number: 'FS-26-002' }
+      useOrdersMock.mockReturnValue({
+        orders: [orderB, orderSummary],
+        isLoading: false,
+        error: null,
+        refetch: refetchMock,
+        create: createMock,
+      })
+      renderPage()
+
+      await applySort(user, 'Nº pedido', 'Ordenar crescente')
+
+      expect(screen.getByRole('columnheader', { name: /^Nº pedido/ })).toHaveAttribute('aria-sort', 'ascending')
+    })
+  })
+
   describe('Cores dos status operacional e financeiro + "Atrasado" (2026-08-29)', () => {
     const ORDER_STATUS_LABELS_FOR_TEST = {
       QUOTE: 'Orçamento',

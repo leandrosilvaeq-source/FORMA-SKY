@@ -569,8 +569,18 @@ export function OrdersPage() {
           // table-fixed com larguras percentuais somando 100% mantém
           // truncamento/title previsível por coluna, mesmo padrão já
           // aprovado em Empresas.
+          //
+          // Larguras redistribuídas + min-w ampliado de 1460px para 1600px
+          // (rodada corretiva) — Ações estava com só 14% (≈204px), menos do
+          // que os 3 controles (2 botões de texto + exclusão) precisam lado
+          // a lado (~320px com padding/gap), e por isso quebravam em 2
+          // linhas mesmo com o div interno em flex-wrap. Ações sobe para
+          // 22% (≈352px, folga real). O espaço vem de colunas com conteúdo
+          // tipicamente curto (Nº pedido, Tipo(s), Total, Saldo devedor,
+          // Prazo — exatamente as indicadas para compactar); Cliente,
+          // Produto(s), Status e Status financeiro mantêm ou ganham espaço.
           <div className="overflow-x-auto">
-            <Table className="min-w-[1460px] table-fixed text-[16px]">
+            <Table className="min-w-[1600px] table-fixed text-[16px]">
               <TableHeader>
                 <TableRow>
                   <SortableColumnHeader
@@ -578,35 +588,35 @@ export function OrdersPage() {
                     label="Nº pedido"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[8%]"
+                    className="w-[6%]"
                   />
                   <SortableColumnHeader
                     column="client"
                     label="Cliente"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[10%]"
+                    className="w-[11%]"
                   />
                   <SortableColumnHeader
                     column="item_types"
                     label="Tipo(s)"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[9%]"
+                    className="w-[6%]"
                   />
                   <SortableColumnHeader
                     column="item_names"
                     label="Produto(s)"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[9%]"
+                    className="w-[10%]"
                   />
                   <SortableColumnHeader
                     column="order_status"
                     label="Status"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[8%]"
+                    className="w-[9%]"
                   />
                   <SortableColumnHeader
                     column="payment_status"
@@ -634,23 +644,23 @@ export function OrdersPage() {
                     label="Total"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[7%]"
+                    className="w-[5%]"
                   />
                   <SortableColumnHeader
                     column="balance_due"
                     label="Saldo devedor"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[8%]"
+                    className="w-[6%]"
                   />
                   <SortableColumnHeader
                     column="expected_delivery_date"
                     label="Prazo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[7%]"
+                    className="w-[5%]"
                   />
-                  <TableHead className="h-auto w-[14%] py-2 whitespace-normal">Ações</TableHead>
+                  <TableHead className="h-auto w-[22%] py-2 whitespace-normal">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -725,13 +735,25 @@ export function OrdersPage() {
                       <TableCell className="truncate">{formatCurrency(order.balance_due)}</TableCell>
                       <TableCell className="truncate">{formatDateOnly(order.expected_delivery_date)}</TableCell>
                       <TableCell>
-                        <div className="flex flex-wrap gap-2">
+                        {/* Rodada corretiva: flex-wrap permitia os 3
+                            controles quebrarem em 2 linhas quando a coluna
+                            era estreita — flex-nowrap + items-center os
+                            mantém sempre numa linha só, centralizados
+                            verticalmente (a coluna agora reserva largura
+                            suficiente, ver comentário acima da <Table>).
+                            shrink-0 em cada botão é rede de segurança extra
+                            contra compressão. Padding horizontal dos 2
+                            botões de texto reduzido de px-2.5 (padrão do
+                            size="sm") para px-2 antes de mexer na fonte,
+                            conforme pedido — texto completo preservado nos
+                            dois, nunca substituído por ícone. */}
+                        <div className="flex flex-nowrap items-center gap-1.5">
                           <Button
                             type="button"
                             variant="outline"
                             size="sm"
                             onClick={() => openEditDialog(order.order_id)}
-                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0 px-2"
                           >
                             Alterar pedido
                           </Button>
@@ -740,7 +762,7 @@ export function OrdersPage() {
                             variant="outline"
                             size="sm"
                             onClick={() => openManageDialog(order.order_id)}
-                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0 px-2"
                           >
                             Gerenciar pedido
                           </Button>
@@ -748,14 +770,18 @@ export function OrdersPage() {
                               (mesmo padrão de CustomersPage.tsx/
                               InventoryPage.tsx) — nunca compete
                               visualmente com os dois botões outline acima.
-                              aria-label/title carregam o número do pedido. */}
+                              aria-label/title carregam o número do pedido.
+                              size="icon-sm" (mesmo padrão já usado nos
+                              botões de remover linha de Produtos/Composição)
+                              é mais compacto que "sm" com só um ícone. */}
                           <Button
                             type="button"
                             variant="destructive"
-                            size="sm"
+                            size="icon-sm"
                             onClick={() => openDeleteDialog(order)}
                             aria-label={`Excluir pedido ${order.order_number}`}
                             title={`Excluir pedido ${order.order_number}`}
+                            className="shrink-0"
                           >
                             <Trash2Icon className="size-4" />
                           </Button>
