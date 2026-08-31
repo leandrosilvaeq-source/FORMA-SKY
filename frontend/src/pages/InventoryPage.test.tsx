@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
@@ -660,9 +660,12 @@ describe('InventoryPage — área Embalagens (/estoque/embalagens)', () => {
     expect(within(getTableBody()).queryByText('Ativo')).not.toBeInTheDocument()
     expect(within(getTableBody()).queryByText('Inativo')).not.toBeInTheDocument()
     // A coluna de ações existe (botões "Editar"/"Excluir" por linha), mas o
-    // próprio cabeçalho não tem texto/nome acessível "Ações" — mesmo padrão
-    // já aprovado em CustomersPage/CompaniesPage.
-    expect(screen.queryByRole('columnheader', { name: /ações/i })).not.toBeInTheDocument()
+    // próprio cabeçalho não tem NENHUM texto visível "Ações" — o nome
+    // acessível do <th> (padronização das listagens, rodada 2026-08-31) vem
+    // só da alça de redimensionamento ("Redimensionar coluna Ações"), nunca
+    // de um rótulo de coluna próprio.
+    expect(within(getTable()).queryByText('Ações')).not.toBeInTheDocument()
+    expect(screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })).toBeInTheDocument()
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^ativar/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /desativar/i })).not.toBeInTheDocument()
@@ -1949,5 +1952,134 @@ describe('InventoryPage — botão "Compras" (Módulo 3, Incremento 5)', () => {
     expect(buttons).toHaveLength(1)
     await user.click(buttons[0])
     expect(screen.getByRole('dialog', { name: 'Registrar compra' })).toBeInTheDocument()
+  })
+})
+
+// Padronização das listagens (tipografia compacta, colunas redimensionáveis
+// e persistidas). Sem coluna de data em Acessórios/Embalagens. A cobertura
+// genérica da infraestrutura compartilhada mora em columnWidths.test.ts/
+// usePersistentColumnWidths.test.ts/ColumnResizeHandle.test.tsx — aqui só
+// confirma que InventoryAreaPanel (compartilhado pelas duas áreas) conecta
+// tudo isso corretamente, com isolamento entre Acessórios e Embalagens
+// (mesmo componente, tableId diferente).
+describe('InventoryPage — colunas redimensionáveis e persistidas (padronização das listagens)', () => {
+  afterEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('fonte compacta: a tabela usa a classe compartilhada de tipografia compacta (13.6px)', () => {
+    mockAccessories([accessoryFixture()])
+    renderPage('acessorios')
+    expect(screen.getByRole('table')).toHaveClass('text-[13.6px]')
+  })
+
+  it('presença das alças: cabeçalhos ordenáveis e o cabeçalho de Ações têm separador de redimensionamento', () => {
+    mockAccessories([accessoryFixture()])
+    renderPage('acessorios')
+    expect(screen.getByRole('separator', { name: 'Redimensionar coluna Nome' })).toBeInTheDocument()
+    expect(screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })).toBeInTheDocument()
+  })
+
+  it('identificadores de coluna: 8 colunas viram 8 <col> no colgroup', () => {
+    mockAccessories([accessoryFixture()])
+    renderPage('acessorios')
+    expect(document.querySelectorAll('col')).toHaveLength(8)
+  })
+
+  it('a coluna Ações nunca pode ser reduzida abaixo do mínimo necessário para "Editar" + "Movimentar estoque" + "Excluir" (300px)', () => {
+    mockAccessories([accessoryFixture()])
+    renderPage('acessorios')
+    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })
+
+    fireEvent.pointerDown(handle, { clientX: 500, pointerId: 1 })
+    fireEvent.pointerMove(handle, { clientX: -9999, pointerId: 1 })
+
+    const actionsCol = document.querySelectorAll('col')[7] as HTMLElement
+    expect(Number.parseInt(actionsCol.style.width, 10)).toBe(300)
+  })
+
+  it('redimensionar uma coluna por teclado altera só aquela coluna, nunca as demais', () => {
+    mockAccessories([accessoryFixture()])
+    renderPage('acessorios')
+    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Nome' })
+    const otherWidthBefore = (document.querySelectorAll('col')[1] as HTMLElement).style.width
+
+    handle.focus()
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+
+    expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('185px')
+    expect((document.querySelectorAll('col')[1] as HTMLElement).style.width).toBe(otherWidthBefore)
+  })
+
+  it('largura salva é restaurada após remontar a página', () => {
+    mockAccessories([accessoryFixture()])
+    const { unmount } = renderPage('acessorios')
+    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Nome' })
+
+    fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
+    fireEvent.pointerMove(handle, { clientX: 160, pointerId: 1 })
+    fireEvent.pointerUp(handle, { clientX: 160, pointerId: 1 })
+    unmount()
+
+    renderPage('acessorios')
+    expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('235px')
+  })
+
+  it('"Restaurar larguras" volta a coluna redimensionada ao padrão desta tabela', () => {
+    mockAccessories([accessoryFixture()])
+    renderPage('acessorios')
+    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Nome' })
+    fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
+    fireEvent.pointerMove(handle, { clientX: 160, pointerId: 1 })
+    fireEvent.pointerUp(handle, { clientX: 160, pointerId: 1 })
+    expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('235px')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restaurar larguras' }))
+
+    expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('175px')
+  })
+
+  it('isolamento: largura salva em Acessórios nunca afeta Embalagens (mesmo componente, tableId diferente)', () => {
+    mockAccessories([accessoryFixture()])
+    const { unmount } = renderPage('acessorios')
+    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Nome' })
+    fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
+    fireEvent.pointerMove(handle, { clientX: 160, pointerId: 1 })
+    fireEvent.pointerUp(handle, { clientX: 160, pointerId: 1 })
+    expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('235px')
+    unmount()
+
+    mockPackaging([packagingFixture()])
+    renderPage('embalagens')
+    expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('175px')
+  })
+
+  it('rolagem horizontal disponível: a tabela continua dentro de um contêiner overflow-x-auto', () => {
+    mockAccessories([accessoryFixture()])
+    renderPage('acessorios')
+    const scrollContainer = screen.getByRole('table').closest('.overflow-x-auto')
+    expect(scrollContainer).toBeInTheDocument()
+  })
+
+  it('regressão: as ações "Editar", "Movimentar estoque" e "Excluir" continuam em uma única linha, sem quebra', () => {
+    mockAccessories([accessoryFixture()])
+    renderPage('acessorios')
+    const actionsCell = within(getTable()).getByRole('button', { name: 'Editar' }).closest('div')
+    expect(actionsCell).toHaveClass('flex-nowrap')
+    expect(actionsCell).not.toHaveClass('flex-wrap')
+    expect(within(getTable()).getByRole('button', { name: 'Editar' })).toBeInTheDocument()
+    expect(
+      within(getTable()).getByRole('button', { name: /^Movimentar estoque/ }),
+    ).toBeInTheDocument()
+    expect(within(getTable()).getByRole('button', { name: /^Excluir/ })).toBeInTheDocument()
+  })
+
+  it('regressão: busca, filtro de status e ordenação continuam funcionando após o redimensionamento', async () => {
+    mockAccessories([accessoryFixture()])
+    const user = userEvent.setup()
+    renderPage('acessorios')
+
+    await applySort(user, 'Nome', 'Ordenar crescente')
+    expect(within(getTableBody()).getByText('Ímã 6x2')).toBeInTheDocument()
   })
 })

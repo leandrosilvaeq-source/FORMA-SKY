@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
@@ -267,9 +267,15 @@ function getVisibleOrderNumbersInOrder(): string[] {
   return dataRows.map((row) => within(row).getAllByRole('cell')[0].textContent ?? '')
 }
 
+// dd/mm/aa (ano de 2 dígitos, rodada de padronização das listagens) — a
+// cobertura completa do formatador (início/fim de ano, zero à esquerda,
+// DATE vs. timestamp, ausência de deslocamento de fuso) mora em
+// lib/dates/tableDateFormat.test.ts, de onde a lógica foi extraída; aqui só
+// confirma que formatDateOnly (mantido exportado por compatibilidade)
+// delega corretamente.
 describe('formatDateOnly', () => {
-  it('converte 2026-08-25 para 25/08/2026', () => {
-    expect(formatDateOnly('2026-08-25')).toBe('25/08/2026')
+  it('converte 2026-08-25 para 25/08/26', () => {
+    expect(formatDateOnly('2026-08-25')).toBe('25/08/26')
   })
 
   it('retorna "—" para null', () => {
@@ -336,7 +342,7 @@ describe('OrdersPage', () => {
     expect(screen.getByText('Correios')).toBeInTheDocument()
     expect(screen.getByText('Catálogo')).toBeInTheDocument()
     expect(screen.getByText('Chaveiro')).toBeInTheDocument()
-    expect(screen.getByText('25/08/2026')).toBeInTheDocument()
+    expect(screen.getByText('25/08/26')).toBeInTheDocument()
     expect(screen.getAllByText(/R\$\s*50,00/).length).toBeGreaterThan(0)
     expect(screen.queryByText('c1')).not.toBeInTheDocument()
     expect(screen.queryByText('o1')).not.toBeInTheDocument()
@@ -488,11 +494,13 @@ describe('OrdersPage', () => {
     expect(cells[7]).toHaveTextContent('—')
   })
 
-  it('Prazo de entrega é formatado como DD/MM/YYYY na listagem', () => {
+  it('Prazo de entrega é formatado como dd/mm/aa na listagem, com a data completa (dd/mm/aaaa) em title', () => {
     renderPage()
 
     const row = screen.getByText('FS-26-001').closest('tr') as HTMLElement
-    expect(within(row).getByText('25/08/2026')).toBeInTheDocument()
+    const cell = within(row).getByText('25/08/26')
+    expect(cell).toBeInTheDocument()
+    expect(cell).toHaveAttribute('title', '25/08/2026')
   })
 
   it('zebra striping: linha ímpar em roxo suave, linha par em branco, mesma paleta Forma', () => {
@@ -810,7 +818,12 @@ describe('OrdersPage', () => {
       })
       renderPage()
 
-      expect(screen.getByRole('columnheader', { name: 'Ações' })).toBeInTheDocument()
+      // Regex, não string exata: o nome acessível do cabeçalho agora
+      // também inclui o nome da alça de redimensionamento ("Redimensionar
+      // coluna Ações") — verboso, mas nunca ambíguo; o texto VISÍVEL
+      // continua sendo só "Ações" (conferido via toHaveTextContent em
+      // "coluna Ações não é ordenável", mais abaixo).
+      expect(screen.getByRole('columnheader', { name: /^Ações/ })).toBeInTheDocument()
       const row1 = screen.getByText('FS-26-001').closest('tr') as HTMLElement
       const row2 = screen.getByText('FS-26-002').closest('tr') as HTMLElement
       expect(within(row1).getByRole('button', { name: /alterar pedido/i })).toBeInTheDocument()
@@ -2499,19 +2512,20 @@ describe('OrdersPage', () => {
       expect(container.className).not.toMatch(/(?<!-)flex-wrap/)
     })
 
-    it('a coluna Ações reserva w-[22%] — mais que o dobro da largura anterior (w-[14%]), suficiente para os 3 controles', () => {
+    // Rodada de padronização das listagens (2026-09-xx): largura de coluna
+    // deixou de ser % fixo e virou pixel redimensionável/persistido — ver
+    // describe "colunas redimensionáveis e persistidas" mais abaixo para a
+    // cobertura completa. Aqui só confirma que a coluna Ações nasce com
+    // largura (defaultWidth) suficiente para os 3 controles — nunca menos
+    // que a largura mínima definida em ORDERS_COLUMN_SPECS.
+    it('a coluna Ações nasce com largura suficiente para os 3 controles (>= minWidth definido, bem mais que os 204px antigos)', () => {
       renderPage()
 
-      const actionsHeader = screen.getByRole('columnheader', { name: 'Ações' })
-      expect(actionsHeader).toHaveClass('w-[22%]')
-      expect(actionsHeader).not.toHaveClass('w-[14%]')
-    })
-
-    it('a tabela usa min-w-[1600px] (ampliada de 1460px) para acomodar a coluna Ações mais larga', () => {
-      renderPage()
-
-      const table = screen.getByRole('table')
-      expect(table).toHaveClass('min-w-[1600px]')
+      const actionsHeader = screen.getByRole('columnheader', { name: /^Ações/ })
+      const col = document.querySelectorAll('col')[11] as HTMLElement
+      const widthPx = Number.parseInt(col.style.width, 10)
+      expect(widthPx).toBeGreaterThanOrEqual(320)
+      expect(actionsHeader).toBeInTheDocument()
     })
 
     it('"Alterar pedido" e "Gerenciar pedido" preservam o texto completo, nunca substituídos por ícone', () => {
@@ -2547,18 +2561,23 @@ describe('OrdersPage', () => {
     it('regressão: a tabela continua renderizando todas as colunas e todos os dados de cada Pedido', () => {
       renderPage()
 
-      expect(screen.getByRole('columnheader', { name: /Nº pedido/ })).toBeInTheDocument()
-      expect(screen.getByRole('columnheader', { name: 'Cliente' })).toBeInTheDocument()
-      expect(screen.getByRole('columnheader', { name: 'Tipo(s)' })).toBeInTheDocument()
-      expect(screen.getByRole('columnheader', { name: 'Produto(s)' })).toBeInTheDocument()
-      expect(screen.getByRole('columnheader', { name: 'Status' })).toBeInTheDocument()
-      expect(screen.getByRole('columnheader', { name: 'Status financeiro' })).toBeInTheDocument()
-      expect(screen.getByRole('columnheader', { name: 'Método de pagamento' })).toBeInTheDocument()
-      expect(screen.getByRole('columnheader', { name: 'Forma de entrega' })).toBeInTheDocument()
-      expect(screen.getByRole('columnheader', { name: 'Total' })).toBeInTheDocument()
-      expect(screen.getByRole('columnheader', { name: 'Saldo devedor' })).toBeInTheDocument()
-      expect(screen.getByRole('columnheader', { name: /Prazo/ })).toBeInTheDocument()
-      expect(screen.getByRole('columnheader', { name: 'Ações' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: /^Nº pedido/ })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: /^Cliente/ })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: /^Tipo\(s\)/ })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: /^Produto\(s\)/ })).toBeInTheDocument()
+      // /^Status Redimensionar/ (não só /^Status/): "Status financeiro"
+      // também começa com "Status" — o sufixo "Redimensionar coluna
+      // Status" (nome da alça de redimensionamento, sempre concatenado ao
+      // nome do cabeçalho) é o que distingue as duas colunas sem
+      // ambiguidade.
+      expect(screen.getByRole('columnheader', { name: /^Status Redimensionar/ })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: /^Status financeiro/ })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: /^Método de pagamento/ })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: /^Forma de entrega/ })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: /^Total/ })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: /^Saldo devedor/ })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: /^Prazo/ })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: /^Ações/ })).toBeInTheDocument()
       expect(screen.getByText('FS-26-001')).toBeInTheDocument()
     })
 
@@ -2577,6 +2596,137 @@ describe('OrdersPage', () => {
       await applySort(user, 'Nº pedido', 'Ordenar crescente')
 
       expect(screen.getByRole('columnheader', { name: /^Nº pedido/ })).toHaveAttribute('aria-sort', 'ascending')
+    })
+  })
+
+  // Padronização das listagens (tipografia compacta, dd/mm/aa, colunas
+  // redimensionáveis e persistidas) — cobertura específica de Pedidos. A
+  // cobertura genérica da infraestrutura compartilhada (limites, clamp,
+  // corrupção de localStorage, isolamento por tabela/usuário, teclado,
+  // desmontagem) mora em columnWidths.test.ts/usePersistentColumnWidths.test.ts/
+  // ColumnResizeHandle.test.tsx — aqui só confirma que OrdersPage.tsx
+  // conecta tudo isso corretamente.
+  describe('colunas redimensionáveis e persistidas (padronização das listagens)', () => {
+    afterEach(() => {
+      window.localStorage.clear()
+    })
+
+    it('fonte compacta: a tabela usa a classe compartilhada de tipografia compacta (13.6px, 15% menor que os 16px anteriores)', () => {
+      renderPage()
+      expect(screen.getByRole('table')).toHaveClass('text-[13.6px]')
+    })
+
+    it('presença das alças: cada cabeçalho tem um separador de redimensionamento com nome acessível contendo a coluna', () => {
+      renderPage()
+      expect(screen.getByRole('separator', { name: 'Redimensionar coluna Nº pedido' })).toBeInTheDocument()
+      expect(screen.getByRole('separator', { name: 'Redimensionar coluna Cliente' })).toBeInTheDocument()
+      expect(screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })).toBeInTheDocument()
+    })
+
+    it('todas as alças têm aria-orientation vertical e são focáveis por teclado', () => {
+      renderPage()
+      const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Cliente' })
+      expect(handle).toHaveAttribute('aria-orientation', 'vertical')
+      expect(handle).toHaveAttribute('tabindex', '0')
+    })
+
+    it('identificadores de coluna: 12 colunas viram 12 <col> no colgroup, na mesma ordem dos cabeçalhos', () => {
+      renderPage()
+      const cols = document.querySelectorAll('col')
+      expect(cols).toHaveLength(12)
+    })
+
+    it('redimensionar uma coluna por teclado (ArrowRight na alça) aumenta só aquela coluna, nunca as demais', () => {
+      renderPage()
+      const clienteHandle = screen.getByRole('separator', { name: 'Redimensionar coluna Cliente' })
+      const cols = document.querySelectorAll('col')
+      const clienteColIndex = 1 // Nº pedido=0, Cliente=1
+      const otherColIndex = 2 // Tipo(s)
+      const otherWidthBefore = (cols[otherColIndex] as HTMLElement).style.width
+
+      clienteHandle.focus()
+      fireEvent.keyDown(clienteHandle, { key: 'ArrowRight' })
+
+      const colsAfter = document.querySelectorAll('col')
+      const clienteWidthAfter = Number.parseInt((colsAfter[clienteColIndex] as HTMLElement).style.width, 10)
+      expect(clienteWidthAfter).toBe(180) // default 170 + 10px
+      expect((colsAfter[otherColIndex] as HTMLElement).style.width).toBe(otherWidthBefore)
+    })
+
+    it('arraste (pointer events) numa alça atualiza a largura da coluna correspondente em tempo real', () => {
+      renderPage()
+      const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Cliente' })
+      const colBefore = document.querySelectorAll('col')[1] as HTMLElement
+      expect(colBefore.style.width).toBe('170px')
+
+      fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
+      fireEvent.pointerMove(handle, { clientX: 150, pointerId: 1 })
+
+      const colAfter = document.querySelectorAll('col')[1] as HTMLElement
+      expect(colAfter.style.width).toBe('220px')
+    })
+
+    it('a coluna Ações nunca pode ser reduzida abaixo do mínimo necessário para os 3 controles (320px)', () => {
+      renderPage()
+      const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })
+
+      fireEvent.pointerDown(handle, { clientX: 500, pointerId: 1 })
+      fireEvent.pointerMove(handle, { clientX: -9999, pointerId: 1 })
+
+      const actionsCol = document.querySelectorAll('col')[11] as HTMLElement
+      expect(Number.parseInt(actionsCol.style.width, 10)).toBe(320)
+    })
+
+    it('largura salva é restaurada: redimensionar, soltar (commit) e remontar a página preserva a largura escolhida', () => {
+      const { unmount } = renderPage()
+      const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Cliente' })
+
+      fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
+      fireEvent.pointerMove(handle, { clientX: 160, pointerId: 1 })
+      fireEvent.pointerUp(handle, { clientX: 160, pointerId: 1 })
+      unmount()
+
+      renderPage()
+      const colAfterRemount = document.querySelectorAll('col')[1] as HTMLElement
+      expect(colAfterRemount.style.width).toBe('230px')
+    })
+
+    it('"Restaurar larguras" volta a coluna redimensionada ao padrão e apaga a preferência salva desta tabela', () => {
+      renderPage()
+      const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Cliente' })
+      fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
+      fireEvent.pointerMove(handle, { clientX: 160, pointerId: 1 })
+      fireEvent.pointerUp(handle, { clientX: 160, pointerId: 1 })
+      expect((document.querySelectorAll('col')[1] as HTMLElement).style.width).toBe('230px')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Restaurar larguras' }))
+
+      expect((document.querySelectorAll('col')[1] as HTMLElement).style.width).toBe('170px')
+    })
+
+    it('"Restaurar larguras" tem nome acessível e não ocupa uma linha própria (fica junto da tabela)', () => {
+      renderPage()
+      const restoreButton = screen.getByRole('button', { name: 'Restaurar larguras' })
+      expect(restoreButton).toBeInTheDocument()
+    })
+
+    it('rolagem horizontal disponível: a tabela continua dentro de um contêiner overflow-x-auto', () => {
+      renderPage()
+      const table = screen.getByRole('table')
+      const scrollContainer = table.closest('.overflow-x-auto')
+      expect(scrollContainer).toBeInTheDocument()
+    })
+
+    it('regressão: ordenação cronológica do Prazo continua correta mesmo com o ano exibido em 2 dígitos', async () => {
+      const user = userEvent.setup()
+      const orderEarlier = { ...orderSummary, order_id: 'o2', order_number: 'FS-26-002', expected_delivery_date: '2026-01-01' }
+      mockOrders([orderSummary, orderEarlier], { refetch: refetchMock }, createMock)
+      renderPage()
+
+      await applySort(user, 'Prazo', 'Ordenar crescente')
+
+      const orderNumbersInOrder = getVisibleOrderNumbersInOrder()
+      expect(orderNumbersInOrder.indexOf('FS-26-002')).toBeLessThan(orderNumbersInOrder.indexOf('FS-26-001'))
     })
   })
 

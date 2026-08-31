@@ -1,7 +1,10 @@
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
+import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
+import { TABLE_COMPACT_TEXT_CLASSNAME } from '@/components/dataTable/tableTypography'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { InventoryItemForm, type InventoryItemFormValues } from '@/components/inventory/InventoryItemForm'
 import { InventoryPageShell, type InventoryArea } from '@/components/inventory/InventoryPageShell'
@@ -10,12 +13,34 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table'
 import { useAccessories } from '@/hooks/useAccessories'
+import { useAuth } from '@/context/AuthContext'
 import { usePackaging } from '@/hooks/usePackaging'
+import { usePersistentColumnWidths } from '@/hooks/usePersistentColumnWidths'
 import { ApiError } from '@/lib/api/errors'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
+import type { ColumnWidthSpec } from '@/lib/tables/columnWidths'
 import { cn } from '@/lib/utils'
+
+// tableId varia por área (inventory-accessories/inventory-packaging) —
+// InventoryAreaPanel é a MESMA instância de componente usada pelas duas
+// sub-rotas, então a largura persistida nunca pode ser compartilhada entre
+// Acessórios e Embalagens; cada wrapper (AccessoriesInventoryPage/
+// PackagingInventoryPage) passa seu próprio tableId.
+// minWidth de "actions" (300px) garante que "Editar" + "Movimentar
+// estoque" + "Excluir" nunca quebrem em 2 linhas mesmo no menor arraste
+// possível — mesmo raciocínio já aplicado à coluna Ações de Pedidos.
+const INVENTORY_COLUMN_SPECS: ColumnWidthSpec[] = [
+  { id: 'name', defaultWidth: 175, minWidth: 100, maxWidth: 400 },
+  { id: 'size', defaultWidth: 95, minWidth: 75, maxWidth: 180 },
+  { id: 'variant', defaultWidth: 140, minWidth: 90, maxWidth: 320 },
+  { id: 'unit_cost', defaultWidth: 115, minWidth: 85, maxWidth: 220 },
+  { id: 'minimum_stock', defaultWidth: 115, minWidth: 85, maxWidth: 220 },
+  { id: 'current_stock', defaultWidth: 150, minWidth: 100, maxWidth: 280 },
+  { id: 'is_active', defaultWidth: 90, minWidth: 75, maxWidth: 180 },
+  { id: 'actions', defaultWidth: 340, minWidth: 300, maxWidth: 500 },
+]
 
 // Módulo 3 (Estoque). Incremento 4: consulta e navegação. Incremento 5:
 // CRIAÇÃO. Incremento 6: EDIÇÃO. Incremento 7: ATIVAÇÃO/DESATIVAÇÃO (Switch
@@ -166,6 +191,10 @@ function StatusFilter({
 }
 
 interface InventoryAreaPanelProps {
+  // Distingue a largura persistida de Acessórios da de Embalagens — mesmo
+  // componente, tabelas logicamente diferentes (ver comentário em
+  // INVENTORY_COLUMN_SPECS acima).
+  tableId: 'inventory-accessories' | 'inventory-packaging'
   items: InventoryItem[]
   isLoading: boolean
   error: ApiError | null
@@ -215,6 +244,7 @@ interface InventoryAreaPanelProps {
 // Embalagens nunca compartilham busca/filtro/ordenação entre si — são
 // montados em sub-rotas diferentes, nunca ao mesmo tempo.
 function InventoryAreaPanel({
+  tableId,
   items,
   isLoading,
   error,
@@ -239,6 +269,9 @@ function InventoryAreaPanel({
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all')
   const [sort, setSort] = useState<SortState<InventorySortColumn> | null>(null)
+  const { session } = useAuth()
+  const userId = session?.user.id ?? null
+  const columnWidths = usePersistentColumnWidths(tableId, userId, INVENTORY_COLUMN_SPECS)
 
   // Busca e filtro combinados: primeiro busca, depois filtro de status —
   // ordem não importa matematicamente (é um AND lógico), mas mantém a
@@ -351,47 +384,114 @@ function InventoryAreaPanel({
           // Produtos/Empresas/Pedidos) — nenhuma coluna cortada em desktop
           // amplo.
           <div className="overflow-x-auto">
-            <Table className="min-w-[1220px] table-fixed text-[16px]">
+            <div className="mb-1 flex justify-end">
+              <RestoreColumnWidthsButton onClick={columnWidths.resetWidths} />
+            </div>
+            <Table
+              className={cn('table-fixed', TABLE_COMPACT_TEXT_CLASSNAME)}
+              style={{ minWidth: columnWidths.totalWidthPx }}
+            >
+              <colgroup>
+                {INVENTORY_COLUMN_SPECS.map((spec) => (
+                  <col key={spec.id} style={{ width: columnWidths.getWidth(spec.id) }} />
+                ))}
+              </colgroup>
               <TableHeader>
                 <TableRow>
-                  <SortableColumnHeader column="name" label="Nome" sort={sort} onSortChange={setSort} className="w-[15%]" />
-                  <SortableColumnHeader column="size" label="Tamanho" sort={sort} onSortChange={setSort} className="w-[8%]" />
+                  <SortableColumnHeader
+                    column="name"
+                    label="Nome"
+                    sort={sort}
+                    onSortChange={setSort}
+                    resize={{
+                      width: columnWidths.getWidth('name'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  />
+                  <SortableColumnHeader
+                    column="size"
+                    label="Tamanho"
+                    sort={sort}
+                    onSortChange={setSort}
+                    resize={{
+                      width: columnWidths.getWidth('size'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  />
                   <SortableColumnHeader
                     column="variant"
                     label="Variante"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[12%]"
+                    resize={{
+                      width: columnWidths.getWidth('variant'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="unit_cost"
                     label="Custo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[10%]"
+                    resize={{
+                      width: columnWidths.getWidth('unit_cost'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="minimum_stock"
                     label="Estoque mínimo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[9%]"
+                    resize={{
+                      width: columnWidths.getWidth('minimum_stock'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="current_stock"
                     label="Saldo atual"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[13%]"
+                    resize={{
+                      width: columnWidths.getWidth('current_stock'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="is_active"
                     label="Ativo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[8%]"
+                    resize={{
+                      width: columnWidths.getWidth('is_active'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
-                  <TableHead className="h-auto w-[25%] py-2" />
+                  <ResizableTableHead
+                    columnId="actions"
+                    columnLabel="Ações"
+                    resize={{
+                      width: columnWidths.getWidth('actions'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -435,12 +535,18 @@ function InventoryAreaPanel({
                         />
                       </TableCell>
                       <TableCell>
-                        <div className="flex flex-wrap gap-2">
+                        {/* flex-nowrap + shrink-0 (mesmo padrão de
+                            OrdersPage.tsx/ProductsPage.tsx): a coluna Ações
+                            nunca deve quebrar os 3 botões em 2 linhas, mesmo
+                            no menor arraste possível — minWidth de "actions"
+                            (300px, ver INVENTORY_COLUMN_SPECS) garante espaço
+                            suficiente. */}
+                        <div className="flex flex-nowrap items-center gap-1.5">
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={() => onEditItem(item)}
-                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                            className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
                           >
                             Editar
                           </Button>
@@ -449,7 +555,7 @@ function InventoryAreaPanel({
                             size="sm"
                             onClick={() => onManageStock(item)}
                             aria-label={`Movimentar estoque — ${itemNounSingular} ${item.name}`}
-                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                            className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
                           >
                             Movimentar estoque
                           </Button>
@@ -466,6 +572,7 @@ function InventoryAreaPanel({
                             size="sm"
                             onClick={() => onDeleteItem(item)}
                             aria-label={`Excluir ${itemNounSingular} ${item.name}`}
+                            className="shrink-0"
                           >
                             Excluir
                           </Button>
@@ -671,6 +778,7 @@ function AccessoriesInventoryPage() {
       }}
     >
       <InventoryAreaPanel
+        tableId="inventory-accessories"
         items={accessories}
         isLoading={isLoading}
         error={error}
@@ -979,6 +1087,7 @@ function PackagingInventoryPage() {
       }}
     >
       <InventoryAreaPanel
+        tableId="inventory-packaging"
         items={packaging}
         isLoading={isLoading}
         error={error}

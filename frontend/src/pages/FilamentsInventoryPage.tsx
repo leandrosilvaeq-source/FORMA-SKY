@@ -3,15 +3,22 @@ import { toast } from 'sonner'
 import { InventoryPageShell } from '@/components/inventory/InventoryPageShell'
 import { FilamentTypeForm, type FilamentTypeFormValues } from '@/components/inventory/FilamentTypeForm'
 import { FilamentTypeDrawer } from '@/components/inventory/FilamentTypeDrawer'
+import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
+import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
+import { TABLE_COMPACT_TEXT_CLASSNAME } from '@/components/dataTable/tableTypography'
 import { StockLevelBadge, getStockLevel } from '@/components/inventory/StockMovementPanel'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table'
+import { useAuth } from '@/context/AuthContext'
 import { useFilamentTypes } from '@/hooks/useFilamentTypes'
+import { usePersistentColumnWidths } from '@/hooks/usePersistentColumnWidths'
 import { ApiError } from '@/lib/api/errors'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
+import type { ColumnWidthSpec } from '@/lib/tables/columnWidths'
+import { cn } from '@/lib/utils'
 import type { FilamentTypeSummary } from '@/types/domain'
 
 // Módulo 3 (Estoque), Incremento 4 — MVP local de filamentos. Segue o mesmo
@@ -19,6 +26,27 @@ import type { FilamentTypeSummary } from '@/types/domain'
 // forma de dado diferente: listagem de TIPOS (agregados via
 // vw_filament_type_summary), com drill-down para os ROLOS de cada tipo
 // (FilamentTypeDrawer) — por isso não reaproveita InventoryAreaPanel.
+
+const FILAMENTS_TABLE_ID = 'inventory-filaments'
+// Sem SortableColumnHeader aqui: esta tabela nunca teve ordenação (só
+// Nome/... nas demais listagens têm) — adicionar ordenação está fora do
+// escopo desta rodada (padronização de tipografia/datas/colunas
+// redimensionáveis/persistência), então todo cabeçalho usa
+// ResizableTableHead puro. minWidth de "actions" (300px) garante que "Ver
+// rolos" + "Editar" + "Excluir" nunca quebrem em 2 linhas mesmo no menor
+// arraste possível — mesmo raciocínio já aplicado à coluna Ações de
+// Pedidos/Produtos/Acessórios/Embalagens.
+const FILAMENTS_COLUMN_SPECS: ColumnWidthSpec[] = [
+  { id: 'material', defaultWidth: 110, minWidth: 80, maxWidth: 220 },
+  { id: 'manufacturer', defaultWidth: 155, minWidth: 90, maxWidth: 340 },
+  { id: 'line', defaultWidth: 130, minWidth: 90, maxWidth: 300 },
+  { id: 'color', defaultWidth: 130, minWidth: 90, maxWidth: 300 },
+  { id: 'available', defaultWidth: 130, minWidth: 90, maxWidth: 250 },
+  { id: 'spools', defaultWidth: 90, minWidth: 70, maxWidth: 160 },
+  { id: 'situation', defaultWidth: 130, minWidth: 90, maxWidth: 250 },
+  { id: 'is_active', defaultWidth: 90, minWidth: 75, maxWidth: 180 },
+  { id: 'actions', defaultWidth: 330, minWidth: 300, maxWidth: 500 },
+]
 
 function toErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message
@@ -42,6 +70,9 @@ function matchesSearch(type: FilamentTypeSummary, normalizedTerm: string): boole
 export function FilamentsInventoryPage() {
   const { types, isLoading, error, refetch, create, update, delete: deleteType } = useFilamentTypes()
   const [searchTerm, setSearchTerm] = useState('')
+  const { session } = useAuth()
+  const userId = session?.user.id ?? null
+  const columnWidths = usePersistentColumnWidths(FILAMENTS_TABLE_ID, userId, FILAMENTS_COLUMN_SPECS)
 
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
@@ -230,18 +261,128 @@ export function FilamentsInventoryPage() {
           </p>
         ) : (
           <div className="overflow-x-auto">
-            <Table className="min-w-[1100px] table-fixed text-[16px]">
+            <div className="mb-1 flex justify-end">
+              <RestoreColumnWidthsButton onClick={columnWidths.resetWidths} />
+            </div>
+            <Table
+              className={cn('table-fixed', TABLE_COMPACT_TEXT_CLASSNAME)}
+              style={{ minWidth: columnWidths.totalWidthPx }}
+            >
+              <colgroup>
+                {FILAMENTS_COLUMN_SPECS.map((spec) => (
+                  <col key={spec.id} style={{ width: columnWidths.getWidth(spec.id) }} />
+                ))}
+              </colgroup>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="h-auto w-[10%] py-2 whitespace-normal">Material</TableHead>
-                  <TableHead className="h-auto w-[14%] py-2 whitespace-normal">Fabricante</TableHead>
-                  <TableHead className="h-auto w-[12%] py-2 whitespace-normal">Linha</TableHead>
-                  <TableHead className="h-auto w-[12%] py-2 whitespace-normal">Cor</TableHead>
-                  <TableHead className="h-auto w-[12%] py-2 text-right whitespace-normal">Disponível</TableHead>
-                  <TableHead className="h-auto w-[9%] py-2 text-right whitespace-normal">Rolos</TableHead>
-                  <TableHead className="h-auto w-[11%] py-2 whitespace-normal">Situação</TableHead>
-                  <TableHead className="h-auto w-[7%] py-2 whitespace-normal">Ativo</TableHead>
-                  <TableHead className="h-auto w-[13%] py-2" />
+                  <ResizableTableHead
+                    columnId="material"
+                    columnLabel="Material"
+                    resize={{
+                      width: columnWidths.getWidth('material'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  >
+                    Material
+                  </ResizableTableHead>
+                  <ResizableTableHead
+                    columnId="manufacturer"
+                    columnLabel="Fabricante"
+                    resize={{
+                      width: columnWidths.getWidth('manufacturer'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  >
+                    Fabricante
+                  </ResizableTableHead>
+                  <ResizableTableHead
+                    columnId="line"
+                    columnLabel="Linha"
+                    resize={{
+                      width: columnWidths.getWidth('line'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  >
+                    Linha
+                  </ResizableTableHead>
+                  <ResizableTableHead
+                    columnId="color"
+                    columnLabel="Cor"
+                    resize={{
+                      width: columnWidths.getWidth('color'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  >
+                    Cor
+                  </ResizableTableHead>
+                  <ResizableTableHead
+                    columnId="available"
+                    columnLabel="Disponível"
+                    className="text-right"
+                    resize={{
+                      width: columnWidths.getWidth('available'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  >
+                    Disponível
+                  </ResizableTableHead>
+                  <ResizableTableHead
+                    columnId="spools"
+                    columnLabel="Rolos"
+                    className="text-right"
+                    resize={{
+                      width: columnWidths.getWidth('spools'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  >
+                    Rolos
+                  </ResizableTableHead>
+                  <ResizableTableHead
+                    columnId="situation"
+                    columnLabel="Situação"
+                    resize={{
+                      width: columnWidths.getWidth('situation'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  >
+                    Situação
+                  </ResizableTableHead>
+                  <ResizableTableHead
+                    columnId="is_active"
+                    columnLabel="Ativo"
+                    resize={{
+                      width: columnWidths.getWidth('is_active'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  >
+                    Ativo
+                  </ResizableTableHead>
+                  <ResizableTableHead
+                    columnId="actions"
+                    columnLabel="Ações"
+                    resize={{
+                      width: columnWidths.getWidth('actions'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -277,12 +418,18 @@ export function FilamentsInventoryPage() {
                         />
                       </TableCell>
                       <TableCell>
-                        <div className="flex flex-wrap gap-2">
+                        {/* flex-nowrap + shrink-0 (mesmo padrão de
+                            OrdersPage.tsx/ProductsPage.tsx/InventoryPage.tsx):
+                            a coluna Ações nunca deve quebrar os 3 botões em 2
+                            linhas, mesmo no menor arraste possível — minWidth
+                            de "actions" (300px, ver FILAMENTS_COLUMN_SPECS)
+                            garante espaço suficiente. */}
+                        <div className="flex flex-nowrap items-center gap-1.5">
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={() => openDrawer(type)}
-                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                            className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
                           >
                             Ver rolos
                           </Button>
@@ -290,7 +437,7 @@ export function FilamentsInventoryPage() {
                             variant="outline"
                             size="sm"
                             onClick={() => openEditDialog(type)}
-                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                            className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
                           >
                             Editar
                           </Button>
@@ -299,6 +446,7 @@ export function FilamentsInventoryPage() {
                             size="sm"
                             onClick={() => openDeleteDialog(type)}
                             aria-label={`Excluir tipo de filamento ${type.manufacturer} ${type.commercial_color}`}
+                            className="shrink-0"
                           >
                             Excluir
                           </Button>

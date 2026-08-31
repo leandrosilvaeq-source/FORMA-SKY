@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
@@ -157,16 +157,20 @@ describe('CompaniesPage', () => {
     renderPage()
 
     expect(screen.getByText('Empresa A')).toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: 'Empresa' })).toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: 'Contato(s)' })).toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: 'WhatsApp' })).toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: 'Instagram' })).toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: 'Observações' })).toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: 'Ativo' })).toBeInTheDocument()
+    // Nome acessível regex-ancorado (não exato): quando a coluna tem alça de
+    // redimensionamento, o nome computado do <th> passa a incluir
+    // "Redimensionar coluna {Label}" (ver ColumnResizeHandle) — ver mesma
+    // decisão em OrdersPage.test.tsx.
+    expect(screen.getByRole('columnheader', { name: /^Empresa/ })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /^Contato\(s\)/ })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /^WhatsApp/ })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /^Instagram/ })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /^Observações/ })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /^Ativo/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /editar/i })).toBeInTheDocument()
 
-    expect(screen.queryByRole('columnheader', { name: 'Nome fantasia' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('columnheader', { name: 'Documento' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: /^Nome fantasia/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: /^Documento/ })).not.toBeInTheDocument()
     // Os valores continuam existindo no domínio, só não aparecem mais na tabela.
     expect(screen.queryByText('Fantasia A')).not.toBeInTheDocument()
     expect(screen.queryByText('12345678000199')).not.toBeInTheDocument()
@@ -1214,6 +1218,86 @@ describe('CompaniesPage', () => {
         expect(row).toHaveClass('odd:bg-brand-primary-soft/50')
         expect(row).toHaveClass('even:bg-white')
       }
+    })
+  })
+
+  // Padronização das listagens (tipografia compacta, colunas
+  // redimensionáveis e persistidas). Sem coluna de data em Empresas. A
+  // cobertura genérica da infraestrutura compartilhada mora em
+  // columnWidths.test.ts/usePersistentColumnWidths.test.ts/
+  // ColumnResizeHandle.test.tsx.
+  describe('colunas redimensionáveis e persistidas (padronização das listagens)', () => {
+    afterEach(() => {
+      window.localStorage.clear()
+    })
+
+    it('fonte compacta: a tabela usa a classe compartilhada de tipografia compacta (13.6px)', () => {
+      renderPage()
+      expect(screen.getByRole('table')).toHaveClass('text-[13.6px]')
+    })
+
+    it('presença das alças: cabeçalhos ordenáveis e o cabeçalho de Ações têm separador de redimensionamento', () => {
+      renderPage()
+      expect(screen.getByRole('separator', { name: 'Redimensionar coluna Empresa' })).toBeInTheDocument()
+      expect(screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })).toBeInTheDocument()
+    })
+
+    it('identificadores de coluna: 7 colunas viram 7 <col> no colgroup', () => {
+      renderPage()
+      expect(document.querySelectorAll('col')).toHaveLength(7)
+    })
+
+    it('redimensionar uma coluna por teclado altera só aquela coluna, nunca as demais', () => {
+      renderPage()
+      const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Empresa' })
+      const otherWidthBefore = (document.querySelectorAll('col')[1] as HTMLElement).style.width
+
+      handle.focus()
+      fireEvent.keyDown(handle, { key: 'ArrowRight' })
+
+      expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('185px')
+      expect((document.querySelectorAll('col')[1] as HTMLElement).style.width).toBe(otherWidthBefore)
+    })
+
+    it('largura salva é restaurada após remontar a página', () => {
+      const { unmount } = renderPage()
+      const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Empresa' })
+
+      fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
+      fireEvent.pointerMove(handle, { clientX: 160, pointerId: 1 })
+      fireEvent.pointerUp(handle, { clientX: 160, pointerId: 1 })
+      unmount()
+
+      renderPage()
+      expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('235px')
+    })
+
+    it('"Restaurar larguras" volta a coluna redimensionada ao padrão desta tabela', () => {
+      renderPage()
+      const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Empresa' })
+      fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
+      fireEvent.pointerMove(handle, { clientX: 160, pointerId: 1 })
+      fireEvent.pointerUp(handle, { clientX: 160, pointerId: 1 })
+      expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('235px')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Restaurar larguras' }))
+
+      expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('175px')
+    })
+
+    it('rolagem horizontal disponível: a tabela continua dentro de um contêiner overflow-x-auto', () => {
+      renderPage()
+      const scrollContainer = screen.getByRole('table').closest('.overflow-x-auto')
+      expect(scrollContainer).toBeInTheDocument()
+    })
+
+    it('regressão: busca, ordenação e ação Editar continuam funcionando após o redimensionamento', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Empresa', 'Ordenar crescente')
+      expect(screen.getByText('Empresa A')).toBeInTheDocument()
+      expect(within(getTable()).getByRole('button', { name: 'Editar' })).toBeInTheDocument()
     })
   })
 })

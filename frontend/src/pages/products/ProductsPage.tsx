@@ -2,8 +2,11 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AppLayout } from '@/components/layout/AppLayout'
+import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
+import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
+import { TABLE_COMPACT_TEXT_CLASSNAME } from '@/components/dataTable/tableTypography'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { ProductCompositionForm } from '@/components/products/ProductCompositionForm'
 import {
@@ -27,13 +30,14 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
 import { useAccessories } from '@/hooks/useAccessories'
 import { useAllProductCategories } from '@/hooks/useAllProductCategories'
+import { useAuth } from '@/context/AuthContext'
 import { usePackaging } from '@/hooks/usePackaging'
+import { usePersistentColumnWidths } from '@/hooks/usePersistentColumnWidths'
 import { useProductCategories } from '@/hooks/useProductCategories'
 import { useProductComposition } from '@/hooks/useProductComposition'
 import { useProductPlates } from '@/hooks/useProductPlates'
@@ -45,9 +49,26 @@ import { normalizeForSearch } from '@/lib/forms/textSearch'
 import { plateRowsFrom, plateRowsFromLegacyWeight } from '@/lib/forms/productPlates'
 import type { UpdateProductCompositionInput } from '@/lib/api/productComposition'
 import type { UpdateProductPriceInput } from '@/lib/api/products'
+import type { ColumnWidthSpec } from '@/lib/tables/columnWidths'
+import { cn } from '@/lib/utils'
 import type { Product, ProductType } from '@/types/domain'
 
 const PRODUCT_SEARCH_LISTBOX_ID = 'product-search-listbox'
+const PRODUCTS_TABLE_ID = 'products'
+// minWidth de "actions" (340px) garante que "Editar produto" +
+// "Acessórios e Embalagem" (os 2 botões mais longos da listagem) nunca
+// quebrem em 2 linhas mesmo no menor arraste possível — mesmo raciocínio
+// já aplicado à coluna Ações de Pedidos.
+const PRODUCTS_COLUMN_SPECS: ColumnWidthSpec[] = [
+  { id: 'name', defaultWidth: 190, minWidth: 110, maxWidth: 420 },
+  { id: 'product_type', defaultWidth: 110, minWidth: 80, maxWidth: 220 },
+  { id: 'category', defaultWidth: 145, minWidth: 90, maxWidth: 350 },
+  { id: 'print_time', defaultWidth: 130, minWidth: 90, maxWidth: 250 },
+  { id: 'weight', defaultWidth: 130, minWidth: 90, maxWidth: 250 },
+  { id: 'price', defaultWidth: 110, minWidth: 80, maxWidth: 220 },
+  { id: 'is_active', defaultWidth: 95, minWidth: 80, maxWidth: 180 },
+  { id: 'actions', defaultWidth: 380, minWidth: 340, maxWidth: 550 },
+]
 
 function toErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message
@@ -147,6 +168,9 @@ export function ProductsPage() {
   const { accessories } = useAccessories()
   const { packaging } = usePackaging()
   const allCategories = useAllProductCategories()
+  const { session } = useAuth()
+  const userId = session?.user.id ?? null
+  const columnWidths = usePersistentColumnWidths(PRODUCTS_TABLE_ID, userId, PRODUCTS_COLUMN_SPECS)
 
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
@@ -486,7 +510,18 @@ export function ProductsPage() {
           // controlada só em telas estreitas (mesmo padrão já aprovado em
           // Pedidos/Empresas) — nenhuma coluna cortada em desktop amplo.
           <div className="overflow-x-auto">
-            <Table className="min-w-[1200px] table-fixed text-[16px]">
+            <div className="mb-1 flex justify-end">
+              <RestoreColumnWidthsButton onClick={columnWidths.resetWidths} />
+            </div>
+            <Table
+              className={cn('table-fixed', TABLE_COMPACT_TEXT_CLASSNAME)}
+              style={{ minWidth: columnWidths.totalWidthPx }}
+            >
+              <colgroup>
+                {PRODUCTS_COLUMN_SPECS.map((spec) => (
+                  <col key={spec.id} style={{ width: columnWidths.getWidth(spec.id) }} />
+                ))}
+              </colgroup>
               <TableHeader>
                 <TableRow>
                   <SortableColumnHeader
@@ -494,51 +529,95 @@ export function ProductsPage() {
                     label="Produto"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[16%]"
+                    resize={{
+                      width: columnWidths.getWidth('name'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="product_type"
                     label="Tipo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[9%]"
+                    resize={{
+                      width: columnWidths.getWidth('product_type'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="category"
                     label="Categoria"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[12%]"
+                    resize={{
+                      width: columnWidths.getWidth('category'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="print_time"
                     label="Tempo de Produção"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[11%]"
+                    resize={{
+                      width: columnWidths.getWidth('print_time'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="weight"
                     label="Peso total (g)"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[11%]"
+                    resize={{
+                      width: columnWidths.getWidth('weight'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="price"
                     label="Preço"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[9%]"
+                    resize={{
+                      width: columnWidths.getWidth('price'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="is_active"
                     label="Ativo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[8%]"
+                    resize={{
+                      width: columnWidths.getWidth('is_active'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
-                  <TableHead className="h-auto w-[24%] py-2" />
+                  <ResizableTableHead
+                    columnId="actions"
+                    columnLabel="Ações"
+                    resize={{
+                      width: columnWidths.getWidth('actions'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -589,12 +668,17 @@ export function ProductsPage() {
                         />
                       </TableCell>
                       <TableCell>
-                        <div className="flex flex-wrap gap-2">
+                        {/* flex-nowrap + shrink-0 (mesmo padrão de OrdersPage.tsx):
+                            a coluna Ações nunca deve quebrar os botões em 2
+                            linhas, mesmo no menor arraste possível — minWidth
+                            de "actions" (340px, ver PRODUCTS_COLUMN_SPECS)
+                            garante espaço suficiente. */}
+                        <div className="flex flex-nowrap items-center gap-1.5">
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={() => openEditDialog(product)}
-                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                            className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
                           >
                             Editar produto
                           </Button>
@@ -602,7 +686,7 @@ export function ProductsPage() {
                             variant="outline"
                             size="sm"
                             onClick={() => openCompositionDialog(product)}
-                            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                            className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
                           >
                             Acessórios e Embalagem
                           </Button>

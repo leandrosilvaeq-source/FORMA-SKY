@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
@@ -1209,6 +1209,98 @@ describe('CustomersPage', () => {
       expect(screen.getByRole('button', { name: /excluindo/i })).toBeDisabled()
       expect(pendingRemove).toHaveBeenCalledTimes(1)
       resolvePromise()
+    })
+  })
+
+  // Padronização das listagens (tipografia compacta, colunas
+  // redimensionáveis e persistidas). Sem coluna de data em Clientes. A
+  // cobertura genérica da infraestrutura compartilhada mora em
+  // columnWidths.test.ts/usePersistentColumnWidths.test.ts/
+  // ColumnResizeHandle.test.tsx — aqui só confirma que CustomersPage.tsx
+  // conecta tudo isso corretamente, isolado de OrdersPage (table-id
+  // diferente) no mesmo localStorage.
+  describe('colunas redimensionáveis e persistidas (padronização das listagens)', () => {
+    afterEach(() => {
+      window.localStorage.clear()
+    })
+
+    it('fonte compacta: a tabela usa a classe compartilhada de tipografia compacta (13.6px)', () => {
+      renderPage()
+      expect(screen.getByRole('table')).toHaveClass('text-[13.6px]')
+    })
+
+    it('presença das alças: cabeçalhos ordenáveis e o cabeçalho de Ações têm separador de redimensionamento', () => {
+      renderPage()
+      expect(screen.getByRole('separator', { name: 'Redimensionar coluna Cliente' })).toBeInTheDocument()
+      expect(screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })).toBeInTheDocument()
+    })
+
+    it('identificadores de coluna: 8 colunas viram 8 <col> no colgroup', () => {
+      renderPage()
+      expect(document.querySelectorAll('col')).toHaveLength(8)
+    })
+
+    it('redimensionar uma coluna por teclado altera só aquela coluna, nunca as demais', () => {
+      renderPage()
+      const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Cliente' })
+      const otherWidthBefore = (document.querySelectorAll('col')[1] as HTMLElement).style.width
+
+      handle.focus()
+      fireEvent.keyDown(handle, { key: 'ArrowRight' })
+
+      expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('190px')
+      expect((document.querySelectorAll('col')[1] as HTMLElement).style.width).toBe(otherWidthBefore)
+    })
+
+    it('largura salva é restaurada após remontar a página', () => {
+      const { unmount } = renderPage()
+      const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Cliente' })
+
+      fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
+      fireEvent.pointerMove(handle, { clientX: 160, pointerId: 1 })
+      fireEvent.pointerUp(handle, { clientX: 160, pointerId: 1 })
+      unmount()
+
+      renderPage()
+      expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('240px')
+    })
+
+    it('"Restaurar larguras" volta a coluna redimensionada ao padrão desta tabela', () => {
+      renderPage()
+      const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Cliente' })
+      fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
+      fireEvent.pointerMove(handle, { clientX: 160, pointerId: 1 })
+      fireEvent.pointerUp(handle, { clientX: 160, pointerId: 1 })
+      expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('240px')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Restaurar larguras' }))
+
+      expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('180px')
+    })
+
+    it('isolamento: a largura salva de Pedidos não afeta Clientes (table-id diferentes na mesma localStorage)', () => {
+      window.localStorage.setItem(
+        'forma-sky:table-column-widths:v1:anon:orders',
+        JSON.stringify({ client: 999 }),
+      )
+      renderPage()
+      expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('180px')
+    })
+
+    it('rolagem horizontal disponível: a tabela continua dentro de um contêiner overflow-x-auto', () => {
+      renderPage()
+      const scrollContainer = screen.getByRole('table').closest('.overflow-x-auto')
+      expect(scrollContainer).toBeInTheDocument()
+    })
+
+    it('regressão: busca, ordenação e ações (Editar/Excluir) continuam funcionando após o redimensionamento', async () => {
+      const user = userEvent.setup()
+      renderPage()
+
+      await applySort(user, 'Cliente', 'Ordenar crescente')
+      expect(getVisibleCustomerNamesInOrder()).toContain('Ana')
+      expect(within(getTable()).getByRole('button', { name: 'Editar' })).toBeInTheDocument()
+      expect(within(getTable()).getByRole('button', { name: 'Excluir cliente Ana' })).toBeInTheDocument()
     })
   })
 })

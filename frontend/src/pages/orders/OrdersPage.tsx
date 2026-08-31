@@ -2,8 +2,11 @@ import { useMemo, useState } from 'react'
 import { Trash2Icon } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppLayout } from '@/components/layout/AppLayout'
+import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
+import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
+import { TABLE_COMPACT_TEXT_CLASSNAME } from '@/components/dataTable/tableTypography'
 import { SearchAutocomplete, type SearchAutocompleteOption } from '@/components/search/SearchAutocomplete'
 import { OrderEditForm } from '@/components/orders/OrderEditForm'
 import { OrderForm, type OrderFormSubmitValues } from '@/components/orders/OrderForm'
@@ -13,18 +16,22 @@ import { OrderStatusControl } from '@/components/orders/OrderStatusControl'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table'
 import { useAllProductPlateCounts } from '@/hooks/useAllProductPlateCounts'
+import { useAuth } from '@/context/AuthContext'
 import { useCompanies } from '@/hooks/useCompanies'
 import { useCustomers } from '@/hooks/useCustomers'
 import { useFilamentTypes } from '@/hooks/useFilamentTypes'
 import { useLeadSources } from '@/hooks/useLeadSources'
 import { useOrders } from '@/hooks/useOrders'
+import { usePersistentColumnWidths } from '@/hooks/usePersistentColumnWidths'
 import { useProducts } from '@/hooks/useProducts'
 import { ApiError } from '@/lib/api/errors'
 import { updateQuoteOrder, type CreateOrderInput } from '@/lib/api/orders'
+import { formatTableDate, tableDateSortValue } from '@/lib/dates/tableDateFormat'
 import { isOrderOverdue } from '@/lib/orders/orderOverdue'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
+import type { ColumnWidthSpec } from '@/lib/tables/columnWidths'
 import { cn } from '@/lib/utils'
 import type { ItemType, OrderStatus, OrderSummary, PaymentMethod, PaymentStatus } from '@/types/domain'
 
@@ -39,28 +46,20 @@ function formatCurrency(value: number): string {
   return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
-// Reformata a string YYYY-MM-DD (formato de public.orders.expected_delivery_date
-// e de <input type="date">) para DD/MM/YYYY. Puramente textual — nunca
-// instancia Date a partir de uma data sem horário: new Date('YYYY-MM-DD') é
-// interpretado como meia-noite UTC, e formatar isso de volta com
-// toLocaleDateString('pt-BR') (fuso America/Sao_Paulo, UTC-3) mostraria o
-// dia anterior. Determinístico e sem esse risco de fuso horário.
+// dd/mm/aa (rodada de padronização das listagens — ano de 2 dígitos, antes
+// dd/mm/aaaa) — delega ao formatador compartilhado (lib/dates/tableDateFormat.ts,
+// extraído desta mesma function). Mantido exportado por compatibilidade com
+// o teste dedicado; nunca usado fora da apresentação em tabela (payload,
+// formulário e diálogos continuam com seus próprios formatos, intocados).
 export function formatDateOnly(value: string | null): string {
-  if (!value) return '—'
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
-  if (!match) return value
-  const [, year, month, day] = match
-  return `${day}/${month}/${year}`
+  return formatTableDate(value).short
 }
 
 // Valor numérico real da data (AAAAMMDD), para ordenar cronologicamente —
-// nunca pelo texto já formatado DD/MM/AAAA (que ordenaria como texto,
-// misturando dia/mês/ano incorretamente).
+// nunca pelo texto já formatado (que ordenaria como texto, misturando
+// dia/mês/ano incorretamente — mais ainda com ano de 2 dígitos).
 function dateSortValue(value: string | null): number | null {
-  const match = value ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(value) : null
-  if (!match) return null
-  const [, year, month, day] = match
-  return Number(`${year}${month}${day}`)
+  return tableDateSortValue(value)
 }
 
 // Rótulos só para exibição — os valores em si (order_status/payment_status)
@@ -303,7 +302,32 @@ function OrderStatusFilterBar({
   )
 }
 
+// Colunas redimensionáveis (rodada de padronização das listagens) —
+// defaultWidth soma ≈1615px, próximo do min-w-[1600px] anterior. minWidth
+// da coluna "actions" (320px) é deliberadamente o suficiente para os 3
+// controles (Alterar pedido/Gerenciar pedido/Excluir) nunca quebrarem em 2
+// linhas mesmo no menor tamanho permitido pelo arraste — nenhum outro
+// limite deste arquivo é tão crítico quanto este.
+const ORDERS_TABLE_ID = 'orders'
+const ORDERS_COLUMN_SPECS: ColumnWidthSpec[] = [
+  { id: 'order_number', defaultWidth: 90, minWidth: 70, maxWidth: 200 },
+  { id: 'client', defaultWidth: 170, minWidth: 100, maxWidth: 400 },
+  { id: 'item_types', defaultWidth: 100, minWidth: 70, maxWidth: 250 },
+  { id: 'item_names', defaultWidth: 160, minWidth: 100, maxWidth: 400 },
+  { id: 'order_status', defaultWidth: 145, minWidth: 100, maxWidth: 320 },
+  { id: 'payment_status', defaultWidth: 130, minWidth: 100, maxWidth: 300 },
+  { id: 'payment_method', defaultWidth: 70, minWidth: 60, maxWidth: 150 },
+  { id: 'delivery_method', defaultWidth: 130, minWidth: 80, maxWidth: 300 },
+  { id: 'total_value', defaultWidth: 85, minWidth: 70, maxWidth: 200 },
+  { id: 'balance_due', defaultWidth: 100, minWidth: 70, maxWidth: 200 },
+  { id: 'expected_delivery_date', defaultWidth: 85, minWidth: 70, maxWidth: 150 },
+  { id: 'actions', defaultWidth: 350, minWidth: 320, maxWidth: 500 },
+]
+
 export function OrdersPage() {
+  const { session } = useAuth()
+  const userId = session?.user.id ?? null
+  const columnWidths = usePersistentColumnWidths(ORDERS_TABLE_ID, userId, ORDERS_COLUMN_SPECS)
   const { orders, isLoading, error, refetch, createWithPayment, remove } = useOrders()
   const { customers } = useCustomers()
   const { companies } = useCompanies()
@@ -563,24 +587,29 @@ export function OrdersPage() {
             {searchTerm.trim() ? 'Nenhum pedido encontrado para esta busca.' : 'Nenhum pedido encontrado para este status.'}
           </p>
         ) : (
-          // 12 colunas (Ações incluída): overflow-x-auto + min-w garante
-          // rolagem horizontal controlada só em telas estreitas (nunca em
-          // desktop amplo, onde o min-w cabe inteiro sem sobrar scroll).
-          // table-fixed com larguras percentuais somando 100% mantém
-          // truncamento/title previsível por coluna, mesmo padrão já
-          // aprovado em Empresas.
-          //
-          // Larguras redistribuídas + min-w ampliado de 1460px para 1600px
-          // (rodada corretiva) — Ações estava com só 14% (≈204px), menos do
-          // que os 3 controles (2 botões de texto + exclusão) precisam lado
-          // a lado (~320px com padding/gap), e por isso quebravam em 2
-          // linhas mesmo com o div interno em flex-wrap. Ações sobe para
-          // 22% (≈352px, folga real). O espaço vem de colunas com conteúdo
-          // tipicamente curto (Nº pedido, Tipo(s), Total, Saldo devedor,
-          // Prazo — exatamente as indicadas para compactar); Cliente,
-          // Produto(s), Status e Status financeiro mantêm ou ganham espaço.
+          // 12 colunas (Ações incluída): overflow-x-auto + min-w (agora
+          // dinâmico, soma das larguras atuais — ver columnWidths.totalWidthPx)
+          // garante rolagem horizontal controlada só em telas estreitas
+          // (nunca em desktop amplo). colgroup + table-fixed: cada <col>
+          // define a largura real da coluna (nunca mais % fixo) — o
+          // usuário pode redimensionar qualquer uma arrastando a borda
+          // direita do cabeçalho; a largura escolhida fica salva por
+          // usuário+tabela (usePersistentColumnWidths). minWidth da coluna
+          // "actions" (320px, ver ORDERS_COLUMN_SPECS) nunca permite os 3
+          // controles quebrarem em 2 linhas mesmo no menor arraste possível.
           <div className="overflow-x-auto">
-            <Table className="min-w-[1600px] table-fixed text-[16px]">
+            <div className="mb-1 flex justify-end">
+              <RestoreColumnWidthsButton onClick={columnWidths.resetWidths} />
+            </div>
+            <Table
+              className={cn('table-fixed', TABLE_COMPACT_TEXT_CLASSNAME)}
+              style={{ minWidth: columnWidths.totalWidthPx }}
+            >
+              <colgroup>
+                {ORDERS_COLUMN_SPECS.map((spec) => (
+                  <col key={spec.id} style={{ width: columnWidths.getWidth(spec.id) }} />
+                ))}
+              </colgroup>
               <TableHeader>
                 <TableRow>
                   <SortableColumnHeader
@@ -588,79 +617,145 @@ export function OrdersPage() {
                     label="Nº pedido"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[6%]"
+                    resize={{
+                      width: columnWidths.getWidth('order_number'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="client"
                     label="Cliente"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[11%]"
+                    resize={{
+                      width: columnWidths.getWidth('client'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="item_types"
                     label="Tipo(s)"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[6%]"
+                    resize={{
+                      width: columnWidths.getWidth('item_types'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="item_names"
                     label="Produto(s)"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[10%]"
+                    resize={{
+                      width: columnWidths.getWidth('item_names'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="order_status"
                     label="Status"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[9%]"
+                    resize={{
+                      width: columnWidths.getWidth('order_status'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="payment_status"
                     label="Status financeiro"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[8%]"
+                    resize={{
+                      width: columnWidths.getWidth('payment_status'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="payment_method"
                     label="Método de pagamento"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[4%]"
+                    resize={{
+                      width: columnWidths.getWidth('payment_method'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="delivery_method"
                     label="Forma de entrega"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[8%]"
+                    resize={{
+                      width: columnWidths.getWidth('delivery_method'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="total_value"
                     label="Total"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[5%]"
+                    resize={{
+                      width: columnWidths.getWidth('total_value'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="balance_due"
                     label="Saldo devedor"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[6%]"
+                    resize={{
+                      width: columnWidths.getWidth('balance_due'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="expected_delivery_date"
                     label="Prazo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[5%]"
+                    resize={{
+                      width: columnWidths.getWidth('expected_delivery_date'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
-                  <TableHead className="h-auto w-[22%] py-2 whitespace-normal">Ações</TableHead>
+                  <ResizableTableHead
+                    columnId="actions"
+                    columnLabel="Ações"
+                    resize={{
+                      width: columnWidths.getWidth('actions'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  >
+                    Ações
+                  </ResizableTableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -672,7 +767,9 @@ export function OrdersPage() {
                     productsText,
                     paymentMethodText,
                     deliveryMethodText,
-                  }) => (
+                  }) => {
+                    const deliveryDate = formatTableDate(order.expected_delivery_date)
+                    return (
                     <TableRow
                       key={order.order_id}
                       // Zebra striping com a paleta Forma: linha ímpar usa
@@ -733,7 +830,9 @@ export function OrdersPage() {
                       </TableCell>
                       <TableCell className="truncate">{formatCurrency(order.total_value)}</TableCell>
                       <TableCell className="truncate">{formatCurrency(order.balance_due)}</TableCell>
-                      <TableCell className="truncate">{formatDateOnly(order.expected_delivery_date)}</TableCell>
+                      <TableCell className="truncate" title={deliveryDate.full ?? undefined}>
+                        {deliveryDate.short}
+                      </TableCell>
                       <TableCell>
                         {/* Rodada corretiva: flex-wrap permitia os 3
                             controles quebrarem em 2 linhas quando a coluna
@@ -788,7 +887,8 @@ export function OrdersPage() {
                         </div>
                       </TableCell>
                     </TableRow>
-                  ),
+                    )
+                  },
                 )}
               </TableBody>
             </Table>

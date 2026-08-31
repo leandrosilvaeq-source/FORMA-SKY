@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import type { FilamentSpool, FilamentTypeSummary } from '@/types/domain'
@@ -908,5 +908,118 @@ describe('FilamentsInventoryPage — botão "Compras" e remoção do código da 
 
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1))
     expect(update.mock.calls[0][1]).not.toHaveProperty('color_code')
+  })
+})
+
+// Padronização das listagens (tipografia compacta, colunas redimensionáveis
+// e persistidas). Sem coluna de data em Filamentos. Esta tabela nunca teve
+// ordenação (fora do escopo desta rodada) — por isso todo cabeçalho usa
+// ResizableTableHead puro (sem SortableColumnHeader), diferente das demais
+// listagens. A cobertura genérica da infraestrutura compartilhada mora em
+// columnWidths.test.ts/usePersistentColumnWidths.test.ts/
+// ColumnResizeHandle.test.tsx.
+describe('FilamentsInventoryPage — colunas redimensionáveis e persistidas (padronização das listagens)', () => {
+  afterEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('fonte compacta: a tabela usa a classe compartilhada de tipografia compacta (13.6px)', () => {
+    mockTypes([typeFixture()])
+    renderPage()
+    expect(screen.getByRole('table')).toHaveClass('text-[13.6px]')
+  })
+
+  it('presença das alças: todos os 9 cabeçalhos (nenhum ordenável) têm separador de redimensionamento', () => {
+    mockTypes([typeFixture()])
+    renderPage()
+    expect(screen.getByRole('separator', { name: 'Redimensionar coluna Material' })).toBeInTheDocument()
+    expect(screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })).toBeInTheDocument()
+  })
+
+  it('identificadores de coluna: 9 colunas viram 9 <col> no colgroup', () => {
+    mockTypes([typeFixture()])
+    renderPage()
+    expect(document.querySelectorAll('col')).toHaveLength(9)
+  })
+
+  it('a coluna Ações nunca pode ser reduzida abaixo do mínimo necessário para "Ver rolos" + "Editar" + "Excluir" (300px)', () => {
+    mockTypes([typeFixture()])
+    renderPage()
+    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })
+
+    fireEvent.pointerDown(handle, { clientX: 500, pointerId: 1 })
+    fireEvent.pointerMove(handle, { clientX: -9999, pointerId: 1 })
+
+    const actionsCol = document.querySelectorAll('col')[8] as HTMLElement
+    expect(Number.parseInt(actionsCol.style.width, 10)).toBe(300)
+  })
+
+  it('redimensionar uma coluna por teclado altera só aquela coluna, nunca as demais', () => {
+    mockTypes([typeFixture()])
+    renderPage()
+    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Material' })
+    const otherWidthBefore = (document.querySelectorAll('col')[1] as HTMLElement).style.width
+
+    handle.focus()
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+
+    expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('120px')
+    expect((document.querySelectorAll('col')[1] as HTMLElement).style.width).toBe(otherWidthBefore)
+  })
+
+  it('largura salva é restaurada após remontar a página', () => {
+    mockTypes([typeFixture()])
+    const { unmount } = renderPage()
+    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Material' })
+
+    fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
+    fireEvent.pointerMove(handle, { clientX: 160, pointerId: 1 })
+    fireEvent.pointerUp(handle, { clientX: 160, pointerId: 1 })
+    unmount()
+
+    renderPage()
+    expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('170px')
+  })
+
+  it('"Restaurar larguras" volta a coluna redimensionada ao padrão desta tabela', () => {
+    mockTypes([typeFixture()])
+    renderPage()
+    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Material' })
+    fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
+    fireEvent.pointerMove(handle, { clientX: 160, pointerId: 1 })
+    fireEvent.pointerUp(handle, { clientX: 160, pointerId: 1 })
+    expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('170px')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restaurar larguras' }))
+
+    expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('110px')
+  })
+
+  it('rolagem horizontal disponível: a tabela continua dentro de um contêiner overflow-x-auto', () => {
+    mockTypes([typeFixture()])
+    renderPage()
+    const scrollContainer = screen.getByRole('table').closest('.overflow-x-auto')
+    expect(scrollContainer).toBeInTheDocument()
+  })
+
+  it('regressão: as ações "Ver rolos", "Editar" e "Excluir" continuam em uma única linha, sem quebra', () => {
+    mockTypes([typeFixture()])
+    renderPage()
+    const actionsCell = screen.getByRole('button', { name: 'Ver rolos' }).closest('div')
+    expect(actionsCell).toHaveClass('flex-nowrap')
+    expect(actionsCell).not.toHaveClass('flex-wrap')
+    expect(screen.getByRole('button', { name: 'Ver rolos' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Editar' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Excluir/ })).toBeInTheDocument()
+  })
+
+  it('regressão: busca continua funcionando após o redimensionamento', async () => {
+    mockTypes([typeFixture({ manufacturer: 'Voolt3D' }), typeFixture({ filament_type_id: 't2', manufacturer: 'Outra' })])
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.type(screen.getByLabelText('Buscar tipos de filamento'), 'Voolt3D')
+
+    expect(screen.getAllByRole('row')).toHaveLength(2) // header + 1 linha filtrada
   })
 })

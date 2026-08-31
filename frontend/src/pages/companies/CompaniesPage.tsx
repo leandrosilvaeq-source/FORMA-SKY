@@ -1,17 +1,22 @@
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { AppLayout } from '@/components/layout/AppLayout'
+import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
+import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
+import { TABLE_COMPACT_TEXT_CLASSNAME } from '@/components/dataTable/tableTypography'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { CompanyForm, type CompanyFormValues, type ContactsStatus } from '@/components/companies/CompanyForm'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table'
+import { useAuth } from '@/context/AuthContext'
 import { useCompanies } from '@/hooks/useCompanies'
 import { useCustomers } from '@/hooks/useCustomers'
+import { usePersistentColumnWidths } from '@/hooks/usePersistentColumnWidths'
 import { ApiError } from '@/lib/api/errors'
 import {
   formatWhatsAppForDisplay,
@@ -21,7 +26,20 @@ import {
   normalizeWhatsAppNumber,
 } from '@/lib/forms/customerContact'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
+import type { ColumnWidthSpec } from '@/lib/tables/columnWidths'
+import { cn } from '@/lib/utils'
 import type { Company } from '@/types/domain'
+
+const COMPANIES_TABLE_ID = 'companies'
+const COMPANIES_COLUMN_SPECS: ColumnWidthSpec[] = [
+  { id: 'name', defaultWidth: 175, minWidth: 100, maxWidth: 400 },
+  { id: 'contacts', defaultWidth: 210, minWidth: 100, maxWidth: 450 },
+  { id: 'whatsapp', defaultWidth: 145, minWidth: 100, maxWidth: 300 },
+  { id: 'instagram', defaultWidth: 145, minWidth: 100, maxWidth: 300 },
+  { id: 'notes', defaultWidth: 200, minWidth: 100, maxWidth: 450 },
+  { id: 'is_active', defaultWidth: 85, minWidth: 70, maxWidth: 180 },
+  { id: 'actions', defaultWidth: 155, minWidth: 110, maxWidth: 300 },
+]
 
 // Helpers de normalização/validação de contato reaproveitados de
 // customerContact.ts (extraídos originalmente para Clientes, mas são
@@ -119,6 +137,9 @@ function getCompanySortValue(row: CompanyRow, column: CompanySortColumn): string
 
 export function CompaniesPage() {
   const { companies, isLoading, error, refetch, create, update } = useCompanies()
+  const { session } = useAuth()
+  const userId = session?.user.id ?? null
+  const columnWidths = usePersistentColumnWidths(COMPANIES_TABLE_ID, userId, COMPANIES_COLUMN_SPECS)
 
   // Reaproveita a mesma consulta já usada em Clientes — só leitura aqui,
   // nunca create/update: o vínculo cliente↔empresa continua administrado
@@ -300,7 +321,18 @@ export function CompaniesPage() {
           <p className="text-muted-foreground text-sm">Nenhuma empresa encontrada para esta busca.</p>
         ) : (
           <div className="overflow-x-auto">
-            <Table className="min-w-[1100px] table-fixed text-[16px]">
+            <div className="mb-1 flex justify-end">
+              <RestoreColumnWidthsButton onClick={columnWidths.resetWidths} />
+            </div>
+            <Table
+              className={cn('table-fixed', TABLE_COMPACT_TEXT_CLASSNAME)}
+              style={{ minWidth: columnWidths.totalWidthPx }}
+            >
+              <colgroup>
+                {COMPANIES_COLUMN_SPECS.map((spec) => (
+                  <col key={spec.id} style={{ width: columnWidths.getWidth(spec.id) }} />
+                ))}
+              </colgroup>
               <TableHeader>
                 <TableRow>
                   <SortableColumnHeader
@@ -308,44 +340,83 @@ export function CompaniesPage() {
                     label="Empresa"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[16%]"
+                    resize={{
+                      width: columnWidths.getWidth('name'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="contacts"
                     label="Contato(s)"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[19%]"
+                    resize={{
+                      width: columnWidths.getWidth('contacts'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="whatsapp"
                     label="WhatsApp"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[13%]"
+                    resize={{
+                      width: columnWidths.getWidth('whatsapp'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="instagram"
                     label="Instagram"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[13%]"
+                    resize={{
+                      width: columnWidths.getWidth('instagram'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="notes"
                     label="Observações"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[18%]"
+                    resize={{
+                      width: columnWidths.getWidth('notes'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
                   <SortableColumnHeader
                     column="is_active"
                     label="Ativo"
                     sort={sort}
                     onSortChange={setSort}
-                    className="w-[7%]"
+                    resize={{
+                      width: columnWidths.getWidth('is_active'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
                   />
-                  <TableHead className="h-auto w-[14%] py-2" />
+                  <ResizableTableHead
+                    columnId="actions"
+                    columnLabel="Ações"
+                    resize={{
+                      width: columnWidths.getWidth('actions'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  />
                 </TableRow>
               </TableHeader>
               <TableBody>
