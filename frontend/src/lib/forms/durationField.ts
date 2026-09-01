@@ -47,10 +47,18 @@ export interface DurationParseFailure {
 
 export type DurationParseResult = DurationParseSuccess | DurationParseFailure
 
-export const DURATION_HELP_TEXT = 'Aceita 1h30min, 1,5h, 01:30:00, 90m ou 30m45s.'
+export const DURATION_HELP_TEXT = 'Aceita 18:32, 18h32, 19m44, 32min20, 1h30min, 1,5h ou 90m.'
 
 const INVALID_MESSAGE = `Duração inválida. ${DURATION_HELP_TEXT}`
 const NEGATIVE_MESSAGE = 'A duração não pode ser negativa.'
+// Só para as formas compostas "<horas>h<minutos>" e "<min>m<seg>" /
+// "<min>min<seg>" (ex.: "18h32", "19m44", "32min20"): o número depois de
+// "h" é minuto e o número depois de "m"/"min" é segundo — fora de 0-59 o
+// valor é rejeitado, nunca normalizado em silêncio (diferente de "90m" ou
+// "01:90:00", que continuam carregando para a unidade superior).
+const MINUTES_AFTER_H_MESSAGE = 'Os minutos após "h" devem estar entre 0 e 59 (ex.: 18h32).'
+const SECONDS_AFTER_M_MESSAGE =
+  'Os segundos após "m" ou "min" devem estar entre 0 e 59 (ex.: 19m44).'
 
 // "1,5" / "1.5" -> intPart="1", fracPart="5". Nunca usa parseFloat: a
 // fração é tratada como numerador/denominador inteiros exatos
@@ -77,6 +85,13 @@ const COLON_RE = /^(\d+):(\d+)(?::(\d+))?$/
 // mas ao menos um precisa estar presente (checado depois do exec()).
 // Espaço opcional entre blocos e entre o número e sua unidade.
 const UNIT_SUFFIX_RE = /^(?:(\d+(?:[.,]\d+)?)\s*h)?\s*(?:(\d+)\s*m(?:in)?)?\s*(?:(\d+)\s*s)?$/i
+// Formas compostas com um número "solto" logo após a unidade final, sem
+// sufixo próprio — complementam UNIT_SUFFIX_RE (que exige a unidade em cada
+// bloco). Só disparam quando a string TERMINA em dígitos imediatamente
+// depois de "h" ou "m"/"min"; "18h", "90m", "1h30m", "30m45s" etc. não
+// batem aqui e continuam pelo caminho de UNIT_SUFFIX_RE.
+const HOURS_MINUTES_RE = /^(\d+)\s*h\s*(\d+)$/i
+const MINUTES_SECONDS_RE = /^(\d+)\s*m(?:in)?\s*(\d+)$/i
 const BARE_NUMBER_RE = /^\d+(?:[.,]\d+)?$/
 
 export function parseDurationToSeconds(raw: string): DurationParseResult {
@@ -108,13 +123,36 @@ export function parseDurationToSeconds(raw: string): DurationParseResult {
   }
 
   const unitMatch = UNIT_SUFFIX_RE.exec(trimmed)
-  if (unitMatch && (unitMatch[1] !== undefined || unitMatch[2] !== undefined || unitMatch[3] !== undefined)) {
+  if (
+    unitMatch &&
+    (unitMatch[1] !== undefined || unitMatch[2] !== undefined || unitMatch[3] !== undefined)
+  ) {
     const [, hoursPart, minutesPart, secondsPart] = unitMatch
     let totalSeconds = 0
     if (hoursPart !== undefined) totalSeconds += decimalHoursToSeconds(hoursPart)
     if (minutesPart !== undefined) totalSeconds += Number(minutesPart) * 60
     if (secondsPart !== undefined) totalSeconds += Number(secondsPart)
     return { ok: true, seconds: totalSeconds }
+  }
+
+  // "18h32" -> 18 h e 32 min (o número depois de "h" é sempre minuto).
+  const hoursMinutesMatch = HOURS_MINUTES_RE.exec(trimmed)
+  if (hoursMinutesMatch) {
+    const hours = Number(hoursMinutesMatch[1])
+    const minutes = Number(hoursMinutesMatch[2])
+    if (minutes > 59) return { ok: false, error: MINUTES_AFTER_H_MESSAGE }
+    return fromParts(hours, minutes, 0)
+  }
+
+  // "19m44" / "32min20" -> minutos e segundos (o número depois de "m"/"min"
+  // é sempre segundo). Minutos não têm teto (carregam para hora ao formatar);
+  // segundos precisam estar em 0-59.
+  const minutesSecondsMatch = MINUTES_SECONDS_RE.exec(trimmed)
+  if (minutesSecondsMatch) {
+    const minutes = Number(minutesSecondsMatch[1])
+    const secs = Number(minutesSecondsMatch[2])
+    if (secs > 59) return { ok: false, error: SECONDS_AFTER_M_MESSAGE }
+    return fromParts(0, minutes, secs)
   }
 
   if (BARE_NUMBER_RE.test(trimmed)) {
@@ -150,4 +188,17 @@ export function formatSecondsToHHMM(totalSeconds: number): string {
   const minutes = Math.floor((totalSeconds % 3600) / 60)
   const pad = (value: number) => String(value).padStart(2, '0')
   return `${pad(hours)}:${pad(minutes)}`
+}
+
+// hh:mm quando não sobra nenhum segundo; hh:mm:ss quando há segundos. Usada
+// para pré-preencher, na EDIÇÃO de um Produto, o campo de tempo de cada
+// plate e do ajuste manual de totais — o valor precisa reabrir EXATAMENTE
+// como foi salvo, e formatSecondsToHHMM truncaria os segundos (um novo
+// "Salvar" sem tocar no campo então os perderia). Também usada para exibir
+// o total de produção quando ele tem segundos. Nunca descarta segundos: o
+// caso "sem segundos" continua idêntico a formatSecondsToHHMM.
+export function formatSecondsAdaptive(totalSeconds: number): string {
+  return totalSeconds % 60 === 0
+    ? formatSecondsToHHMM(totalSeconds)
+    : formatSecondsToHHMMSS(totalSeconds)
 }

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { DURATION_HELP_TEXT, formatSecondsToHHMMSS, parseDurationToSeconds } from './durationField'
+import {
+  DURATION_HELP_TEXT,
+  formatSecondsAdaptive,
+  formatSecondsToHHMMSS,
+  parseDurationToSeconds,
+} from './durationField'
 
 function seconds(raw: string): number | null {
   const result = parseDurationToSeconds(raw)
@@ -143,11 +148,14 @@ describe('parseDurationToSeconds — casos especiais', () => {
     if (!result.ok) expect(result.error).toMatch(/não pode ser negativa/i)
   })
 
-  it.each(['abc', 'texto qualquer', '1x', 'h', '1:2:3:4', '12:'])('rejeita texto irreconhecível: "%s"', (input) => {
-    const result = parseDurationToSeconds(input)
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error).toMatch(/duração inválida/i)
-  })
+  it.each(['abc', 'texto qualquer', '1x', 'h', '1:2:3:4', '12:'])(
+    'rejeita texto irreconhecível: "%s"',
+    (input) => {
+      const result = parseDurationToSeconds(input)
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toMatch(/duração inválida/i)
+    },
+  )
 
   it('horas sem limite artificial pequeno: valores de 3+ dígitos são preservados', () => {
     expect(seconds('100h')).toBe(100 * 3600)
@@ -175,6 +183,129 @@ describe('parseDurationToSeconds — casos especiais', () => {
   })
 })
 
+describe('parseDurationToSeconds — formas compostas "<h>h<min>" e "<min>m<seg>"/"<min>min<seg>"', () => {
+  it.each([
+    ['18h32', 18 * 3600 + 32 * 60],
+    ['18H32', 18 * 3600 + 32 * 60],
+    [' 18h32 ', 18 * 3600 + 32 * 60],
+    ['00h45', 45 * 60],
+    ['1h59', 3600 + 59 * 60],
+    ['100h30', 100 * 3600 + 30 * 60],
+    ['19m44', 19 * 60 + 44],
+    ['19M44', 19 * 60 + 44],
+    ['32min20', 32 * 60 + 20],
+    ['32MIN20', 32 * 60 + 20],
+    [' 32min20 ', 32 * 60 + 20],
+    ['1m30', 90],
+    ['90m30', 90 * 60 + 30],
+  ])('"%s" -> %i segundos', (input, expected) => {
+    expect(seconds(input)).toBe(expected)
+  })
+
+  it('"18:32" (dois-pontos) e "18h32" (letra) resultam no mesmo total', () => {
+    expect(seconds('18h32')).toBe(seconds('18:32'))
+  })
+
+  it('o número depois de "h" é sempre minuto; depois de "m"/"min" é sempre segundo', () => {
+    expect(seconds('2h5')).toBe(2 * 3600 + 5 * 60)
+    expect(seconds('2m5')).toBe(2 * 60 + 5)
+    expect(seconds('2min5')).toBe(2 * 60 + 5)
+  })
+
+  it('minutos após "h" fora de 0-59 são rejeitados, nunca normalizados em silêncio', () => {
+    for (const input of ['18h60', '18h75', '18h99']) {
+      const result = parseDurationToSeconds(input)
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toMatch(/minutos após "h"/i)
+    }
+  })
+
+  it('segundos após "m"/"min" fora de 0-59 são rejeitados, nunca normalizados em silêncio', () => {
+    for (const input of ['19m60', '19m70', '32min99']) {
+      const result = parseDurationToSeconds(input)
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toMatch(/segundos após "m"/i)
+    }
+  })
+
+  it('minutos antes de "m"/"min" NÃO têm teto (carregam para hora ao formatar)', () => {
+    expect(formatSecondsToHHMMSS(seconds('90m30') as number)).toBe('01:30:30')
+  })
+
+  it.each(['-1h20', '-19m44'])('valores negativos continuam inválidos: "%s"', (input) => {
+    const result = parseDurationToSeconds(input)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/não pode ser negativa/i)
+  })
+
+  it.each(['18h32abc', 'h32', 'min20', '18 h 32 x', '1h2m3', 'e32'])(
+    'texto residual ou parcialmente reconhecido é rejeitado: "%s"',
+    (input) => {
+      const result = parseDurationToSeconds(input)
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toMatch(/duração inválida/i)
+    },
+  )
+
+  it('as formas anteriores continuam intactas (nada quebrou com os novos padrões)', () => {
+    expect(seconds('18h')).toBe(18 * 3600) // só horas
+    expect(seconds('18h32m')).toBe(18 * 3600 + 32 * 60) // sufixo explícito
+    expect(seconds('19m')).toBe(19 * 60) // só minutos
+    expect(seconds('90m')).toBe(90 * 60) // carrega para 1h30
+    expect(seconds('30m45s')).toBe(30 * 60 + 45) // min + seg com unidade
+    expect(seconds('1h30min')).toBe(5400)
+    expect(seconds('01:30:00')).toBe(5400)
+    expect(seconds('90:00')).toBe(5400) // MM:SS quando o 1º bloco >= 24
+    expect(seconds('1,5h')).toBe(5400)
+  })
+
+  it('NaN, Infinity e notação exponencial são rejeitados', () => {
+    for (const input of ['NaN', 'Infinity', '1e3', '1e3h', '18hNaN']) {
+      expect(parseDurationToSeconds(input).ok).toBe(false)
+    }
+  })
+})
+
+describe('formatSecondsAdaptive — hh:mm sem segundos, hh:mm:ss quando há', () => {
+  it('sem segundos restantes: idêntico a hh:mm (nunca acrescenta :00 à toa)', () => {
+    expect(formatSecondsAdaptive(0)).toBe('00:00')
+    expect(formatSecondsAdaptive(3600)).toBe('01:00')
+    expect(formatSecondsAdaptive(1800)).toBe('00:30')
+    expect(formatSecondsAdaptive(100 * 3600)).toBe('100:00')
+  })
+
+  it('com segundos restantes: mostra hh:mm:ss (nunca descarta os segundos)', () => {
+    expect(formatSecondsAdaptive(1845)).toBe('00:30:45')
+    expect(formatSecondsAdaptive(1)).toBe('00:00:01')
+    expect(formatSecondsAdaptive(18 * 3600 + 51 * 60 + 44)).toBe('18:51:44')
+  })
+
+  it('round-trip exato: parse -> formatSecondsAdaptive -> parse preserva os segundos', () => {
+    for (const input of ['30m45s', '00:30:45', '18h32', '19m44', '32min20']) {
+      const first = seconds(input) as number
+      const reparsed = seconds(formatSecondsAdaptive(first))
+      expect(reparsed).toBe(first)
+    }
+  })
+})
+
+describe('parseDurationToSeconds — somas com segundos (exemplos de aceite)', () => {
+  it('18h32 + 19m44 = 18h51min44s', () => {
+    const total = (seconds('18h32') as number) + (seconds('19m44') as number)
+    expect(formatSecondsToHHMMSS(total)).toBe('18:51:44')
+  })
+
+  it('19m44 + 32min20 = 52min04s', () => {
+    const total = (seconds('19m44') as number) + (seconds('32min20') as number)
+    expect(formatSecondsToHHMMSS(total)).toBe('00:52:04')
+  })
+
+  it('1h59 + 1m30 = 2h00min30s (carrega minutos e segundos)', () => {
+    const total = (seconds('1h59') as number) + (seconds('1m30') as number)
+    expect(formatSecondsToHHMMSS(total)).toBe('02:00:30')
+  })
+})
+
 describe('formatSecondsToHHMMSS', () => {
   it('sempre preenche cada bloco com 2 dígitos', () => {
     expect(formatSecondsToHHMMSS(5)).toBe('00:00:05')
@@ -187,7 +318,7 @@ describe('formatSecondsToHHMMSS', () => {
 })
 
 describe('DURATION_HELP_TEXT', () => {
-  it('é o texto de ajuda exato aprovado', () => {
-    expect(DURATION_HELP_TEXT).toBe('Aceita 1h30min, 1,5h, 01:30:00, 90m ou 30m45s.')
+  it('é o texto de ajuda exato aprovado (inclui as formas 18h32/19m44/32min20)', () => {
+    expect(DURATION_HELP_TEXT).toBe('Aceita 18:32, 18h32, 19m44, 32min20, 1h30min, 1,5h ou 90m.')
   })
 })

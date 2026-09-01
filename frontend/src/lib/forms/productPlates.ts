@@ -17,7 +17,7 @@
 // mesma regra de sempre: "só tipos ativos para uma seleção NOVA, tipo já
 // vinculado nunca some sozinho por ter ficado inativo depois".
 
-import { parseDurationToSeconds, formatSecondsToHHMM } from '@/lib/forms/durationField'
+import { parseDurationToSeconds, formatSecondsAdaptive } from '@/lib/forms/durationField'
 import { parseNumberField } from '@/lib/forms/numberField'
 import type { FilamentTypeSummary, ProductPlate } from '@/types/domain'
 
@@ -59,11 +59,11 @@ export function findFilamentTypeById(
 
 export interface PlateRow {
   key: string
-  // hh:mm (ProductForm exibe/edita só horas:minutos para o tempo de cada
-  // plate — parseDurationToSeconds aceita esse e outros formatos livremente,
-  // formatSecondsToHHMM sempre reformata de volta para hh:mm ao perder o
-  // foco, mesmo padrão de handleDurationBlur já usado no campo de preço/
-  // tempo antigo).
+  // Tempo do plate como texto livre — parseDurationToSeconds aceita vários
+  // formatos (hh:mm, hh:mm:ss, 18h32, 19m44, 32min20, 1,5h, 90m…). Ao
+  // pré-preencher a EDIÇÃO usamos formatSecondsAdaptive: hh:mm quando o
+  // valor salvo não tem segundos, hh:mm:ss quando tem — nunca truncando os
+  // segundos que já estavam persistidos.
   timeInput: string
   // Peso direto do plate (g) — texto livre, validado no submit. Substitui a
   // soma de linhas de filamento que existia antes desta migration.
@@ -86,7 +86,7 @@ export function plateRowsFrom(plates: ProductPlate[]): PlateRow[] {
     .sort((a, b) => a.plate_number - b.plate_number)
     .map((plate) => ({
       key: nextPlateRowKey(),
-      timeInput: formatSecondsToHHMM(plate.production_time_seconds),
+      timeInput: formatSecondsAdaptive(plate.production_time_seconds),
       weightInput: String(plate.weight_grams),
     }))
 }
@@ -109,7 +109,7 @@ export function plateRowsFromLegacyWeight(
   return [
     {
       key: nextPlateRowKey(),
-      timeInput: defaultTimeSeconds !== null ? formatSecondsToHHMM(defaultTimeSeconds) : '',
+      timeInput: defaultTimeSeconds !== null ? formatSecondsAdaptive(defaultTimeSeconds) : '',
       weightInput: defaultWeightGrams !== null ? String(defaultWeightGrams) : '',
     },
   ]
@@ -170,7 +170,10 @@ export function validatePlateRows(plates: PlateRow[]): ValidatedPlates {
       productionTimeSeconds = durationResult.seconds ?? 0
     }
 
-    const weightResult = parseNumberField(plate.weightInput, 'o peso do plate', { required: true, min: 0.01 })
+    const weightResult = parseNumberField(plate.weightInput, 'o peso do plate', {
+      required: true,
+      min: 0.01,
+    })
     let weightGrams = 0
     if (weightResult.error) {
       weightErrors[plate.key] = weightResult.error

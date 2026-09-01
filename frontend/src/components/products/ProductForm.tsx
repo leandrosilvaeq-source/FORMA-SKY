@@ -22,7 +22,7 @@ import {
   rawValueToCents,
   removeLastDigit,
 } from '@/lib/forms/currencyField'
-import { formatSecondsToHHMM, parseDurationToSeconds } from '@/lib/forms/durationField'
+import { formatSecondsAdaptive, parseDurationToSeconds } from '@/lib/forms/durationField'
 import { parseNumberField } from '@/lib/forms/numberField'
 import {
   hasOutOfRangeQuantity,
@@ -41,6 +41,13 @@ import {
 import { CompositionRowsField } from '@/components/products/CompositionRowsField'
 import type { CreateProductWithPlatesInput, PlateInput } from '@/lib/api/products'
 import type { Accessory, Packaging, ProductType } from '@/types/domain'
+
+// Exemplos curtos dos formatos de tempo aceitos, mostrados abaixo de cada
+// campo de "Tempo de produção" (por plate) e do "Tempo efetivo" do ajuste
+// manual — parseDurationToSeconds aceita bem mais que isto (hh:mm:ss, 1,5h,
+// 90m…), mas estes quatro cobrem o dia a dia e deixam claro que "h", "m" e
+// "min" são aceitos.
+const PLATE_TIME_HINT = 'Ex.: 18:32, 18h32, 19m44 ou 32min20'
 
 const PRICE_INPUT_ID = 'product-price'
 const PRICE_ERROR_ID = 'product-price-error'
@@ -304,7 +311,7 @@ export function ProductForm({
   )
   const [manualTimeInput, setManualTimeInput] = useState(
     initialValues?.manualTimeOverrideSeconds != null
-      ? formatSecondsToHHMM(initialValues.manualTimeOverrideSeconds)
+      ? formatSecondsAdaptive(initialValues.manualTimeOverrideSeconds)
       : '',
   )
   const [manualWeightError, setManualWeightError] = useState<string | null>(null)
@@ -358,7 +365,7 @@ export function ProductForm({
   }
 
   function formatSecondsToHHM_or_empty(seconds: number): string {
-    return seconds > 0 ? formatSecondsToHHMM(seconds) : ''
+    return seconds > 0 ? formatSecondsAdaptive(seconds) : ''
   }
 
   function useAutomaticCalculation() {
@@ -853,22 +860,11 @@ export function ProductForm({
                   </div>
                 )}
 
+                {/* Ordem dos campos: Peso (g) à esquerda, Tempo de produção
+                    à direita (só a posição visual mudou — o contrato
+                    enviado por onSubmit continua { production_time_seconds,
+                    weight_grams } e cada plate novo herda a mesma ordem). */}
                 <div className="flex flex-wrap gap-3">
-                  <div className="flex flex-col gap-1">
-                    <Label htmlFor={`plate-time-${plate.key}`}>Tempo de produção</Label>
-                    <Input
-                      id={`plate-time-${plate.key}`}
-                      placeholder="hh:mm"
-                      value={plate.timeInput}
-                      disabled={isSubmitting}
-                      onChange={(event) => updatePlateTime(plate.key, event.target.value)}
-                      className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-32"
-                    />
-                    {plateTimeErrors[plate.key] && (
-                      <p className="text-destructive text-sm">{plateTimeErrors[plate.key]}</p>
-                    )}
-                  </div>
-
                   <div className="flex flex-col gap-1">
                     <Label htmlFor={`plate-weight-${plate.key}`}>Peso (g)</Label>
                     <Input
@@ -882,6 +878,28 @@ export function ProductForm({
                     />
                     {plateWeightErrors[plate.key] && (
                       <p className="text-destructive text-sm">{plateWeightErrors[plate.key]}</p>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <Label htmlFor={`plate-time-${plate.key}`}>Tempo de produção</Label>
+                    <Input
+                      id={`plate-time-${plate.key}`}
+                      placeholder="18:32 ou 18h32"
+                      value={plate.timeInput}
+                      disabled={isSubmitting}
+                      onChange={(event) => updatePlateTime(plate.key, event.target.value)}
+                      aria-describedby={`plate-time-hint-${plate.key}`}
+                      className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-40"
+                    />
+                    <p
+                      id={`plate-time-hint-${plate.key}`}
+                      className="text-muted-foreground text-xs"
+                    >
+                      {PLATE_TIME_HINT}
+                    </p>
+                    {plateTimeErrors[plate.key] && (
+                      <p className="text-destructive text-sm">{plateTimeErrors[plate.key]}</p>
                     )}
                   </div>
                 </div>
@@ -899,13 +917,13 @@ export function ProductForm({
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium">Tempo total de produção</span>
               <span className="text-sm font-semibold">
-                {formatSecondsToHHMM(effectiveTimeSeconds)}
+                {formatSecondsAdaptive(effectiveTimeSeconds)}
               </span>
             </div>
             {isManualAdjustment && (
               <p className="text-muted-foreground text-xs">
                 Ajustado manualmente — calculado pelos plates: {formatGrams(autoWeight)} /{' '}
-                {formatSecondsToHHMM(autoTimeSeconds)}
+                {formatSecondsAdaptive(autoTimeSeconds)}
               </p>
             )}
 
@@ -941,12 +959,16 @@ export function ProductForm({
                     <Label htmlFor="manual-time-override">Tempo efetivo</Label>
                     <Input
                       id="manual-time-override"
-                      placeholder="hh:mm"
+                      placeholder="18:32 ou 18h32"
                       value={manualTimeInput}
                       disabled={isSubmitting}
                       onChange={(event) => setManualTimeInput(event.target.value)}
-                      className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-32"
+                      aria-describedby="manual-time-override-hint"
+                      className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-40"
                     />
+                    <p id="manual-time-override-hint" className="text-muted-foreground text-xs">
+                      {PLATE_TIME_HINT}
+                    </p>
                     {manualTimeError && (
                       <p className="text-destructive text-sm">{manualTimeError}</p>
                     )}

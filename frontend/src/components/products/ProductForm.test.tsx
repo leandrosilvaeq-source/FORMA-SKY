@@ -567,6 +567,145 @@ describe('ProductForm', () => {
         }),
       )
     })
+
+    it.each([
+      ['18:32', 18 * 3600 + 32 * 60],
+      ['18h32', 18 * 3600 + 32 * 60],
+      ['18H32', 18 * 3600 + 32 * 60],
+      ['19m44', 19 * 60 + 44],
+      ['19M44', 19 * 60 + 44],
+      ['32min20', 32 * 60 + 20],
+      ['32MIN20', 32 * 60 + 20],
+      [' 18h32 ', 18 * 3600 + 32 * 60],
+    ])('aceita o formato "%s" e envia %i segundos exatos', async (typed, expectedSeconds) => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
+
+      await fillNameAndPrice(user)
+      await clickCategoryChip(user, 'Chaveiro')
+      await fillPlateWeight(user, 0, '10')
+      await user.type(screen.getAllByLabelText(/tempo de produção/i)[0], typed)
+      await user.click(screen.getByRole('button', { name: /salvar/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          plates: [expect.objectContaining({ production_time_seconds: expectedSeconds })],
+        }),
+      )
+    })
+
+    it.each(['18h75', '19m70', '32min99'])(
+      'bloqueia o envio e mostra erro de faixa para "%s" (minutos/segundos acima de 59)',
+      async (typed) => {
+        const user = userEvent.setup()
+        const { onSubmit } = renderForm()
+
+        await fillNameAndPrice(user)
+        await clickCategoryChip(user, 'Chaveiro')
+        await fillPlateWeight(user, 0, '10')
+        const timeInput = screen.getAllByLabelText(/tempo de produção/i)[0]
+        await user.type(timeInput, typed)
+        await user.click(screen.getByRole('button', { name: /salvar/i }))
+
+        expect(await screen.findByText(/devem estar entre 0 e 59/i)).toBeInTheDocument()
+        expect(timeInput).toHaveValue(typed)
+        expect(onSubmit).not.toHaveBeenCalled()
+      },
+    )
+
+    it('o campo mostra os formatos aceitos como texto auxiliar (18:32, 18h32, 19m44, 32min20)', () => {
+      renderForm()
+      const hint = screen.getAllByText(/18:32, 18h32, 19m44 ou 32min20/i)[0]
+      const timeInput = screen.getAllByLabelText(/tempo de produção/i)[0]
+      expect(timeInput.getAttribute('aria-describedby')).toContain(hint.id)
+    })
+  })
+
+  describe('ordem dos campos de cada plate — Peso (g) à esquerda, Tempo de produção à direita', () => {
+    function assertWeightBeforeTime(index: number) {
+      const weight = screen.getAllByLabelText(/^peso \(g\)$/i)[index]
+      const time = screen.getAllByLabelText(/tempo de produção/i)[index]
+      const timeFollowsWeight =
+        weight.compareDocumentPosition(time) & Node.DOCUMENT_POSITION_FOLLOWING
+      expect(timeFollowsWeight).toBeTruthy()
+    }
+
+    it('Plate 1: Peso (g) aparece antes de Tempo de produção no DOM', () => {
+      renderForm()
+      assertWeightBeforeTime(0)
+    })
+
+    it('a mesma ordem vale para plates adicionados dinamicamente', async () => {
+      const user = userEvent.setup()
+      renderForm()
+      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
+      await user.click(screen.getByRole('button', { name: /aumentar número de plates/i }))
+      assertWeightBeforeTime(0)
+      assertWeightBeforeTime(1)
+      assertWeightBeforeTime(2)
+    })
+
+    it('a inversão visual não muda o contrato enviado (production_time_seconds + weight_grams)', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
+
+      await fillNameAndPrice(user)
+      await clickCategoryChip(user, 'Chaveiro')
+      await fillPlateWeight(user, 0, '10')
+      await user.type(screen.getAllByLabelText(/tempo de produção/i)[0], '18h32')
+      await user.click(screen.getByRole('button', { name: /salvar/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          plates: [{ production_time_seconds: 18 * 3600 + 32 * 60, weight_grams: 10 }],
+        }),
+      )
+    })
+  })
+
+  describe('edição — o tempo salvo com segundos reabre e volta a ser enviado sem perder precisão', () => {
+    it('plate pré-preenchido em hh:mm:ss é re-enviado com os mesmos segundos, sem tocar no campo', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm({
+        mode: 'edit',
+        initialValues: baseEditInitialValues({
+          plates: [{ key: 'plate-1', timeInput: '00:30:45', weightInput: '40' }],
+        }),
+      })
+
+      expect(screen.getAllByLabelText(/tempo de produção/i)[0]).toHaveValue('00:30:45')
+
+      await user.click(screen.getByRole('button', { name: /salvar/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          plates: [{ production_time_seconds: 1845, weight_grams: 40 }],
+        }),
+      )
+    })
+
+    it('o ajuste manual de tempo aceita os mesmos formatos e preserva segundos', async () => {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm({
+        mode: 'edit',
+        initialValues: baseEditInitialValues({
+          plates: [{ key: 'plate-1', timeInput: '01:00', weightInput: '40' }],
+        }),
+      })
+
+      await user.click(screen.getByRole('button', { name: /ajustar totais/i }))
+      await user.clear(screen.getByLabelText(/peso efetivo/i))
+      await user.type(screen.getByLabelText(/peso efetivo/i), '50')
+      await user.clear(screen.getByLabelText(/tempo efetivo/i))
+      await user.type(screen.getByLabelText(/tempo efetivo/i), '19m44')
+      await user.click(screen.getByRole('button', { name: /salvar/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          manual_time_override_seconds: 19 * 60 + 44,
+        }),
+      )
+    })
   })
 
   describe('peso do plate — informado diretamente (filamentos/cores saíram do Produto)', () => {

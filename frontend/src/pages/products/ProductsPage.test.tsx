@@ -780,6 +780,32 @@ describe('ProductsPage', () => {
       expect(toastMock.success).toHaveBeenCalledWith('Produto atualizado.')
     })
 
+    it('tempo de plate salvo com segundos reabre em hh:mm:ss e é re-enviado sem perder os segundos', async () => {
+      useProductPlatesMock.mockReturnValue({
+        status: 'success',
+        plates: [{ ...productPlateRow, production_time_seconds: 1845, weight_grams: 40 }],
+        isLoading: false,
+        error: null,
+        retry: vi.fn(),
+      })
+      const user = userEvent.setup()
+      renderPage()
+
+      await user.click(screen.getByRole('button', { name: /^editar produto$/i }))
+      expect(screen.getAllByLabelText(/tempo de produção/i)[0]).toHaveValue('00:30:45')
+
+      await user.click(screen.getByRole('button', { name: /^salvar alterações$/i }))
+
+      await waitFor(() =>
+        expect(updateFullMock).toHaveBeenCalledWith(
+          '1',
+          expect.objectContaining({
+            plates: [{ production_time_seconds: 1845, weight_grams: 40 }],
+          }),
+        ),
+      )
+    })
+
     it('mostra um skeleton de carregamento enquanto os plates ainda não chegaram, sem abrir o formulário vazio', async () => {
       useProductPlatesMock.mockReturnValue({
         status: 'loading',
@@ -1751,8 +1777,12 @@ describe('ProductsPage', () => {
 
     it('presença das alças: cabeçalhos ordenáveis e o cabeçalho de Ações têm separador de redimensionamento', () => {
       renderPage()
-      expect(screen.getByRole('separator', { name: 'Redimensionar coluna Produto' })).toBeInTheDocument()
-      expect(screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })).toBeInTheDocument()
+      expect(
+        screen.getByRole('separator', { name: 'Redimensionar coluna Produto' }),
+      ).toBeInTheDocument()
+      expect(
+        screen.getByRole('separator', { name: 'Redimensionar coluna Ações' }),
+      ).toBeInTheDocument()
     })
 
     it('identificadores de coluna: 8 colunas viram 8 <col> no colgroup', () => {
@@ -1780,7 +1810,9 @@ describe('ProductsPage', () => {
       fireEvent.keyDown(handle, { key: 'ArrowRight' })
 
       expect((document.querySelectorAll('col')[0] as HTMLElement).style.width).toBe('200px')
-      expect((document.querySelectorAll('col')[1] as HTMLElement).style.width).toBe(otherWidthBefore)
+      expect((document.querySelectorAll('col')[1] as HTMLElement).style.width).toBe(
+        otherWidthBefore,
+      )
     })
 
     it('largura salva é restaurada após remontar a página', () => {
@@ -1817,11 +1849,15 @@ describe('ProductsPage', () => {
 
     it('regressão: as ações "Editar produto" e "Acessórios e Embalagem" continuam em uma única linha, sem quebra', () => {
       renderPage()
-      const actionsCell = within(getTable()).getByRole('button', { name: 'Editar produto' }).closest('div')
+      const actionsCell = within(getTable())
+        .getByRole('button', { name: 'Editar produto' })
+        .closest('div')
       expect(actionsCell).toHaveClass('flex-nowrap')
       expect(actionsCell).not.toHaveClass('flex-wrap')
       expect(within(getTable()).getByRole('button', { name: 'Editar produto' })).toBeInTheDocument()
-      expect(within(getTable()).getByRole('button', { name: 'Acessórios e Embalagem' })).toBeInTheDocument()
+      expect(
+        within(getTable()).getByRole('button', { name: 'Acessórios e Embalagem' }),
+      ).toBeInTheDocument()
     })
 
     it('regressão: busca e ordenação continuam funcionando após o redimensionamento', async () => {

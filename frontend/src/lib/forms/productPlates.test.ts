@@ -6,11 +6,25 @@ import {
   filamentTypeLabel,
   filterSelectableFilamentTypes,
   findFilamentTypeById,
+  plateRowsFrom,
   plateRowsFromLegacyWeight,
   validatePlateRows,
   type PlateRow,
 } from './productPlates'
-import type { FilamentTypeSummary } from '@/types/domain'
+import type { FilamentTypeSummary, ProductPlate } from '@/types/domain'
+
+function plate(overrides: Partial<ProductPlate> = {}): ProductPlate {
+  return {
+    id: 'pp1',
+    product_id: 'p1',
+    plate_number: 1,
+    production_time_seconds: 3600,
+    weight_grams: 40,
+    created_at: '',
+    updated_at: '',
+    ...overrides,
+  }
+}
 
 // Testes dos seletores de tipo de filamento trazidos de
 // productFilamentComposition.ts (removido na limpeza de código órfão de
@@ -57,7 +71,11 @@ describe('filterSelectableFilamentTypes (tipos inativos)', () => {
   })
 
   it('exclui tipos já escolhidos em outras linhas, mesmo ativos (impede duplicidade)', () => {
-    const result = filterSelectableFilamentTypes([activeA, activeB, inactiveC], new Set(['ft1']), null)
+    const result = filterSelectableFilamentTypes(
+      [activeA, activeB, inactiveC],
+      new Set(['ft1']),
+      null,
+    )
 
     expect(result.map((type) => type.filament_type_id)).toEqual(['ft2'])
   })
@@ -69,12 +87,17 @@ describe('filamentTypeLabel', () => {
   })
 
   it('marca "(inativo)" quando is_active é false', () => {
-    expect(filamentTypeLabel(typeFixture({ is_active: false }))).toBe('PLA · Voolt3D · Sólida · Preto (inativo)')
+    expect(filamentTypeLabel(typeFixture({ is_active: false }))).toBe(
+      'PLA · Voolt3D · Sólida · Preto (inativo)',
+    )
   })
 })
 
 describe('findFilamentTypeById', () => {
-  const types = [typeFixture({ filament_type_id: 'ft1' }), typeFixture({ filament_type_id: 'ft2', commercial_color: 'Branco' })]
+  const types = [
+    typeFixture({ filament_type_id: 'ft1' }),
+    typeFixture({ filament_type_id: 'ft2', commercial_color: 'Branco' }),
+  ]
 
   it('encontra o tipo pelo filament_type_id', () => {
     expect(findFilamentTypeById(types, 'ft2')?.commercial_color).toBe('Branco')
@@ -139,6 +162,40 @@ describe('validatePlateRows', () => {
   })
 })
 
+describe('plateRowsFrom — pré-preenchimento da edição preserva os segundos salvos', () => {
+  it('plate com segundos exatos abre como hh:mm:ss (nunca truncado para hh:mm)', () => {
+    const rows = plateRowsFrom([plate({ production_time_seconds: 1845, weight_grams: 40 })])
+    expect(rows[0].timeInput).toBe('00:30:45')
+    expect(rows[0].weightInput).toBe('40')
+  })
+
+  it('plate em minutos redondos continua abrindo como hh:mm (sem :00 supérfluo)', () => {
+    const rows = plateRowsFrom([plate({ production_time_seconds: 3600 })])
+    expect(rows[0].timeInput).toBe('01:00')
+  })
+
+  it('round-trip sem tocar no campo: plateRowsFrom -> validatePlateRows devolve os mesmos segundos', () => {
+    const rows = plateRowsFrom([
+      plate({ id: 'a', plate_number: 1, production_time_seconds: 1845, weight_grams: 40 }),
+      plate({ id: 'b', plate_number: 2, production_time_seconds: 7261, weight_grams: 12.5 }),
+    ])
+    const result = validatePlateRows(rows)
+    expect(result.timeErrors).toEqual({})
+    expect(result.items).toEqual([
+      { production_time_seconds: 1845, weight_grams: 40 },
+      { production_time_seconds: 7261, weight_grams: 12.5 },
+    ])
+  })
+
+  it('ordena por plate_number antes de mapear', () => {
+    const rows = plateRowsFrom([
+      plate({ id: 'b', plate_number: 2, production_time_seconds: 120, weight_grams: 5 }),
+      plate({ id: 'a', plate_number: 1, production_time_seconds: 60, weight_grams: 10 }),
+    ])
+    expect(rows.map((r) => r.weightInput)).toEqual(['10', '5'])
+  })
+})
+
 describe('plateRowsFromLegacyWeight', () => {
   it('devolve array vazio quando não há peso nem tempo legado', () => {
     expect(plateRowsFromLegacyWeight(null, null)).toEqual([])
@@ -149,5 +206,10 @@ describe('plateRowsFromLegacyWeight', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0].weightInput).toBe('120')
     expect(rows[0].timeInput).toBe('01:00')
+  })
+
+  it('Produto legado cujo tempo tem segundos: preserva os segundos ao abrir a edição', () => {
+    const rows = plateRowsFromLegacyWeight(120, 1845)
+    expect(rows[0].timeInput).toBe('00:30:45')
   })
 })
