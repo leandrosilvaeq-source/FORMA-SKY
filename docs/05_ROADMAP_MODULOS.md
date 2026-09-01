@@ -55,7 +55,7 @@ progresso — só como intenção registrada em `04_PLANO_IMPLEMENTACAO.md`.
 | 0 | Fundação e Segurança | 5×100% (F1–F5) + 2×50% (F6–F7) | ~86% | 🟡 Quase operacional — validar formalmente (Fases 6–7 pendentes) |
 | 1 | Clientes, Produtos e Pedidos | 5×100% (F1–F5) + 2×0% (F6–F7) | ~71% | 🟡 Fluxo E2E completo do MVP (Clientes/Empresas/Produtos/Pedidos, incl. bloqueio de pagamento excedente) validado manualmente em 2026-08-26, com a proteção de backend aplicada e confirmada no Supabase remoto — Fase 6 (Piloto real) ainda não iniciada |
 | 2 | Produção | 1×100% (F1) + 1×50% (F2) + 5×0% | ~21% | ❌ Não iniciado |
-| 3 | Estoque e Inventário | 1×100% (F1) + 1×50% (F2) + 5×0% (% macro pendente de recálculo — ver §9) | ~21%* | 🟡 Cadastro mestre (Acessórios/Embalagens) operacional; Incremento 1 do motor de saldo/movimentação implementado **localmente** em 2026-08-27, não aplicado ao remoto (ver §9b); inventário físico completo (movimentações validadas, filamentos, consumo automático) não concluído |
+| 3 | Estoque e Inventário | F1 100% + F2 70% + F3 70% + F4 65% + F5 50% + F6 0% + F7 0% = 355/7 | **~51%** (recalculado 2026-09-01, ver §9c) | 🟡 Inventário manual **operacional e validado**: saldo/entrada/saída/ajuste/histórico de Acessórios e Embalagens (`stock_movements` + `register_stock_movement`, aplicados ao remoto; Edge Function `stock-movements` v1), tipos/rolos/movimentações/pesagem de filamento (`filament_types`/`filament_spools`/`filament_movements` + RPCs, aplicados; 3 Edge Functions v1) e Compras das 3 categorias (`inventory_purchases` + `register_inventory_purchase`, aplicados; Edge Function `inventory-purchases` v1) — todos validados manualmente pelo usuário (2026-08-27/28/29). **Ausentes**: reserva/consumo/liberação automática por Pedido, inventário periódico, tela de histórico de compras, custo médio por item. Frontend não publicado. Módulo 3 **não concluído** — ver §9c |
 | 4 | Precificação e Rentabilidade | 1×100% (F1) + 1×50% (F2) + 5×0% | ~21% | ❌ Não iniciado |
 | 5 | Manutenção e Equipamentos | 1×100% (F1) + 1×50% (F2) + 5×0% | ~21% | ❌ Não iniciado |
 | 6 | Onboarding, Alertas e Gestão | 1×100% (F1) + 1×50% (F2) + 5×0% | ~21% | ❌ Não iniciado |
@@ -65,12 +65,11 @@ progresso — só como intenção registrada em `04_PLANO_IMPLEMENTACAO.md`.
 | 10 | Integrações Externas | 1×100% (F1) + 6×0% (F2 sem modelo definido por integração) | ~14% | ❌ Não iniciado |
 
 > Cálculo exato do Módulo 1: 5 fases 100% + 2 fases 0% = 5/7 ≈ 71%.
-> \* Módulo 3: percentual macro ainda não recalculado formalmente após a conclusão do cadastro
-> mestre (Acessórios/Embalagens) — ver detalhamento e justificativa em §9. O número "~21%" acima
-> é herdado da entrada anterior e **não reflete** o estado atual (cadastro mestre já implementado,
-> testado e validado); só a descrição em texto desta linha foi atualizada nesta rodada.
-> A referência confiável continua sendo o detalhamento por fase (seção 3, para o módulo em
-> desenvolvimento; seção 5, macro para os demais) — a tabela acima é só leitura rápida.
+> Módulo 3: percentual macro **recalculado formalmente em 2026-09-01** pela metodologia oficial das
+> 7 fases (auditoria somente-leitura do estado real: 45/45 migrations sincronizadas, 7 Edge
+> Functions de Estoque publicadas, 4 blocos de validação manual aprovados). Resultado: **~51%**
+> (era herdado como "~21%", número que estava obsoleto desde os Incrementos 1–5). O detalhamento
+> por fase, as evidências e o gate para o próximo avanço estão em §9c.
 
 ---
 
@@ -211,7 +210,7 @@ Módulo 3.
 | Módulo | Fase 1 — Definição funcional | Fase 2 — Modelo e regras | Fases 3–7 |
 | --- | --- | --- | --- |
 | 2 — Produção | ✅ 100% (doc 01 §12–14) | 🟡 50% — especificado (doc 03 §10–11), sem migrations | ❌ 0% |
-| 3 — Estoque e Inventário | ✅ 100% (doc 01 §15–21) | 🟡 50% — `accessories`/`packaging` (doc 03 §13) **implementados** (Migration 18, antecipados pelo Módulo 1 só como cadastro mestre); `filament_types`, `spool_tares`, `filament_spools`, `suppliers`, `stock_movements`, `stock_reservations`, `inventories`, `inventory_items` (doc 03 §12, §14–16) continuam apenas especificados, sem migration; nenhuma regra de negócio de estoque físico (saldo/entrada/saída/ajuste/reserva/consumo) implementada | 🟡 Cadastro mestre de Acessórios/Embalagens **concluído**: backend (Edge Functions `accessories`/`packaging`, CRUD completo) deployado e frontend (`/estoque`, `/estoque/acessorios`, `/estoque/embalagens`) implementado, testado e validado manualmente pelo usuário contra o backend remoto — ver §9. **Isto é só o cadastro mestre (nome/tamanho/variante/estoque mínimo/custo unitário/ativo) — não é inventário físico**: não existe saldo, quantidade em mão, entrada, saída nem ajuste de estoque em nenhuma tabela ou tela do projeto (confirmado por leitura de todas as 27 migrations em `supabase/migrations/`). Cadastro oficial (incl. Petlink) segue bloqueado por autorização — ver §6 |
+| 3 — Estoque e Inventário | ✅ 100% (doc 01 §15–21) | 🟡 **70%** (2026-09-01) — **aplicados ao remoto** (45 migrations, todas sincronizadas): `accessories`/`packaging` + write functions (doc 03 §13); `stock_movements` + `register_stock_movement` (§15.1); `filament_types`/`filament_spools`/`filament_movements` + `register_filament_movement`/`register_filament_weighing` + `vw_filament_type_summary` (§12.1–12.3); `inventory_purchases` + `register_inventory_purchase` (compras). Tara passou a ser `filament_spools.empty_spool_weight_grams` por rolo (a tabela `spool_tares` foi **descartada por arquitetura**, doc 03 §12.5). `product_filaments`/`product_plate_filaments` existem mas são **LEGADAS** (composição de filamento saiu do Produto e foi para o Pedido — `order_item_unit_plate_filaments`). **Ausentes** (sem migration): tipos de movimento `RESERVATION`/`RELEASE`/`CONSUMPTION`, integração com `change_order_status`, snapshot de Acessórios/Embalagens por Pedido, `inventories`/`inventory_items` (inventário periódico), `suppliers` (fora de escopo), custo médio por item | 🟡 Inventário manual **operacional e validado pelo usuário** (2026-08-27/28/29): saldo/entrada/saída/ajuste/histórico de Acessórios e Embalagens; tipos/rolos/movimentações/pesagem/arquivamento de filamento; Compras das 3 categorias em produção real. 7 Edge Functions de Estoque publicadas (`accessories`, `packaging`, `stock-movements`, `filament-types`, `filament-spools`, `filament-movements`, `inventory-purchases`, todas v1). Rotas `/estoque`, `/estoque/acessorios`, `/estoque/embalagens`, `/estoque/filamentos`. **Não é inventário completo**: entrar em Fila **não reserva** e iniciar Produção **não baixa** estoque — motor de reserva/consumo/liberação por Pedido ainda sem nenhuma linha de código (contrato arquitetural congelado em §9c). Cadastro oficial (incl. Petlink) segue bloqueado por autorização — ver §6 |
 | 4 — Precificação e Rentabilidade | ✅ 100% (doc 01 §22–30) | 🟡 50% — especificado (doc 03 §17–18), sem migrations | ❌ 0% |
 | 5 — Manutenção e Equipamentos | ✅ 100% (doc 01 §65) | 🟡 50% — especificado (doc 03 §24), sem migrations | ❌ 0% |
 | 6 — Onboarding, Alertas e Gestão | ✅ 100% (doc 01 §3, §59–66) | 🟡 50% — `alerts`/`notifications` especificados (doc 03 §22); escala (§25) especificada; reaproveita `parameters` do Módulo 4 (também não implementado) | ❌ 0% |
@@ -272,7 +271,14 @@ módulos já existentes.
 
 ---
 
-# 9. Módulo 3 — Estoque e Inventário: plano de cadastro mestre (em implementação)
+# 9. Módulo 3 — Estoque e Inventário: plano de cadastro mestre (CONCLUÍDO)
+
+> **Correção de 2026-09-01 (o corpo datado abaixo é histórico, preservado como foi escrito):**
+> o plano de 8 incrementos de cadastro mestre de Acessórios/Embalagens está **concluído** —
+> backend e Edge Functions publicados, telas implementadas, validação manual aprovada. As
+> passagens abaixo que dizem "em implementação", "migration criada, não aplicada remotamente"
+> ou "não deployado" refletem o estado da data de cada entrada, não o estado atual. O plano
+> vigente para o Módulo 3 é o de **operações de estoque** (§9b) e sua continuação (§9c).
 
 Planejamento aprovado em 2026-08-22 para a interface de cadastro mestre de `accessories`/
 `packaging` (Bloco 1, Migration 18) — cobre definição funcional e regras de negócio do cadastro
@@ -1222,6 +1228,289 @@ push, nenhum deploy. Checkpoint local: commit `docs: record inventory purchase v
 
 ---
 
+# 9c. Módulo 3 — recálculo do progresso e contrato do motor de reserva/consumo/liberação por Pedido (congelado 2026-09-01)
+
+Auditoria somente-leitura do estado real (Git, `supabase migration list --linked`,
+`supabase functions list`, leitura integral das migrations e das telas/APIs/hooks de Estoque e
+Pedido). Nenhum arquivo de código, migration, RPC, Edge Function, interface ou dado remoto foi
+alterado nesta rodada. Este é o **congelamento arquitetural** do próximo incremento — a
+implementação é de rodada futura, com autorização separada.
+
+## 9c.1 Estado real auditado (correção das declarações obsoletas)
+
+- **45/45 migrations sincronizadas** local/remoto (não "27"; não "só local").
+- `stock_movements` + `register_stock_movement` **aplicados ao remoto** desde 2026-08-27 (os
+  comentários de cabeçalho das migrations `20260827090000` e `20260829180000` dizendo "ainda NÃO
+  foi aplicada" são **texto histórico** do momento da criação — não editados, por regra; a fonte
+  autoritativa é `migration list --linked`).
+- Filamentos (`filament_types`, `filament_spools`, `filament_movements`), pesagem
+  (`register_filament_weighing`), `vw_filament_type_summary` e Compras (`inventory_purchases`,
+  `register_inventory_purchase`) **aplicados ao remoto**.
+- **7 Edge Functions de Estoque publicadas** (todas v1, ACTIVE): `accessories`, `packaging`,
+  `stock-movements`, `filament-types`, `filament-spools`, `filament-movements`,
+  `inventory-purchases`.
+- **Validação manual do usuário aprovada** para: cadastro mestre (2026-08-24); saldo/entrada/
+  saída/histórico de Acessórios e Embalagens — 15/15 passos (2026-08-27); MVP de Filamentos —
+  tipos/rolos/movimentações/pesagem/arquivamento (2026-08-28); Compras das 3 categorias em
+  produção real (2026-08-29).
+- **`spool_tares` foi descartada por decisão de arquitetura** — a tara passou a ser
+  `filament_spools.empty_spool_weight_grams` (nullable, por rolo); não é pendência.
+- **`product_filaments` e `product_plate_filaments` são LEGADAS** desde `20260829180000` —
+  nenhuma tela ou fluxo de Produto lê/escreve nelas; a escolha de filamento/cor migrou para o
+  Pedido (`order_item_unit_plate_filaments`), por unidade e por plate. A composição do Produto
+  (por plates, peso direto) **já está concluída** — não é "o próximo incremento".
+- **Ausentes** (nenhuma linha de código): reserva, consumo automático, liberação/devolução por
+  cancelamento, inventário periódico (`inventories`/`inventory_items`), tela de histórico de
+  compras, custo médio por item, `suppliers` (fora de escopo declarado).
+
+## 9c.2 Recálculo do Módulo 3 pela metodologia das 7 fases
+
+| Fase | % | Evidência |
+| --- | --- | --- |
+| 1. Definição funcional | **100%** | doc 01 §15–21; 22 regras operacionais aprovadas 2026-08-27 + ajustes dos retestes |
+| 2. Modelo e regras | **70%** | modelo manual aplicado ao remoto (ledgers, RPCs, view, compras, idempotência, atomicidade); **ausentes**: tipos `RESERVATION`/`RELEASE`/`CONSUMPTION`, integração com status do Pedido, snapshot de Acessórios/Embalagens por Pedido, `stock_reservations`/`inventories`/`inventory_items`, `suppliers`, custo médio |
+| 3. Backend | **70%** | 7 Edge Functions de Estoque publicadas + RPCs; `inventory_purchases_test.sql` 26/26 PASS no remoto (BEGIN/ROLLBACK); `product_plates`/categorias/composição-inativa PASS no remoto; **ausentes**: motor de reserva/consumo, RPC de inventário periódico, valoração de consumo; testes Deno nunca executados (Deno não instalado) |
+| 4. Frontend | **65%** | telas de saldo/movimentação/histórico/pesagem/arquivamento + diálogo de Compras (3 categorias); 338 testes de Estoque passando; **ausentes**: tela de histórico de compras, inventário periódico, exibição de reservado/consumido no Pedido/Produção, visão de custo |
+| 5. Integração E2E | **50%** | 4 blocos de validação manual aprovados para o escopo implementado; **ausente**: o eixo Pedido ↔ Produção ↔ Estoque (reserva/consumo/liberação) não construído, logo não validável; inventário periódico idem |
+| 6. Piloto real | **0%** | não iniciado |
+| 7. Estabilização / release | **0%** | não iniciado; frontend não publicado |
+
+**Macro = (100 + 70 + 70 + 65 + 50 + 0 + 0) / 7 = 355 / 7 ≈ 50,7% → ~51%.**
+
+O Módulo 3 **continua NÃO concluído**. O próximo avanço macro depende do motor deste incremento
+estar aplicado e validado.
+
+## 9c.3 Regras aprovadas pelo usuário — decisões DEFINITIVAS do motor de reserva/consumo
+
+1. Acessórios e embalagens são **reservados quando o Pedido entra em `IN_PRODUCTION_QUEUE`**.
+2. Filamentos só são reservados **depois que todas as escolhas por unidade e plate estiverem
+   completas** (nunca antes).
+3. Saldo insuficiente **não impede** o Pedido de permanecer na Fila — **gera alerta**.
+4. A produção **não pode começar** (`IN_PRODUCTION`) até **todos os insumos estarem
+   integralmente reservados**.
+5. Ao entrar em `IN_PRODUCTION`, a **reserva é convertida em consumo físico**.
+6. Cancelamento **anterior ao consumo libera integralmente** as reservas.
+7. **Depois do consumo não existe devolução automática** — qualquer retorno é uma movimentação
+   **manual e auditável**.
+8. Em plate multicor, devem ser informados os **gramas de cada filamento**; a **soma deve ser
+   exatamente igual ao peso congelado daquele plate, por unidade** (`order_item_plates.weight_grams`).
+
+Restrições preservadas (já vigentes, reafirmadas como definitivas):
+
+- Pedido pode entrar na Fila **sem filamentos definidos**.
+- Cores/filamentos são escolhidos **no Pedido**, por unidade e por plate.
+- O Produto **não tem mais vínculo ativo** com filamento/cor.
+- Ausência de filamentos bloqueia **somente o início da produção**, não a entrada na Fila.
+- Reserva e consumo devem ser **atômicos e idempotentes** (uma chave por `(pedido, fase)`,
+  toda a operação numa única transação; retry de `change_order_status` nunca duplica).
+- **Nenhum saldo negativo** será permitido para iniciar produção.
+- Entrar na Fila **não consome** estoque; o consumo ocorre **somente ao iniciar produção**.
+
+## 9c.4 Auditoria: snapshot de Acessórios e Embalagens no Pedido — REQUISITO OBRIGATÓRIO
+
+Leitura de `product_accessories`/`product_packaging` (`quantity integer > 0` por par
+produto+item, `unique`), das RPCs de escrita de Pedido (`create_order` e a sobrecarga de 11
+parâmetros, `update_order_full`, `create_order_with_payment`) e das Edge Functions `orders`/
+`products` + `OrderForm`/`ProductForm`.
+
+**Resultado: NÃO existe snapshot de Acessórios/Embalagens por Pedido.** As RPCs de criação/
+edição do Pedido congelam **apenas** `order_item_plates` (peso/tempo por plate) e, opcionalmente,
+`order_item_unit_plate_filaments` (cores). A necessidade de acessórios/embalagens de um Pedido só
+pode ser lida hoje de `product_accessories`/`product_packaging` — o **estado atual do Produto**.
+
+Requisito obrigatório do próximo incremento (não implementado nesta rodada):
+
+- Criar estrutura **order-scoped** para acessórios e embalagens (ex.: `order_item_accessories`,
+  `order_item_packaging`, com `quantity` já escalado por `order_items.quantity`).
+- Copiar a composição do Produto **atomicamente, na criação do item** do Pedido (e no
+  re-snapshot de `update_order_full`, mesmo momento em que `order_item_plates` é regravado).
+- Alterações futuras no Produto **nunca** alteram a necessidade de Pedidos já criados.
+- Mistura de itens e quantidades deve **escalar corretamente por unidade** (quantidade do BOM ×
+  quantidade do item).
+- Um Pedido **sem snapshot** (criado antes desta migration) **não pode** receber composição
+  histórica "inventada" a partir do Produto atual — ver §9c.8.
+
+## 9c.5 Auditoria: gramas por filamento por unidade/plate — REQUISITO OBRIGATÓRIO
+
+Leitura de `order_item_unit_plate_filaments` (colunas: `order_item_id`, `order_item_plate_id`,
+`unit_number`, `filament_type_id`, `position`; `unique (order_item_plate_id, unit_number,
+filament_type_id)`), `order_item_plates` (`weight_grams` congelado), do gate de `IN_PRODUCTION`
+em `change_order_status`, `update_order_item_production_colors` e das telas/hook de cores.
+
+Confirmado:
+
+- Uma unidade/plate **aceita mais de um filamento** (várias cores no mesmo plate são
+  permitidas; `position` só ordena a exibição).
+- Os filamentos são persistidos hoje **por `filament_type_id`** (tipo/cor), com `unit_number` e
+  `order_item_plate_id`.
+- **Não existe campo de gramas por filamento** — o comentário da tabela diz explicitamente "Não
+  pede peso por cor (responsabilidade futura do módulo Produção)".
+- **Vínculo com `filament_type` sim; com `filament_spools` (rolo) NÃO.**
+- **Nenhuma escolha de rolo** — nem automática nem manual — existe em qualquer camada.
+- A seleção **pode ser alterada** enquanto o Pedido está em QUOTE/WAITING_APPROVAL/APPROVED/
+  `IN_PRODUCTION_QUEUE` (allow-list de `update_order_item_production_colors`); congela em
+  `IN_PRODUCTION` e adiante.
+
+Requisito aprovado (regra 8), a modelar no próximo incremento:
+
+- Cada combinação **unidade + plate + filamento** recebe uma **quantidade em gramas**.
+- A **soma por unidade + plate** deve ser **exatamente igual** ao peso congelado do plate
+  (`order_item_plates.weight_grams`) — validação na RPC de escrita, com tolerância a definir
+  pelo usuário (ver §9c.9).
+- **Não** usar divisão igual implícita; **não** usar o peso integral para cada cor; **não**
+  inferir quantidade em silêncio — o gramas de cada cor é sempre informado.
+
+## 9c.6 Auditoria: alocação entre rolos — DECISÃO DO USUÁRIO PENDENTE
+
+O Pedido escolhe **tipo/cor**; o estoque físico de filamento está em **rolos** (`filament_spools`,
+saldo por rolo em `current_net_weight_grams`, status `LACRADO`/`ABERTO`/`ESGOTADO`/`DESCARTADO`,
+`is_active`). `register_filament_movement` **exige `p_spool_id`** — não existe movimentação "por
+tipo" sem um rolo concreto. `vw_filament_type_summary.total_available_grams` soma só rolos ativos
+e utilizáveis.
+
+Perguntas em aberto (o motor precisa de resposta antes de modelar):
+
+- **Reserva por tipo ou por rolo?** Reservar por tipo adia a escolha do rolo para a Produção;
+  reservar por rolo fixa a rastreabilidade cedo, mas trava rolos.
+- **Múltiplos rolos do mesmo tipo** — como participam de uma reserva/consumo único?
+- **Consumo maior que o saldo de um rolo** — dividir entre rolos? bloquear?
+- **Rolo arquivado / esgotado / descartado** — excluído da alocação? e se uma reserva já
+  apontava para ele?
+- **Rastreabilidade** — registrar qual rolo foi de fato consumido (obrigatório para custo e
+  auditoria).
+- **Seleção manual de rolo na Produção** — haverá uma tela para o operador escolher o rolo, ou
+  a alocação é 100% automática?
+- **Política de alocação automática** — FIFO (rolo mais antigo primeiro), FEFO (validade — não
+  há campo de validade hoje), "rolo já ABERTO primeiro, depois LACRADO", maior saldo primeiro?
+- **Substituição de rolo entre a reserva e a produção** (rolo reservado ficou indisponível).
+
+Opções, com recomendação técnica (a regra de negócio é do usuário):
+
+| Opção | Descrição | Vantagens | Riscos |
+| --- | --- | --- | --- |
+| **R1 — reserva por tipo, alocação de rolo só no consumo** | A reserva de Fila registra "N gramas do tipo X reservados para o Pedido P"; ao iniciar a Produção, o motor escolhe rolo(s) por política e grava `CONSUMPTION` em `filament_movements(spool_id=…)` | seleção de rolo com informação mais fresca; não trava rolos cedo; casa com a regra 2 (reserva só depois das cores completas) | precisa de um acumulador "reservado por tipo" fora de `filament_movements` (que é por rolo); disponibilidade por tipo = Σ saldo dos rolos − Σ reservado por tipo |
+| **R2 — reserva já aloca rolo(s)** | Na entrada da Fila o motor escolhe rolo(s) e grava `RESERVATION` por rolo | rastreabilidade desde a Fila; disponibilidade por rolo direta | trava rolos por muito tempo; rolo pode ficar indisponível antes da produção → precisa de re-alocação; conflita com "reserva só após cores completas" se as cores mudarem |
+| **R3 — híbrido** | reserva por tipo (R1) + sugestão de rolo não vinculante, confirmada/ajustada na Produção | equilíbrio; operador tem controle final | mais telas e estado; maior complexidade de teste |
+
+**Recomendação técnica preliminar: R1** — combina com as regras 2 e 5 (reserva só após cores
+completas; conversão em consumo ao iniciar produção), evita travar rolos e concentra a
+rastreabilidade no momento do consumo real. A **política de escolha de rolo** (FIFO / "ABERTO
+antes de LACRADO" / maior saldo) e a **existência ou não de escolha manual na Produção**
+permanecem **decisões do usuário**.
+
+## 9c.7 Semântica da reserva — três arquiteturas comparadas
+
+Auditoria dos ledgers: `stock_movements.quantity_delta` é **`integer` e `<> 0`**;
+`balance_before`/`balance_after` **`>= 0`** e gravados em toda linha como o saldo físico corrente;
+`accessories.current_stock`/`packaging.current_stock` é o **saldo materializado** de leitura.
+`filament_movements.quantity_delta` é **`numeric(10,2)` e `<> 0`**, cada linha referencia **tipo E
+rolo**, e `filament_spools.current_net_weight_grams` é o saldo materializado.
+
+**Perigo central:** se uma linha `RESERVATION` com delta negativo entrar no ledger físico e
+reduzir `balance_after`/`current_stock`, o `CONSUMPTION` posterior **reduziria de novo** → baixa
+dupla. Além disso, `filament_movements` exige `spool_id NOT NULL` — uma reserva **por tipo** nem
+se expressa nesse ledger sem antes alocar um rolo. E o `CHECK (quantity_delta <> 0)` impede uma
+linha "neutra".
+
+O modelo futuro deve distinguir explicitamente: **saldo físico**; **quantidade reservada**;
+**disponível = físico − reservado**; **liberação de reserva**; **conversão de reserva em consumo
+físico**.
+
+| | **A — eventos de reserva dentro dos ledgers atuais** | **B — ledger/tabela de reservas separado** | **C — coluna materializada `reserved` + ledger de reservas auditável** |
+| --- | --- | --- | --- |
+| Fonte de verdade | um único ledger, com `movement_type` distinguindo físico vs reserva | reservas num ledger próprio; físico continua onde está | `reserved_qty`/`reserved_grams` materializado (leitura rápida) + ledger de reservas (auditoria/reconciliação) — mesmo padrão de `current_stock` + `stock_movements` |
+| Atomicidade | boa (mesma tabela, mesma transação) | boa (transação abrange as duas tabelas) | boa (transação escreve coluna + ledger juntas) |
+| Concorrência | `FOR UPDATE` no item já usado por `register_stock_movement` | precisa travar item **e** somar o ledger de reservas | `FOR UPDATE` no item; a coluna materializada evita recomputar a soma sob lock |
+| Idempotência | `idempotency_key` já existe | `idempotency_key` no novo ledger | `idempotency_key` no ledger de reservas |
+| Consulta de disponibilidade | `Σ` do ledger filtrando tipo de movimento — **cara** e sujeita a interpretação | `saldo_fisico − Σ(reservas abertas)` — join/agregação a cada leitura | `current_stock − reserved_qty` — **O(1)**, direto |
+| Reconciliação | difícil (mistura semânticas no mesmo `balance_after`) | média (duas fontes a cruzar) | boa (recomputar `reserved` do ledger, comparar com a coluna — igual ao que já se faz com `current_stock`) |
+| Impacto Acessórios/Embalagens | quebra o invariante "`balance_after` = físico corrente"; `CHECK` de `integer`/`<>0` atrapalha | limpo | limpo, e simétrico ao que já existe |
+| Impacto Filamentos (tipo × rolo) | inviável para reserva **por tipo** (`spool_id NOT NULL`) | um ledger de reservas **por tipo** resolve; consumo continua por rolo no ledger físico | `reserved_grams` **por tipo** em `filament_types` (ou tabela `filament_type_reservations`) + ledger de reservas por tipo; consumo por rolo em `filament_movements` como hoje |
+
+**Recomendação técnica: opção C.** É a única que preserva o invariante já testado dos ledgers
+físicos (`stock_movements`/`filament_movements` continuam sendo **só** movimentação física, sem
+`RESERVATION`/`RELEASE`), dá disponibilidade O(1) (`físico − reservado`), reconcilia pelo mesmo
+método já validado de `current_stock`, e resolve a reserva de filamento **por tipo** (regra 2 +
+opção R1) sem violar `spool_id NOT NULL`. Na prática:
+
+- Acessórios/Embalagens: coluna `reserved_qty integer` (materializada) + tabela
+  `stock_reservations` (ledger: `item_type`, `item_id`, `order_id`, `qty`, `status`
+  aberta/liberada/consumida, `idempotency_key`).
+- Filamentos: `reserved_grams numeric` **por `filament_type`** (materializada) + ledger de
+  reservas por tipo, com o mesmo shape. O `CONSUMPTION` real continua em `filament_movements`
+  por rolo (regra 5), e ao consumir, a reserva do tipo é baixada na mesma transação.
+- Os tipos `RESERVATION`/`RELEASE`/`CONSUMPTION` **não** entram no `CHECK` de `movement_type`
+  dos ledgers físicos; o consumo físico usa os tipos já existentes (ex.: um novo
+  `ORDER_CONSUMPTION` a ser aprovado, ou reaproveitar `INTERNAL_USE` com `reference_type='ORDER'`
+  — decisão do usuário).
+
+Nenhuma migration foi criada. A escolha final entre A/B/C e a forma dos objetos é da rodada de
+implementação, com autorização.
+
+## 9c.8 Pedidos anteriores ao novo motor — tratamento do legado
+
+Quando a migration do motor for aplicada, Pedidos já existentes (especialmente os em
+`IN_PRODUCTION_QUEUE` ou `IN_PRODUCTION`) **não podem** ser tratados como se sempre tivessem tido
+snapshot/gramas/reservas. Recomendações:
+
+- **Não modificar automaticamente nenhum Pedido existente** — nenhuma reserva retroativa, nenhum
+  consumo retroativo, nenhuma reconstrução de composição a partir do Produto atual.
+- A migration deve **identificar** e listar (consulta somente-leitura, no relatório de
+  aplicação) os Pedidos em `IN_PRODUCTION_QUEUE` e `IN_PRODUCTION` no momento da aplicação.
+- Para esses Pedidos legados, o motor entra em modo **"sem reserva/consumo rastreado"**: as
+  transições de status continuam funcionando, mas nenhuma baixa automática é feita; o operador é
+  avisado de que aquele Pedido é anterior ao motor e qualquer baixa é manual.
+- Um Pedido legado **sem snapshot de acessórios/embalagens** nunca recebe composição "inventada"
+  — se o usuário quiser rastrear o consumo dele, faz uma movimentação manual auditável.
+- Decisões do usuário necessárias: (a) reprocessar manualmente os Pedidos legados em produção,
+  ou deixá-los fora do rastreamento até serem entregues? (b) exigir que a Fila esteja vazia de
+  Pedidos legados antes de aplicar a migration, ou conviver com os dois modos?
+
+## 9c.9 Fronteira Módulo 3 × Módulo 4 e quando o Módulo 4 pode começar
+
+**Módulo 3 fornece:** custo da compra (`inventory_purchases.item_value`), frete
+(`freight_value`), custo total (`total_value`, gerado), e — **depois deste incremento** —
+quantidade reservada, quantidade consumida por Pedido, e a valoração desse consumo (política de
+custo a definir: snapshot do custo unitário no momento do consumo, ou custo médio mantido a
+partir de `inventory_purchases` — hoje **não existe** rollup de custo médio em nenhum item).
+
+**Módulo 4 (Precificação e Rentabilidade)** consome do Módulo 3 e adiciona: material consumido
+**valorizado**, acessórios/embalagens valorizados, energia, tempo/custo de máquina, depreciação,
+perdas/reimpressões, custo total, preço, margem, rentabilidade.
+
+**O Módulo 4 só pode começar com dados confiáveis depois de:**
+
+1. o motor de **reserva/consumo/liberação** deste incremento estar **aplicado e validado**
+   manualmente — para que "quantidade consumida" por Pedido seja um fato real, não estimativa;
+2. o **consumo estar valorado** com uma política de custo **definida pelo usuário** (snapshot ou
+   custo médio) — subincremento pequeno, imediatamente após o motor.
+
+Antes disso, qualquer custo de material no Módulo 4 seria estimativa manual não rastreável ao
+estoque real.
+
+## 9c.10 Decisões do usuário ainda pendentes (bloqueiam a modelagem)
+
+1. **Reserva de filamento: por tipo (R1) ou por rolo (R2/R3)?** (§9c.6)
+2. **Política de alocação automática de rolo** (FIFO / "ABERTO antes de LACRADO" / maior saldo /
+   outra) e **se haverá escolha manual de rolo na Produção**. (§9c.6)
+3. **Arquitetura da reserva: A, B ou C?** (recomendação: C). (§9c.7)
+4. **Tipo de movimento do consumo físico por Pedido** — novo `ORDER_CONSUMPTION` ou reuso de um
+   tipo existente com `reference_type='ORDER'`. (§9c.7)
+5. **Tolerância da soma de gramas por unidade/plate** vs. peso congelado do plate (exato? ±X g?
+   ±X%?). (§9c.5)
+6. **Legado**: reprocessar manualmente Pedidos em produção, ou deixá-los fora do rastreamento?
+   Exigir Fila sem Pedidos legados antes de aplicar a migration? (§9c.8)
+7. **Política de valoração do consumo** para o Módulo 4 (snapshot de custo unitário no consumo,
+   ou custo médio a partir das compras). (§9c.9)
+8. **Alerta de saldo insuficiente na Fila (regra 3)**: só visual, ou também um registro/pendência
+   consultável?
+
+Nenhuma dessas foi decidida nesta rodada — todas seguem marcadas como pendência do usuário.
+Checkpoint local: commit `docs: define order stock integration contract`, sem push, sem deploy,
+sem nenhuma alteração de código/banco/dados.
+
+---
+
 # 10. Histórico de atualizações deste roadmap
 
 | Data | Alteração |
@@ -1285,3 +1574,4 @@ push, nenhum deploy. Checkpoint local: commit `docs: record inventory purchase v
 | 2026-08-31 | **Validação manual do usuário — filtro de Produtos por Categoria e Tipo — APROVADA INTEGRALMENTE, sem nenhuma alteração de código, banco ou função nesta entrada.** Os 12 passos do checklist foram exercitados em navegador real contra o Supabase remoto e todos aprovados, sem nenhum problema encontrado: (1) abertura e fechamento do painel "Filtros"; (2) lista de Categorias só com as categorias em uso, em ordem alfabética, e opção "Sem categoria" quando aplicável; (3) múltiplas categorias marcadas combinam por **OU** (união); (4) múltiplos tipos marcados combinam por **OU**; (5) Categoria e Tipo combinados aplicam **E** entre os grupos; (6) filtro **"Sem categoria"** traz só os Produtos sem categoria vinculada; (7) **contador de filtros ativos** no botão (`Filtros (N)`); (8) **chips removíveis individualmente**, com o nome integral da categoria/tipo; (9) **"Limpar filtros" preserva a busca** (`searchTerm`) e a ordenação; (10) **integração busca + filtros + ordenação** funcionando em conjunto (ordem dados → busca → Categoria → Tipo → ordenação); (11) **as seleções permanecem ao fechar e reabrir o painel** na mesma sessão (caixas marcadas e contador mantidos); (12) painel **fecha por Escape e por clique externo**, e **recarregar a página (F5) zera todos os filtros** (estado não persistido). Categorias com espaço, acento, barra e parênteses confirmadas com rótulo lido corretamente e checkbox clicável, comprovando na prática a correção de acessibilidade dos IDs técnicos (`useId()` + índice, texto cru da Categoria nunca em `id`/`htmlFor`/`aria-labelledby`). **Implementação aprovada manualmente.** **Nenhuma alteração de banco, migration, Edge Function ou regra de negócio nesta rodada; nenhuma reserva ou consumo de estoque implementado.** Base técnica reafirmada (rodada anterior): `ProductsPage.test.tsx` 120/120, suíte `vitest` completa 1750/1750, `npm run lint` (0 erros, 8 avisos pré-existentes), `npx tsc -b` e `npm run build` limpos. **Frontend ainda não publicado nesta rodada** — a validação foi feita contra o app rodando localmente sobre o Supabase remoto real. **Sincronização no GitHub da branch `feature/inventory-operations` realizada somente após este commit documental** (`git push origin feature/inventory-operations`, sem force, nenhuma outra branch, nenhum deploy). Módulo 3 continua **NÃO concluído**. Percentual macro **não alterado** (validação manual de um recurso de listagem só frontend, não uma fase nova). Checkpoint: commit `docs: record product filter validation`. |
 | 2026-08-31 | **Janela "Novo produto"/"Editar produto" — ordem dos campos de cada plate invertida e novos formatos de digitação de tempo aceitos; tudo LOCAL, só frontend.** **(1) Ordem dos campos.** Em cada card de Plate, na criação e na edição, os campos passam a ser **Peso (g) à esquerda | Tempo de produção à direita** (antes era o contrário). Só a posição visual mudou: o contrato enviado por `onSubmit`/`create_product_with_plates`/`update_product_full` continua `{ production_time_seconds, weight_grams }`, e todo plate adicionado dinamicamente herda a mesma ordem. **(2) Formatos de tempo.** `parseDurationToSeconds` (`frontend/src/lib/forms/durationField.ts`) ganhou três formas compostas além das que já aceitava (`HH:MM`, `HH:MM:SS`, `1h30min`, `1,5h`, `90m`, `30m45s`…): `18h32` = 18 h 32 min (o número depois de `h` é sempre minuto, 0–59); `19m44` = 19 min 44 s e `32min20` = 32 min 20 s (o número depois de `m`/`min` é sempre segundo, 0–59). Aceita maiúsculas/minúsculas e ignora espaços externos. **Rejeitados, com mensagem clara, nunca normalizados em silêncio**: minutos/segundos acima de 59 nessas formas (`18h75`, `19m70`, `32min99`), negativos (`-1h20`), texto residual/parcial (`18h32abc`, `h32`, `min20`, `1h2m3`), `NaN`, `Infinity` e notação exponencial. As formas antigas seguem idênticas — `90m` e `01:90:00` continuam **carregando** para a unidade superior (só as novas formas compostas têm o teto de 0–59). Placeholder/texto auxiliar dos campos de tempo (por plate e do "Tempo efetivo" do ajuste manual) atualizado para `Ex.: 18:32, 18h32, 19m44 ou 32min20`, associado por `aria-describedby`. **(3) Precisão de segundos — auditada e preservada.** O contrato de armazenamento já é **segundos inteiros** (`products.default_print_time_seconds`, `product_plates.production_time_seconds`, `products.production_time_manual_override_seconds` — renomeados de `_minutes` numa migration anterior); o envio (criação e edição) já mandava exatamente o resultado de `parseDurationToSeconds`, sem arredondar. O único ponto com perda era o **pré-preenchimento da edição / exibição do total**, que usava `formatSecondsToHHMM` e truncava os segundos (um "Salvar" sem tocar no campo então os perdia). Novo `formatSecondsAdaptive`: mostra `hh:mm` quando o valor não tem segundos e `hh:mm:ss` quando tem — um plate salvo como `00:30:45` reabre como `00:30:45` e faz round-trip sem perda. **Nenhuma migration criada ou aplicada, nenhuma Edge Function publicada, nenhum dado remoto tocado** (o contrato já suportava segundos; a auditoria confirmou isso antes de qualquer edição). Nenhuma alteração em Pedidos, Produção ou Estoque além de continuarem lendo o mesmo contrato. **Validação técnica**: `durationField.test.ts` + `productPlates.test.ts` + `ProductForm.test.tsx` (específicos) **347/347**; suíte `vitest` completa **1807/1807** (1750 → 1807, +57 testes novos cobrindo ordem dos campos incl. plates adicionados, formatos legado e novos no submit, erros de faixa bloqueando o envio, round-trip de edição preservando segundos, ajuste manual, somas com carry, `formatSecondsAdaptive`); `npm run lint` (0 erros, mesmos 8 avisos `react-refresh` pré-existentes em arquivos não tocados); `npx tsc -b` e `npm run build` limpos; `git diff --check` sem problemas; varredura de segredos no diff sem resultado. `npx prettier --write` normalizou de passagem algumas linhas longas pré-existentes nos mesmos 7 arquivos já modificados (nenhum arquivo novo tocado). **Validação manual do usuário ainda pendente.** **Nenhum deploy; nenhuma reserva ou consumo de estoque implementado.** Módulo 3 continua **NÃO concluído**. Percentual macro **não alterado** (ajuste de formulário só frontend, não uma fase nova). Checkpoint: commit `feat: support flexible plate production times` (`5a3ffc3`), sem push, sem deploy. |
 | 2026-09-01 | **Validação manual do usuário — nova ordem dos campos de plate e formatos flexíveis de tempo — APROVADA INTEGRALMENTE, sem nenhuma alteração de código, banco ou função nesta entrada.** Os 12 passos do checklist foram exercitados em navegador real contra o Supabase remoto e todos aprovados, sem nenhum problema: (1) Peso (g) à esquerda e Tempo de produção à direita em cada card de Plate; (2) a mesma ordem no segundo plate e em plates adicionados dinamicamente; (3) `18h32` interpretado como 18 h 32 min; (4) `19m44` interpretado como 19 min 44 s; (5) `32min20` interpretado como 32 min 20 s; (6) formato anterior `HH:MM` preservado; (7) os totais preservam e somam os segundos corretamente (carry de 60 s → 1 min e 60 min → 1 h); (8) formatos com minutos ou segundos fora da faixa 0–59 (`18h75`, `19m70`, `32min99`) são bloqueados com mensagem clara, sem normalização silenciosa; (9) o ajuste manual de totais aceita os novos formatos; (10) salvar → fechar → editar de novo preserva os segundos (um plate salvo como `00:30:45` reabre como `00:30:45`); (11) a Ficha Técnica apresenta o tempo correto; (12) o Produto TESTE usado na validação foi removido pelo usuário após a conferência. **Funcionalidade aprovada integralmente.** **Armazenamento exato em segundos confirmado** (`products.default_print_time_seconds`, `product_plates.production_time_seconds`, `products.production_time_manual_override_seconds` — inteiros em segundos); **nenhuma migration necessária** (a auditoria da rodada anterior confirmou que o contrato já suportava segundos; o único ponto de truncamento estava no pré-preenchimento da edição/exibição do total, corrigido no frontend com `formatSecondsAdaptive`). **Nenhuma alteração de banco ou Edge Function; nenhuma reserva ou consumo de estoque implementado.** Base técnica reafirmada (rodada anterior): `durationField.test.ts`/`productPlates.test.ts`/`ProductForm.test.tsx` 347/347, suíte `vitest` completa 1807/1807, `npm run lint` (0 erros, 8 avisos pré-existentes), `npx tsc -b` e `npm run build` limpos. **Frontend não publicado nesta rodada** — a validação foi feita contra o app rodando localmente sobre o Supabase remoto real. **Sincronização no GitHub da branch `feature/inventory-operations` realizada somente após este commit documental** (`git push origin feature/inventory-operations`, sem force, nenhuma outra branch, nenhum deploy). Módulo 3 continua **NÃO concluído**. Percentual macro **não alterado** (validação manual de um ajuste de formulário só frontend, não uma fase nova). Checkpoint: commit `docs: record flexible production time validation`. |
+| 2026-09-01 | **Auditoria somente-leitura do Módulo 3 + correção documental + congelamento arquitetural do próximo incremento (motor de reserva/consumo/liberação de estoque por Pedido).** Nenhum código, migration, RPC, Edge Function, interface ou dado remoto alterado. **Correções de estado obsoleto** (histórico datado preservado; correção acrescentada, nunca sobrescrita): a tabela macro (§2) e a de módulos (§5) diziam "27 migrations", "`stock_movements` só local / não aplicado", "nenhuma implementação de inventário físico", "cadastro mestre em implementação", "migrations de Acessórios/Embalagens não aplicadas", "composição do Produto é o próximo incremento", "`product_filaments` estrutura ativa", "`spool_tares` pendente", "Módulo 3 ~21%". Estado real auditado: **45/45 migrations sincronizadas**; `stock_movements`+`register_stock_movement`, filamentos (tipos/rolos/movimentações/pesagem) e Compras **aplicados ao remoto**; **7 Edge Functions de Estoque publicadas** (v1); cadastro mestre + movimentações + filamentos + compras **validados manualmente** (2026-08-27/28/29); `spool_tares` **descartada por arquitetura** (tara virou `filament_spools.empty_spool_weight_grams` por rolo); `product_filaments`/`product_plate_filaments` **LEGADAS** desde `20260829180000` (filamento/cor saiu do Produto e foi para o Pedido); composição do Produto por plates **já concluída**. **Percentual do Módulo 3 recalculado pela metodologia das 7 fases** → F1 100% / F2 70% / F3 70% / F4 65% / F5 50% / F6 0% / F7 0% = **355/7 ≈ 51%** (ver §9c.2 para as evidências por fase). Módulo 3 **continua NÃO concluído**. **Congelado em §9c** (nova seção): as 8 regras aprovadas pelo usuário para o motor (reserva de Acessórios/Embalagens na entrada da Fila; reserva de filamento só após cores completas; saldo insuficiente alerta mas não impede a Fila; produção só começa com tudo reservado; reserva→consumo ao entrar em `IN_PRODUCTION`; cancelamento antes do consumo libera; sem devolução automática pós-consumo; gramas por filamento por unidade/plate somando o peso congelado do plate); **auditoria do snapshot de Acessórios/Embalagens** → **não existe** estrutura order-scoped (só `order_item_plates` e `order_item_unit_plate_filaments` são congelados) → criar `order_item_accessories`/`order_item_packaging` copiados atomicamente na criação do item é **requisito obrigatório**; **auditoria de gramas por filamento** → `order_item_unit_plate_filaments` guarda só `filament_type_id` (sem gramas, sem rolo), várias cores por unidade/plate permitidas, seleção editável até `IN_PRODUCTION` → campo de gramas é requisito, soma = peso do plate, sem divisão implícita; **alocação entre rolos** → Pedido escolhe tipo, estoque está em rolos, `register_filament_movement` exige `spool_id` → 3 opções (reserva por tipo com alocação de rolo no consumo / reserva já aloca rolo / híbrido), recomendação preliminar "reserva por tipo, rolo no consumo (R1)", política de escolha de rolo e escolha manual **pendentes do usuário**; **semântica da reserva** → `RESERVATION` no ledger físico causaria baixa dupla e `filament_movements` exige rolo → 3 arquiteturas comparadas (A eventos no ledger atual / B ledger separado / C coluna `reserved` materializada + ledger de reservas), **recomendação: C** (preserva o invariante dos ledgers físicos, disponibilidade O(1) = físico − reservado, resolve reserva de filamento por tipo); **Pedidos legados** → nunca modificar automaticamente, nunca reconstruir composição do Produto atual, nunca reserva retroativa, migration identifica Pedidos em Fila/Produção e os deixa em modo "sem rastreamento", decisões do usuário sobre reprocessar ou exigir Fila vazia; **fronteira Módulo 3 × Módulo 4** → Módulo 4 só inicia depois do motor aplicado+validado **e** do consumo valorado (política de custo — snapshot ou custo médio — a definir). **8 decisões do usuário ficam pendentes** (§9c.10). Nenhum push, nenhum deploy. Checkpoint: commit `docs: define order stock integration contract`. |

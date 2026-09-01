@@ -685,8 +685,10 @@ migrations `20260827100000`/`103000`/`110000`/`113000`, branch `feature/inventor
 originais decodificavam minuto 60/90, inválidos, nunca aplicados com esses nomes). Edge
 Functions `filament-types`/`filament-spools`/`filament-movements` publicadas e ativas. Teste de
 integração SQL executado contra o remoto (51 PASS/0 FAIL/0 SKIP, dentro de
-`BEGIN...ROLLBACK`, zero resíduo). Ainda NÃO validado manualmente pelo usuário pela
-interface.** Regras
+`BEGIN...ROLLBACK`, zero resíduo).** **Correção de 2026-09-01: o MVP de Filamentos (tipos,
+rolos, movimentações, pesagem, arquivamento) foi validado manualmente pelo usuário em
+2026-08-28, após três rodadas de reteste de layout — a frase original "Ainda NÃO validado
+manualmente" está superada.** Regras
 operacionais do MVP — versão inicial para validação, sujeitas a revisão após o teste
 prático (ver `01_ESPECIFICACAO_FUNCIONAL.md` §16/§17/§20). As subseções 12.1-12.4 abaixo
 descrevem o schema **realmente implementado**, que diverge em três pontos deliberados da
@@ -845,6 +847,14 @@ validadas manualmente, sem necessidade real.
 ---
 
 ## 12.4 `product_filaments`
+
+> **LEGADA desde a migration `20260829180000` (2026-08-29, aplicada ao remoto).** A
+> composição de filamento/cor **saiu do Produto** e passou a ser escolhida **no Pedido**,
+> por unidade e por plate (`order_item_unit_plate_filaments`, ver §11 e
+> `05_ROADMAP_MODULOS.md` §9c). `product_filaments` e `product_plate_filaments` continuam
+> no schema como histórico, mas **nenhuma tela, RPC de Produto ou fluxo lê/escreve nelas**;
+> `set_product_filaments` não é chamada por nada. O texto abaixo descreve o modelo como foi
+> criado e é mantido só para referência.
 
 **Preparação do modelo de composição de produto por filamento** (não um ledger de
 estoque) — "quais tipos de filamento e quanto peso teórico por unidade produzida" um
@@ -1055,6 +1065,19 @@ esta funcionalidade.
 
 # 15. Grupo: Estoque
 
+> **Estado em 2026-09-01:** `stock_movements` + `register_stock_movement`,
+> `filament_movements` + `register_filament_movement`/`register_filament_weighing`,
+> `inventory_purchases` + `register_inventory_purchase` estão **aplicados ao Supabase remoto**
+> (45/45 migrations sincronizadas) e as Edge Functions correspondentes estão publicadas
+> (`stock-movements`, `filament-movements`, `inventory-purchases`, v1). O inventário manual
+> (saldo/entrada/saída/ajuste/histórico/pesagem/compras) foi validado manualmente pelo
+> usuário. As frases "migration ainda NÃO aplicada" / "Implementado localmente" nas
+> subseções abaixo são históricas (data de redação). O **motor de reserva/consumo/liberação
+> por Pedido** continua sem nenhuma linha de código — seu contrato arquitetural está
+> congelado em `05_ROADMAP_MODULOS.md` §9c (8 regras aprovadas, requisito de snapshot de
+> Acessórios/Embalagens por Pedido, gramas por filamento por unidade/plate, alocação entre
+> rolos e 3 arquiteturas de reserva comparadas com recomendação — opção C).
+
 ## 15.1 `stock_movements`
 
 **Implementado localmente em 2026-08-27 (Módulo 3, Incremento 1 — ver
@@ -1156,8 +1179,14 @@ liberação de reserva; perda; ajuste; correção.*
 
 ## 15.2 `stock_reservations`
 
-**Não implementada** — continua só especificada. Fica para o Incremento 7 (reserva e
-consumo automático pelo pedido), fora do escopo do Incremento 1 (2026-08-27).
+**Não implementada** — continua só especificada. Fica para o incremento do **motor de
+reserva/consumo/liberação por Pedido** (contrato congelado em `05_ROADMAP_MODULOS.md`
+§9c). **Atenção:** a forma final da reserva ainda é decisão do usuário (§9c.7/§9c.10) — a
+recomendação técnica registrada (opção C) prevê uma coluna materializada `reserved` (por
+item, para Acessórios/Embalagens; por `filament_type`, para Filamentos) **mais** um ledger
+de reservas auditável; pode ou não se chamar `stock_reservations` e pode ser mais de uma
+tabela. O rascunho de campos abaixo é da especificação original e **não** deve ser tratado
+como o modelo aprovado.
 
 ### Campos
 
@@ -1172,6 +1201,11 @@ consumo automático pelo pedido), fora do escopo do Incremento 1 (2026-08-27).
 ---
 
 # 16. Grupo: Inventário
+
+> **Estado em 2026-09-01: NÃO INICIADO.** `inventories` e `inventory_items` (inventário
+> físico/periódico) continuam **só especificados** — nenhuma migration, nenhuma RPC, nenhuma
+> tela. É um incremento próprio do Módulo 3, independente e posterior ao motor de
+> reserva/consumo por Pedido (ver `05_ROADMAP_MODULOS.md` §9c).
 
 ## 16.1 `inventories`
 

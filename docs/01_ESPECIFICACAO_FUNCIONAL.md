@@ -414,8 +414,9 @@ Estoque mínimo inicial:
 teste prático do usuário.** Aprovadas em 2026-08-27. **Atualização (mesmo dia,
 continuação — Incremento 4):** tipos/rolos/movimentações de filamento implementados,
 migrations aplicadas ao Supabase remoto e as 3 Edge Functions publicadas (ver
-`05_ROADMAP_MODULOS.md` §9b); **ainda não validados manualmente pelo usuário pela
-interface**:
+`05_ROADMAP_MODULOS.md` §9b). **Correção de 2026-09-01: o MVP de Filamentos foi validado
+manualmente pelo usuário em 2026-08-28 (a frase "ainda não validados manualmente" está
+superada), e as Compras das 3 categorias foram validadas em produção real em 2026-08-29.**
 
 - Um **tipo de filamento** é definido pela combinação **material + fabricante + linha +
   cor** — não existe "tipo" sem essas quatro dimensões.
@@ -434,10 +435,13 @@ interface**:
   substituindo a proposta anterior de 5 valores minúsculos de `03_MODELO_BANCO_DADOS.md`
   §12, nunca implementada — ver nota de divergência lá). DESCARTADO é terminal: nenhum
   rolo descartado é reativado automaticamente.
-- A ficha do produto deverá **futuramente** aceitar **múltiplos filamentos/cores**, cada
-  um com seu próprio peso teórico — o MODELO para isso (`product_filaments`) já existe
-  localmente, mas o **consumo automático continua fora de escopo** (nenhuma automação
-  lê essa tabela ainda).
+- **Múltiplos filamentos/cores por unidade produzida**: decisão revista em 2026-08-29 —
+  a escolha de filamento/cor **não fica mais na ficha do Produto**; passou a ser feita
+  **no Pedido**, por unidade e por plate (`order_item_unit_plate_filaments`). A tabela
+  `product_filaments` do Produto ficou **LEGADA** (nenhuma tela ou fluxo a usa). O
+  **consumo automático continua fora de escopo** — seu contrato está congelado em
+  `05_ROADMAP_MODULOS.md` §9c (incluindo a regra 8: gramas por filamento por unidade/
+  plate, somando o peso congelado do plate).
 
 ---
 
@@ -556,6 +560,47 @@ código** — são só a intenção aprovada. Ver `03_MODELO_BANCO_DADOS.md` §1
 - **Movimentações automáticas** (reserva/consumo, ainda não implementadas) terão
   proteção contra duplicidade por pedido, item e evento — nenhuma pode ser registrada
   duas vezes para o mesmo evento.
+
+## 20.1 Motor de reserva/consumo/liberação por Pedido — regras aprovadas (2026-09-01)
+
+**Estas 8 regras são decisões DEFINITIVAS do usuário** (diferente da lista acima, que era
+"ponto de partida sujeito a revisão"). Continuam **sem nenhuma linha de código** — o
+contrato arquitetural completo está congelado em `05_ROADMAP_MODULOS.md` §9c; a
+implementação é de rodada futura, com autorização separada.
+
+1. **Acessórios e embalagens** são reservados quando o Pedido entra em **Fila de produção**
+   (`IN_PRODUCTION_QUEUE`).
+2. **Filamentos** só são reservados **depois** que todas as escolhas de filamento/cor por
+   unidade e por plate estiverem **completas** (nunca antes).
+3. **Saldo insuficiente não impede** o Pedido de permanecer na Fila — apenas **gera
+   alerta**.
+4. A **produção não pode começar** (`IN_PRODUCTION`) enquanto **todos os insumos** não
+   estiverem **integralmente reservados**.
+5. Ao entrar em **`IN_PRODUCTION`**, a **reserva é convertida em consumo físico** — de
+   todos os insumos (acessórios, embalagens e filamentos). *Isto substitui a regra
+   anterior desta seção que consumia embalagens só em "Aguardando entrega".*
+6. **Cancelamento anterior ao consumo** libera **integralmente** as reservas.
+7. **Depois do consumo não há devolução automática** — qualquer retorno é uma
+   movimentação **manual e auditável**.
+8. Em **plate multicor**, os **gramas de cada filamento** devem ser informados; a **soma
+   por unidade e plate** deve ser **exatamente igual** ao peso congelado daquele plate.
+   Nunca dividir igualmente por padrão, nunca usar o peso inteiro do plate para cada cor,
+   nunca inferir a quantidade em silêncio.
+
+Reafirmado (já vigente): o Pedido pode entrar na Fila **sem filamentos definidos**; as
+cores/filamentos são escolhidos **no Pedido**, por unidade e plate; o Produto **não tem
+mais vínculo ativo** com filamento/cor; a ausência de filamentos bloqueia **só o início da
+produção**; reserva e consumo são **atômicos e idempotentes**; **nenhum saldo negativo**
+para iniciar produção; entrar na Fila **não consome** estoque.
+
+**Ainda dependem de decisão do usuário** (bloqueiam a modelagem — ver §9c.10 do roadmap):
+reserva de filamento por **tipo** ou por **rolo**; **política de escolha automática de
+rolo** (o rascunho "rolo aberto primeiro, depois o mais antigo" desta seção **não está
+confirmado**) e se haverá escolha manual de rolo na Produção; **arquitetura da reserva**
+(recomendação técnica: coluna materializada `reservado` + ledger de reservas auditável, sem
+`RESERVATION` nos ledgers físicos); **tolerância** da soma de gramas vs. peso do plate;
+tratamento dos **Pedidos legados** quando a migration for aplicada; **política de valoração
+do consumo** (pré-requisito do Módulo 4).
 
 ---
 
