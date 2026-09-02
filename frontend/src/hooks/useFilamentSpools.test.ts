@@ -2,7 +2,12 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/errors'
 
-const { listFilamentSpoolsMock, createFilamentSpoolMock, updateFilamentSpoolMock, deleteFilamentSpoolMock } = vi.hoisted(() => ({
+const {
+  listFilamentSpoolsMock,
+  createFilamentSpoolMock,
+  updateFilamentSpoolMock,
+  deleteFilamentSpoolMock,
+} = vi.hoisted(() => ({
   listFilamentSpoolsMock: vi.fn(),
   createFilamentSpoolMock: vi.fn(),
   updateFilamentSpoolMock: vi.fn(),
@@ -56,14 +61,43 @@ describe('useFilamentSpools', () => {
     deleteFilamentSpoolMock.mockReset()
   })
 
-  it('loads the spool list for the given filament type on mount', async () => {
+  it('loads the spool list for the given filament type on mount (single id normalised to a one-element list)', async () => {
     listFilamentSpoolsMock.mockResolvedValue([spool])
 
     const { result } = renderHook(() => useFilamentSpools('t1'))
     await waitFor(() => expect(result.current.isLoading).toBe(false))
 
-    expect(listFilamentSpoolsMock).toHaveBeenCalledWith('t1')
+    expect(listFilamentSpoolsMock).toHaveBeenCalledWith(['t1'])
     expect(result.current.spools).toEqual([spool])
+  })
+
+  it('loads spools for a consolidated group (several filament_type_id) in a single call', async () => {
+    listFilamentSpoolsMock.mockResolvedValue([spool, otherSpool])
+
+    const { result } = renderHook(() => useFilamentSpools(['t2', 't1']))
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    expect(listFilamentSpoolsMock).toHaveBeenCalledTimes(1)
+    expect(listFilamentSpoolsMock).toHaveBeenCalledWith(['t1', 't2'])
+    expect(result.current.spools).toEqual([spool, otherSpool])
+  })
+
+  it('create() in group mode requires an explicit filament_type_id', async () => {
+    listFilamentSpoolsMock.mockResolvedValue([])
+    createFilamentSpoolMock.mockResolvedValue(rawWriteResponse(spool))
+
+    const { result } = renderHook(() => useFilamentSpools(['t1', 't2']))
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    await expect(result.current.create({ nominal_weight_grams: 1000 })).rejects.toThrow()
+
+    await act(async () => {
+      await result.current.create({ nominal_weight_grams: 1000, filament_type_id: 't2' })
+    })
+    expect(createFilamentSpoolMock).toHaveBeenCalledWith({
+      nominal_weight_grams: 1000,
+      filament_type_id: 't2',
+    })
   })
 
   it('create() injects filament_type_id, inserts the created spool at the top with has_movement_history=false (never undefined)', async () => {
@@ -78,7 +112,10 @@ describe('useFilamentSpools', () => {
       created = await result.current.create({ nominal_weight_grams: 1000 })
     })
 
-    expect(createFilamentSpoolMock).toHaveBeenCalledWith({ nominal_weight_grams: 1000, filament_type_id: 't1' })
+    expect(createFilamentSpoolMock).toHaveBeenCalledWith({
+      nominal_weight_grams: 1000,
+      filament_type_id: 't1',
+    })
     expect(created).toEqual(spool)
     expect(result.current.spools).toEqual([spool, otherSpool])
   })
@@ -108,7 +145,9 @@ describe('useFilamentSpools', () => {
     const { result } = renderHook(() => useFilamentSpools('t1'))
     await waitFor(() => expect(result.current.isLoading).toBe(false))
 
-    await expect(act(async () => result.current.update('s1', { status: 'ABERTO' }))).rejects.toBeInstanceOf(ApiError)
+    await expect(
+      act(async () => result.current.update('s1', { status: 'ABERTO' })),
+    ).rejects.toBeInstanceOf(ApiError)
     expect(result.current.spools).toEqual([spool])
   })
 

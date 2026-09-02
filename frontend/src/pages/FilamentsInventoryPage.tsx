@@ -1,54 +1,81 @@
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { FilterIcon } from 'lucide-react'
 import { InventoryPageShell } from '@/components/inventory/InventoryPageShell'
-import { FilamentTypeForm, type FilamentTypeFormValues } from '@/components/inventory/FilamentTypeForm'
+import {
+  FilamentTypeForm,
+  type FilamentTypeFormValues,
+} from '@/components/inventory/FilamentTypeForm'
 import { FilamentTypeDrawer } from '@/components/inventory/FilamentTypeDrawer'
 import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
+import { ColumnResizeHandle } from '@/components/dataTable/ColumnResizeHandle'
 import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
 import {
   TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
   TABLE_COMPACT_TEXT_CLASSNAME,
 } from '@/components/dataTable/tableTypography'
 import { StockLevelBadge, getStockLevel } from '@/components/inventory/StockMovementPanel'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
+import { TableHead } from '@/components/ui/table'
 import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table'
 import { useAuth } from '@/context/AuthContext'
 import { useFilamentTypes } from '@/hooks/useFilamentTypes'
 import { usePersistentColumnWidths } from '@/hooks/usePersistentColumnWidths'
 import { ApiError } from '@/lib/api/errors'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
+import {
+  groupFilamentTypes,
+  matchesFilamentGroupSearch,
+  type FilamentGroup,
+} from '@/lib/inventory/filamentGroups'
+import {
+  EMPTY_FILAMENT_GROUP_FILTERS,
+  filamentFilterOptions,
+  filamentGroupFilterCount,
+  filterFilamentGroups,
+  isFilamentSpoolRangeInvalid,
+  type FilamentFilterOption,
+  type FilamentGroupFilterState,
+} from '@/lib/inventory/filamentGroupFilters'
 import type { ColumnWidthSpec } from '@/lib/tables/columnWidths'
 import { cn } from '@/lib/utils'
 import type { FilamentTypeSummary } from '@/types/domain'
 
-// Módulo 3 (Estoque), Incremento 4 — MVP local de filamentos. Segue o mesmo
-// padrão visual de InventoryPage.tsx (Acessórios/Embalagens), mas com uma
-// forma de dado diferente: listagem de TIPOS (agregados via
-// vw_filament_type_summary), com drill-down para os ROLOS de cada tipo
-// (FilamentTypeDrawer) — por isso não reaproveita InventoryAreaPanel.
+// Módulo 3 (Estoque) — listagem de Filamentos CONSOLIDADA por Material +
+// Linha + Cor (2026-09-01). A coluna Fabricante saiu da listagem principal
+// (tipos de fabricantes diferentes com o mesmo Material+Linha+Cor viram uma
+// única linha); o fabricante continua íntegro no banco, no cadastro, nas
+// compras, nos rolos, no histórico e nos detalhes de "Ver rolos". Nenhuma
+// alteração de schema/migration/RPC/dado — só leitura via
+// vw_filament_type_summary + agrupamento em JS.
 
 const FILAMENTS_TABLE_ID = 'inventory-filaments'
-// Sem SortableColumnHeader aqui: esta tabela nunca teve ordenação (só
-// Nome/... nas demais listagens têm) — adicionar ordenação está fora do
-// escopo desta rodada (padronização de tipografia/datas/colunas
-// redimensionáveis/persistência), então todo cabeçalho usa
-// ResizableTableHead puro. minWidth de "actions" (300px) garante que "Ver
-// rolos" + "Editar" + "Excluir" nunca quebrem em 2 linhas mesmo no menor
-// arraste possível — mesmo raciocínio já aplicado à coluna Ações de
-// Pedidos/Produtos/Acessórios/Embalagens.
+// Sem a coluna 'manufacturer' e sem a coluna 'is_active' (Switch por tipo,
+// ambíguo num grupo com vários tipos) — normalizeColumnWidths descarta as
+// larguras persistidas dessas duas colunas removidas e preserva as demais,
+// sem limpar nenhum outro item do localStorage. 'actions' agora só tem
+// "Ver rolos", por isso é bem mais estreita que antes.
 const FILAMENTS_COLUMN_SPECS: ColumnWidthSpec[] = [
   { id: 'material', defaultWidth: 110, minWidth: 80, maxWidth: 220 },
-  { id: 'manufacturer', defaultWidth: 155, minWidth: 90, maxWidth: 340 },
-  { id: 'line', defaultWidth: 130, minWidth: 90, maxWidth: 300 },
-  { id: 'color', defaultWidth: 130, minWidth: 90, maxWidth: 300 },
-  { id: 'available', defaultWidth: 130, minWidth: 90, maxWidth: 250 },
-  { id: 'spools', defaultWidth: 90, minWidth: 70, maxWidth: 160 },
-  { id: 'situation', defaultWidth: 130, minWidth: 90, maxWidth: 250 },
-  { id: 'is_active', defaultWidth: 90, minWidth: 75, maxWidth: 180 },
-  { id: 'actions', defaultWidth: 330, minWidth: 300, maxWidth: 500 },
+  { id: 'line', defaultWidth: 150, minWidth: 90, maxWidth: 320 },
+  { id: 'color', defaultWidth: 150, minWidth: 90, maxWidth: 320 },
+  { id: 'available', defaultWidth: 140, minWidth: 100, maxWidth: 260 },
+  { id: 'spools', defaultWidth: 170, minWidth: 130, maxWidth: 280 },
+  { id: 'situation', defaultWidth: 140, minWidth: 100, maxWidth: 250 },
+  { id: 'actions', defaultWidth: 140, minWidth: 110, maxWidth: 240 },
 ]
 
 function toErrorMessage(err: unknown): string {
@@ -60,22 +87,100 @@ function formatGrams(value: number): string {
   return `${value.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}g`
 }
 
-function matchesSearch(type: FilamentTypeSummary, normalizedTerm: string): boolean {
-  if (!normalizedTerm) return true
+// Botão de filtro multisseleção (Material / Linha / Cor) — mesmo padrão
+// visual do filtro de Produtos (Popover não-modal + checkboxes; OR dentro
+// do grupo). IDs técnicos só de useId + índice, nunca o texto cru.
+function MultiSelectFilterButton({
+  label,
+  ariaLabel,
+  options,
+  selected,
+  onToggle,
+  onClear,
+}: {
+  label: string
+  ariaLabel: string
+  options: FilamentFilterOption[]
+  selected: Set<string>
+  onToggle: (value: string) => void
+  onClear: () => void
+}) {
+  const idPrefix = useId()
+  const count = selected.size
   return (
-    normalizeForSearch(type.manufacturer).includes(normalizedTerm) ||
-    normalizeForSearch(type.line).includes(normalizedTerm) ||
-    normalizeForSearch(type.commercial_color).includes(normalizedTerm) ||
-    normalizeForSearch(type.material).includes(normalizedTerm)
+    <Popover>
+      <PopoverTrigger
+        className={cn(
+          buttonVariants({ variant: 'outline', size: 'sm' }),
+          'gap-1.5',
+          count > 0 && 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark',
+        )}
+      >
+        <FilterIcon />
+        {count > 0 ? `${label} (${count})` : label}
+      </PopoverTrigger>
+      <PopoverContent aria-label={ariaLabel}>
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-semibold">{label}</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onClear}
+              disabled={count === 0}
+              className="text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark h-7 px-2"
+            >
+              Limpar
+            </Button>
+          </div>
+          {options.length === 0 ? (
+            <p className="text-muted-foreground text-xs">Nenhuma opção disponível.</p>
+          ) : (
+            <div className="flex max-h-56 flex-col gap-1.5 overflow-y-auto">
+              {options.map((option, index) => {
+                const checkboxId = `${idPrefix}-opt-${index}`
+                return (
+                  <label
+                    key={option.value}
+                    htmlFor={checkboxId}
+                    className="flex cursor-pointer items-center gap-2 text-sm"
+                  >
+                    <Checkbox
+                      id={checkboxId}
+                      checked={selected.has(option.value)}
+                      onCheckedChange={() => onToggle(option.value)}
+                    />
+                    <span className="truncate">{option.label}</span>
+                  </label>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
 
 export function FilamentsInventoryPage() {
-  const { types, isLoading, error, refetch, create, update, delete: deleteType } = useFilamentTypes()
+  const {
+    types,
+    isLoading,
+    error,
+    refetch,
+    create,
+    update,
+    delete: deleteType,
+  } = useFilamentTypes()
   const [searchTerm, setSearchTerm] = useState('')
   const { session } = useAuth()
   const userId = session?.user.id ?? null
   const columnWidths = usePersistentColumnWidths(FILAMENTS_TABLE_ID, userId, FILAMENTS_COLUMN_SPECS)
+
+  const [filters, setFilters] = useState<FilamentGroupFilterState>(EMPTY_FILAMENT_GROUP_FILTERS)
+  const [minSpoolsInput, setMinSpoolsInput] = useState('')
+  const [maxSpoolsInput, setMaxSpoolsInput] = useState('')
 
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
@@ -97,20 +202,79 @@ export function FilamentsInventoryPage() {
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  // openTypeId (não o objeto inteiro): o resumo exibido no drawer precisa
-  // ficar vivo — derivado de `types` a cada render — para refletir um
-  // refetch() disparado de dentro do drawer (ver onSummaryChanged). Um
-  // snapshot congelado no momento do clique nunca atualizaria depois de uma
-  // movimentação feita no painel aninhado (achado real da validação manual,
-  // 2026-08-28: saldo consolidado nunca aparecia atualizado).
-  const [openTypeId, setOpenTypeId] = useState<string | null>(null)
+  // openGroupKey (não o grupo inteiro): o drawer precisa de um grupo VIVO —
+  // derivado de `types` a cada render — para refletir um refetch disparado
+  // de dentro dele e, principalmente, uma edição de tipo que mova o tipo
+  // para outro grupo (o grupo atual pode encolher ou sumir).
+  const [openGroupKey, setOpenGroupKey] = useState<string | null>(null)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
-  const openType = useMemo(() => types.find((type) => type.filament_type_id === openTypeId) ?? null, [types, openTypeId])
 
-  const filteredTypes = useMemo(() => {
+  const groups = useMemo(() => groupFilamentTypes(types), [types])
+  const filterOptions = useMemo(() => filamentFilterOptions(types), [types])
+
+  const openGroup = useMemo(
+    () => groups.find((group) => group.key === openGroupKey) ?? null,
+    [groups, openGroupKey],
+  )
+
+  // O drawer só fica aberto enquanto o grupo existir. Se o último tipo do
+  // grupo for editado para outro Material/Linha/Cor (ou excluído), openGroup
+  // vira null e o diálogo fecha sozinho — sem efeito nem setState em render.
+  // O grupo "permanece se houver outro tipo/fabricante" (openGroup segue não
+  // nulo) e "desaparece se não houver nenhum tipo restante".
+  const isDrawerVisible = isDrawerOpen && openGroup !== null
+
+  function handleDrawerOpenChange(open: boolean) {
+    setIsDrawerOpen(open)
+    if (!open) setOpenGroupKey(null)
+  }
+
+  const rangeInvalid = isFilamentSpoolRangeInvalid(filters)
+
+  const visibleGroups = useMemo(() => {
     const term = normalizeForSearch(searchTerm)
-    return types.filter((type) => matchesSearch(type, term))
-  }, [types, searchTerm])
+    return filterFilamentGroups(groups, filters).filter((group) =>
+      matchesFilamentGroupSearch(group, term),
+    )
+  }, [groups, filters, searchTerm])
+
+  const activeFilterCount = filamentGroupFilterCount(filters)
+
+  function toggleFilterValue(kind: 'materials' | 'lines' | 'colors', value: string) {
+    setFilters((current) => {
+      const next = new Set(current[kind])
+      if (next.has(value)) next.delete(value)
+      else next.add(value)
+      return { ...current, [kind]: next }
+    })
+  }
+
+  function clearFilterGroup(kind: 'materials' | 'lines' | 'colors') {
+    setFilters((current) => ({ ...current, [kind]: new Set() }))
+  }
+
+  function commitSpoolRange(minRaw: string, maxRaw: string) {
+    const parse = (raw: string): number | null => {
+      const trimmed = raw.trim()
+      if (trimmed === '') return null
+      const value = Number(trimmed)
+      if (!Number.isInteger(value) || value < 0) return null
+      return value
+    }
+    setFilters((current) => ({ ...current, minSpools: parse(minRaw), maxSpools: parse(maxRaw) }))
+  }
+
+  function clearSpoolRange() {
+    setMinSpoolsInput('')
+    setMaxSpoolsInput('')
+    setFilters((current) => ({ ...current, minSpools: null, maxSpools: null }))
+  }
+
+  function clearAllFilters() {
+    setFilters(EMPTY_FILAMENT_GROUP_FILTERS)
+    setMinSpoolsInput('')
+    setMaxSpoolsInput('')
+  }
 
   async function handleCreateSubmit(values: FilamentTypeFormValues) {
     setIsSubmittingCreate(true)
@@ -121,11 +285,8 @@ export function FilamentsInventoryPage() {
       setIsCreateDialogOpen(false)
     } catch (err) {
       const message = toErrorMessage(err)
-      if (err instanceof ApiError && err.type === 'validation') {
-        setCreateError(message)
-      } else {
-        toast.error(message)
-      }
+      if (err instanceof ApiError && err.type === 'validation') setCreateError(message)
+      else toast.error(message)
     } finally {
       setIsSubmittingCreate(false)
     }
@@ -147,11 +308,8 @@ export function FilamentsInventoryPage() {
       setIsEditDialogOpen(false)
     } catch (err) {
       const message = toErrorMessage(err)
-      if (err instanceof ApiError && err.type === 'validation') {
-        setEditError(message)
-      } else {
-        toast.error(message)
-      }
+      if (err instanceof ApiError && err.type === 'validation') setEditError(message)
+      else toast.error(message)
     } finally {
       setIsSubmittingEdit(false)
     }
@@ -202,8 +360,8 @@ export function FilamentsInventoryPage() {
     }
   }
 
-  function openDrawer(type: FilamentTypeSummary) {
-    setOpenTypeId(type.filament_type_id)
+  function openDrawer(group: FilamentGroup) {
+    setOpenGroupKey(group.key)
     setIsDrawerOpen(true)
   }
 
@@ -214,24 +372,64 @@ export function FilamentsInventoryPage() {
         if (category === 'FILAMENT') refetch()
       }}
     >
-      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <input
-          type="search"
-          aria-label="Buscar tipos de filamento"
-          placeholder="Buscar por fabricante, linha, cor ou material"
-          value={searchTerm}
-          onChange={(event) => setSearchTerm(event.target.value)}
-          className="border-input focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 h-9 max-w-sm rounded-md border bg-white px-3 text-sm outline-none focus-visible:ring-2"
-        />
-        <Button
-          onClick={() => {
-            setCreateError(null)
-            setIsCreateDialogOpen(true)
-          }}
-          className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark shrink-0"
-        >
-          Novo tipo de filamento
-        </Button>
+      <div className="mt-4 flex flex-col gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <input
+            type="search"
+            aria-label="Buscar tipos de filamento"
+            placeholder="Buscar por material, linha, cor ou fabricante"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            className="border-input focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 h-9 max-w-sm rounded-md border bg-white px-3 text-sm outline-none focus-visible:ring-2"
+          />
+          <Button
+            onClick={() => {
+              setCreateError(null)
+              setIsCreateDialogOpen(true)
+            }}
+            className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark shrink-0"
+          >
+            Novo tipo de filamento
+          </Button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <MultiSelectFilterButton
+            label="Material"
+            ariaLabel="Filtrar por material"
+            options={filterOptions.materials}
+            selected={filters.materials}
+            onToggle={(value) => toggleFilterValue('materials', value)}
+            onClear={() => clearFilterGroup('materials')}
+          />
+          <MultiSelectFilterButton
+            label="Linha"
+            ariaLabel="Filtrar por linha"
+            options={filterOptions.lines}
+            selected={filters.lines}
+            onToggle={(value) => toggleFilterValue('lines', value)}
+            onClear={() => clearFilterGroup('lines')}
+          />
+          <MultiSelectFilterButton
+            label="Cor"
+            ariaLabel="Filtrar por cor"
+            options={filterOptions.colors}
+            selected={filters.colors}
+            onToggle={(value) => toggleFilterValue('colors', value)}
+            onClear={() => clearFilterGroup('colors')}
+          />
+          {activeFilterCount > 0 && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={clearAllFilters}
+              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+            >
+              Limpar filtros ({activeFilterCount})
+            </Button>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -258,9 +456,9 @@ export function FilamentsInventoryPage() {
           <p role="status" className="text-muted-foreground text-sm">
             Nenhum tipo de filamento cadastrado.
           </p>
-        ) : filteredTypes.length === 0 ? (
+        ) : visibleGroups.length === 0 ? (
           <p role="status" className="text-muted-foreground text-sm">
-            Nenhum resultado encontrado.
+            Nenhum resultado para a busca e os filtros atuais.
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -278,54 +476,27 @@ export function FilamentsInventoryPage() {
               </colgroup>
               <TableHeader>
                 <TableRow>
-                  <ResizableTableHead
-                    columnId="material"
-                    columnLabel="Material"
-                    resize={{
-                      width: columnWidths.getWidth('material'),
-                      onResize: columnWidths.setColumnWidth,
-                      onCommit: columnWidths.commitWidths,
-                      onKeyboardResize: columnWidths.adjustByKeyboard,
-                    }}
-                  >
-                    Material
-                  </ResizableTableHead>
-                  <ResizableTableHead
-                    columnId="manufacturer"
-                    columnLabel="Fabricante"
-                    resize={{
-                      width: columnWidths.getWidth('manufacturer'),
-                      onResize: columnWidths.setColumnWidth,
-                      onCommit: columnWidths.commitWidths,
-                      onKeyboardResize: columnWidths.adjustByKeyboard,
-                    }}
-                  >
-                    Fabricante
-                  </ResizableTableHead>
-                  <ResizableTableHead
-                    columnId="line"
-                    columnLabel="Linha"
-                    resize={{
-                      width: columnWidths.getWidth('line'),
-                      onResize: columnWidths.setColumnWidth,
-                      onCommit: columnWidths.commitWidths,
-                      onKeyboardResize: columnWidths.adjustByKeyboard,
-                    }}
-                  >
-                    Linha
-                  </ResizableTableHead>
-                  <ResizableTableHead
-                    columnId="color"
-                    columnLabel="Cor"
-                    resize={{
-                      width: columnWidths.getWidth('color'),
-                      onResize: columnWidths.setColumnWidth,
-                      onCommit: columnWidths.commitWidths,
-                      onKeyboardResize: columnWidths.adjustByKeyboard,
-                    }}
-                  >
-                    Cor
-                  </ResizableTableHead>
+                  {(
+                    [
+                      { id: 'material', label: 'Material' },
+                      { id: 'line', label: 'Linha' },
+                      { id: 'color', label: 'Cor' },
+                    ] as const
+                  ).map((col) => (
+                    <ResizableTableHead
+                      key={col.id}
+                      columnId={col.id}
+                      columnLabel={col.label}
+                      resize={{
+                        width: columnWidths.getWidth(col.id),
+                        onResize: columnWidths.setColumnWidth,
+                        onCommit: columnWidths.commitWidths,
+                        onKeyboardResize: columnWidths.adjustByKeyboard,
+                      }}
+                    >
+                      {col.label}
+                    </ResizableTableHead>
+                  ))}
                   <ResizableTableHead
                     columnId="available"
                     columnLabel="Disponível"
@@ -339,19 +510,96 @@ export function FilamentsInventoryPage() {
                   >
                     Disponível
                   </ResizableTableHead>
-                  <ResizableTableHead
-                    columnId="spools"
-                    columnLabel="Rolos"
-                    className="text-right"
-                    resize={{
-                      width: columnWidths.getWidth('spools'),
-                      onResize: columnWidths.setColumnWidth,
-                      onCommit: columnWidths.commitWidths,
-                      onKeyboardResize: columnWidths.adjustByKeyboard,
-                    }}
-                  >
-                    Rolos
-                  </ResizableTableHead>
+
+                  {/* Coluna "Rolos disponíveis" com o filtro de faixa
+                      (mín/máx) no próprio cabeçalho — não altera a ordem da
+                      coluna, usa a contagem CONSOLIDADA (nunca por
+                      fabricante), preserva a alça de redimensionamento. */}
+                  <TableHead className="relative h-auto py-2 text-right whitespace-normal">
+                    <div className="flex items-center justify-end gap-1">
+                      <span className="min-w-0 truncate">Rolos disponíveis</span>
+                      <Popover>
+                        <PopoverTrigger
+                          aria-label="Filtrar por número de rolos disponíveis"
+                          className={cn(
+                            buttonVariants({ variant: 'ghost', size: 'icon-sm' }),
+                            'shrink-0',
+                            (filters.minSpools !== null || filters.maxSpools !== null) &&
+                              'text-brand-primary',
+                          )}
+                        >
+                          <FilterIcon className="size-3.5" />
+                        </PopoverTrigger>
+                        <PopoverContent aria-label="Faixa de rolos disponíveis" align="end">
+                          <div className="flex flex-col gap-3 text-left">
+                            <span className="text-sm font-semibold">Rolos disponíveis</span>
+                            <div className="flex items-end gap-2">
+                              <div className="flex flex-col gap-1">
+                                <Label htmlFor="filament-spools-min" className="text-xs">
+                                  Mínimo
+                                </Label>
+                                <Input
+                                  id="filament-spools-min"
+                                  inputMode="numeric"
+                                  value={minSpoolsInput}
+                                  onChange={(event) => setMinSpoolsInput(event.target.value)}
+                                  onBlur={() => commitSpoolRange(minSpoolsInput, maxSpoolsInput)}
+                                  className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 h-8 w-20"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <Label htmlFor="filament-spools-max" className="text-xs">
+                                  Máximo
+                                </Label>
+                                <Input
+                                  id="filament-spools-max"
+                                  inputMode="numeric"
+                                  value={maxSpoolsInput}
+                                  onChange={(event) => setMaxSpoolsInput(event.target.value)}
+                                  onBlur={() => commitSpoolRange(minSpoolsInput, maxSpoolsInput)}
+                                  className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 h-8 w-20"
+                                />
+                              </div>
+                            </div>
+                            {rangeInvalid && (
+                              <p role="alert" className="text-destructive text-xs">
+                                O mínimo não pode ser maior que o máximo.
+                              </p>
+                            )}
+                            <div className="flex gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                onClick={() => commitSpoolRange(minSpoolsInput, maxSpoolsInput)}
+                                className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark h-7"
+                              >
+                                Aplicar
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={clearSpoolRange}
+                                disabled={filters.minSpools === null && filters.maxSpools === null}
+                                className="text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark h-7"
+                              >
+                                Limpar
+                              </Button>
+                            </div>
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                    <ColumnResizeHandle
+                      columnId="spools"
+                      columnLabel="Rolos disponíveis"
+                      width={columnWidths.getWidth('spools')}
+                      onResize={columnWidths.setColumnWidth}
+                      onCommit={columnWidths.commitWidths}
+                      onKeyboardResize={columnWidths.adjustByKeyboard}
+                    />
+                  </TableHead>
+
                   <ResizableTableHead
                     columnId="situation"
                     columnLabel="Situação"
@@ -363,18 +611,6 @@ export function FilamentsInventoryPage() {
                     }}
                   >
                     Situação
-                  </ResizableTableHead>
-                  <ResizableTableHead
-                    columnId="is_active"
-                    columnLabel="Ativo"
-                    resize={{
-                      width: columnWidths.getWidth('is_active'),
-                      onResize: columnWidths.setColumnWidth,
-                      onCommit: columnWidths.commitWidths,
-                      onKeyboardResize: columnWidths.adjustByKeyboard,
-                    }}
-                  >
-                    Ativo
                   </ResizableTableHead>
                   <ResizableTableHead
                     columnId="actions"
@@ -389,75 +625,42 @@ export function FilamentsInventoryPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredTypes.map((type) => {
-                  const stockLevel = getStockLevel(type.total_available_grams, type.minimum_stock_grams)
+                {visibleGroups.map((group) => {
+                  const stockLevel = getStockLevel(group.availableGrams, group.minimumStockGrams)
                   return (
                     <TableRow
-                      key={type.filament_type_id}
-                      className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft"
+                      key={group.key}
+                      className="odd:bg-brand-primary-soft/50 hover:bg-brand-primary-soft even:bg-white"
                     >
-                      <TableCell>{type.material}</TableCell>
-                      <TableCell className="truncate" title={type.manufacturer}>
-                        {type.manufacturer}
+                      <TableCell>{group.material}</TableCell>
+                      <TableCell className="truncate" title={group.lineLabel}>
+                        {group.lineLabel}
                       </TableCell>
-                      <TableCell className="truncate" title={type.line}>
-                        {type.line}
+                      <TableCell className="truncate" title={group.colorLabel}>
+                        {group.colorLabel}
                       </TableCell>
-                      <TableCell className="truncate" title={type.commercial_color}>
-                        {type.commercial_color}
+                      <TableCell className="text-right tabular-nums">
+                        {formatGrams(group.availableGrams)}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{formatGrams(type.total_available_grams)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{type.usable_spool_count}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {group.usableSpoolCount}
+                      </TableCell>
                       <TableCell>
                         <StockLevelBadge level={stockLevel} />
                       </TableCell>
                       <TableCell>
-                        <Switch
-                          checked={type.is_active}
-                          disabled={pendingToggleId === type.filament_type_id}
-                          onCheckedChange={() => openToggleDialog(type)}
-                          aria-label={`${type.is_active ? 'Desativar' : 'Ativar'} tipo de filamento ${type.manufacturer} ${type.commercial_color}`}
-                          className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        {/* flex-nowrap + shrink-0 (mesmo padrão de
-                            OrdersPage.tsx/ProductsPage.tsx/InventoryPage.tsx):
-                            a coluna Ações nunca deve quebrar os 3 botões em 2
-                            linhas, mesmo no menor arraste possível — minWidth
-                            de "actions" (300px, ver FILAMENTS_COLUMN_SPECS)
-                            garante espaço suficiente. */}
                         <div className="flex flex-nowrap items-center gap-1.5">
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => openDrawer(type)}
+                            onClick={() => openDrawer(group)}
+                            aria-label={`Ver rolos de ${group.material} · ${group.lineLabel} · ${group.colorLabel}`}
                             className={cn(
-                              'shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
+                              'border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0',
                               TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
                             )}
                           >
                             Ver rolos
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openEditDialog(type)}
-                            className={cn(
-                              'shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
-                              TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
-                            )}
-                          >
-                            Editar
-                          </Button>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => openDeleteDialog(type)}
-                            aria-label={`Excluir tipo de filamento ${type.manufacturer} ${type.commercial_color}`}
-                            className={cn('shrink-0', TABLE_COMPACT_ACTION_TEXT_CLASSNAME)}
-                          >
-                            Excluir
                           </Button>
                         </div>
                       </TableCell>
@@ -474,7 +677,9 @@ export function FilamentsInventoryPage() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Novo tipo de filamento</DialogTitle>
-            <DialogDescription>Preencha os dados para cadastrar um novo tipo de filamento.</DialogDescription>
+            <DialogDescription>
+              Preencha os dados para cadastrar um novo tipo de filamento.
+            </DialogDescription>
           </DialogHeader>
           <FilamentTypeForm
             idPrefix="filament-type"
@@ -517,7 +722,9 @@ export function FilamentsInventoryPage() {
       <Dialog open={isToggleDialogOpen} onOpenChange={setIsToggleDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>{togglingType?.is_active ? 'Desativar tipo de filamento' : 'Ativar tipo de filamento'}</DialogTitle>
+            <DialogTitle>
+              {togglingType?.is_active ? 'Desativar tipo de filamento' : 'Ativar tipo de filamento'}
+            </DialogTitle>
             <DialogDescription>
               {togglingType &&
                 (togglingType.is_active
@@ -546,7 +753,11 @@ export function FilamentsInventoryPage() {
               disabled={isConfirmingToggle}
               className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
             >
-              {isConfirmingToggle ? 'Salvando...' : togglingType?.is_active ? 'Desativar' : 'Ativar'}
+              {isConfirmingToggle
+                ? 'Salvando...'
+                : togglingType?.is_active
+                  ? 'Desativar'
+                  : 'Ativar'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -576,23 +787,37 @@ export function FilamentsInventoryPage() {
             >
               Cancelar
             </Button>
-            <Button type="button" variant="destructive" onClick={() => void handleConfirmDelete()} disabled={isDeleting}>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => void handleConfirmDelete()}
+              disabled={isDeleting}
+            >
               {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isDrawerOpen} onOpenChange={setIsDrawerOpen}>
-        <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
+      <Dialog open={isDrawerVisible} onOpenChange={handleDrawerOpenChange}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
           <DialogHeader>
-            <DialogTitle>Rolos do tipo</DialogTitle>
+            <DialogTitle>Ver rolos</DialogTitle>
             <DialogDescription>
-              {openType && `${openType.material} · ${openType.manufacturer} · ${openType.line} · ${openType.commercial_color}`}
+              {openGroup &&
+                `${openGroup.material} · ${openGroup.lineLabel} · ${openGroup.colorLabel}`}
             </DialogDescription>
           </DialogHeader>
-          {openType && (
-            <FilamentTypeDrawer filamentType={openType} onSummaryChanged={refetch} onClose={() => setIsDrawerOpen(false)} />
+          {openGroup && (
+            <FilamentTypeDrawer
+              group={openGroup}
+              onSummaryChanged={refetch}
+              onClose={() => handleDrawerOpenChange(false)}
+              onEditType={openEditDialog}
+              onToggleType={openToggleDialog}
+              onDeleteType={openDeleteDialog}
+              pendingToggleTypeId={pendingToggleId}
+            />
           )}
         </DialogContent>
       </Dialog>

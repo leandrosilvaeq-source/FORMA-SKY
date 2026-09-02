@@ -30,16 +30,32 @@ export type FilamentSpoolWriteResponse = Omit<FilamentSpool, 'has_movement_histo
 // tentar e capturar o texto do erro não funcionou como esperado). Nenhuma
 // migration/RPC nova: as duas consultas usam SELECT já concedido a
 // authenticated (RLS is_active_user() nas duas tabelas).
-export async function listFilamentSpools(filamentTypeId: string): Promise<FilamentSpool[]> {
+// Aceita um único filament_type_id OU vários (listagem consolidada de
+// Filamentos por Material+Linha+Cor, 2026-09-01: "Ver rolos" abre todos os
+// tipos/fabricantes do grupo). Uma única consulta com `.in(...)` para todos
+// os tipos — nunca N chamadas (sem N+1). Os dois SELECT já são concedidos a
+// authenticated (RLS is_active_user()), então nenhum contrato novo é
+// necessário.
+export async function listFilamentSpools(
+  filamentTypeIds: string | string[],
+): Promise<FilamentSpool[]> {
+  const ids = Array.isArray(filamentTypeIds) ? filamentTypeIds : [filamentTypeIds]
+  if (ids.length === 0) return []
   const [spoolsResult, movementsResult] = await Promise.all([
-    supabase.from('filament_spools').select('*').eq('filament_type_id', filamentTypeId).order('created_at', { ascending: false }),
-    supabase.from('filament_movements').select('spool_id').eq('filament_type_id', filamentTypeId),
+    supabase
+      .from('filament_spools')
+      .select('*')
+      .in('filament_type_id', ids)
+      .order('created_at', { ascending: false }),
+    supabase.from('filament_movements').select('spool_id').in('filament_type_id', ids),
   ])
 
   if (spoolsResult.error) throw mapSupabaseError(spoolsResult.error)
   if (movementsResult.error) throw mapSupabaseError(movementsResult.error)
 
-  const spoolIdsWithHistory = new Set((movementsResult.data as Array<{ spool_id: string }>).map((row) => row.spool_id))
+  const spoolIdsWithHistory = new Set(
+    (movementsResult.data as Array<{ spool_id: string }>).map((row) => row.spool_id),
+  )
   return (spoolsResult.data as FilamentSpoolWriteResponse[]).map((spool) => ({
     ...spool,
     has_movement_history: spoolIdsWithHistory.has(spool.id),
@@ -67,14 +83,19 @@ export interface UpdateFilamentSpoolInput {
 }
 
 // POST /filament-spools -> create_filament_spool (code gerado no backend).
-export async function createFilamentSpool(input: CreateFilamentSpoolInput): Promise<FilamentSpoolWriteResponse> {
+export async function createFilamentSpool(
+  input: CreateFilamentSpoolInput,
+): Promise<FilamentSpoolWriteResponse> {
   return callEdgeFunction<FilamentSpoolWriteResponse>('filament-spools', '', 'POST', input)
 }
 
 // PATCH /filament-spools/:id -> update_filament_spool (cadastro, status,
 // ativar/desativar — DESCARTADO é terminal, a RPC rejeita qualquer
 // transição de volta).
-export async function updateFilamentSpool(id: string, input: UpdateFilamentSpoolInput): Promise<FilamentSpoolWriteResponse> {
+export async function updateFilamentSpool(
+  id: string,
+  input: UpdateFilamentSpoolInput,
+): Promise<FilamentSpoolWriteResponse> {
   return callEdgeFunction<FilamentSpoolWriteResponse>('filament-spools', `/${id}`, 'PATCH', input)
 }
 

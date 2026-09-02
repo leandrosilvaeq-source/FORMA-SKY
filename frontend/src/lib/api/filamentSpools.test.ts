@@ -6,7 +6,12 @@ const { callEdgeFunctionMock } = vi.hoisted(() => ({ callEdgeFunctionMock: vi.fn
 vi.mock('@/lib/supabase', () => ({ supabase: { from: fromMock } }))
 vi.mock('./edgeFunctionClient', () => ({ callEdgeFunction: callEdgeFunctionMock }))
 
-import { createFilamentSpool, deleteFilamentSpool, listFilamentSpools, updateFilamentSpool } from './filamentSpools'
+import {
+  createFilamentSpool,
+  deleteFilamentSpool,
+  listFilamentSpools,
+  updateFilamentSpool,
+} from './filamentSpools'
 
 interface QueryResult {
   data: unknown
@@ -18,8 +23,10 @@ function chainableResult(result: QueryResult) {
   const chain = () => builder
   builder.select = vi.fn(chain)
   builder.eq = vi.fn(chain)
+  builder.in = vi.fn(chain)
   builder.order = vi.fn(chain)
-  builder.then = (onFulfilled: (value: QueryResult) => unknown) => Promise.resolve(result).then(onFulfilled)
+  builder.then = (onFulfilled: (value: QueryResult) => unknown) =>
+    Promise.resolve(result).then(onFulfilled)
   return builder
 }
 
@@ -43,7 +50,13 @@ describe('filamentSpools api', () => {
 
   it('listFilamentSpools consulta filament_spools filtrado por filament_type_id e filament_movements para o mesmo tipo', async () => {
     mockTables(
-      { data: [{ id: 's1', code: 'RL-26-001' }, { id: 's2', code: 'RL-26-002' }], error: null },
+      {
+        data: [
+          { id: 's1', code: 'RL-26-001' },
+          { id: 's2', code: 'RL-26-002' },
+        ],
+        error: null,
+      },
       { data: [{ spool_id: 's1' }], error: null },
     )
 
@@ -66,10 +79,41 @@ describe('filamentSpools api', () => {
     expect(result[0].has_movement_history).toBe(false)
   })
 
+  it('listFilamentSpools aceita vários filament_type_id (grupo consolidado) numa única consulta com .in', async () => {
+    const spoolsBuilder = chainableResult({
+      data: [
+        { id: 's1', code: 'RL-26-001', filament_type_id: 't1' },
+        { id: 's2', code: 'RL-26-002', filament_type_id: 't2' },
+      ],
+      error: null,
+    })
+    const movementsBuilder = chainableResult({ data: [{ spool_id: 's2' }], error: null })
+    fromMock.mockImplementation((table: string) => {
+      if (table === 'filament_spools') return spoolsBuilder
+      if (table === 'filament_movements') return movementsBuilder
+      throw new Error(`tabela inesperada: ${table}`)
+    })
+
+    const result = await listFilamentSpools(['t1', 't2'])
+
+    expect(spoolsBuilder.in).toHaveBeenCalledWith('filament_type_id', ['t1', 't2'])
+    expect(movementsBuilder.in).toHaveBeenCalledWith('filament_type_id', ['t1', 't2'])
+    expect(fromMock).toHaveBeenCalledTimes(2)
+    expect(result.map((spool) => spool.id)).toEqual(['s1', 's2'])
+    expect(result.find((spool) => spool.id === 's2')?.has_movement_history).toBe(true)
+  })
+
+  it('listFilamentSpools com lista vazia não consulta nada', async () => {
+    const result = await listFilamentSpools([])
+    expect(result).toEqual([])
+    expect(fromMock).not.toHaveBeenCalled()
+  })
+
   it('listFilamentSpools propaga erro de qualquer uma das duas consultas', async () => {
     const { ApiError } = await import('./errors')
     fromMock.mockImplementation((table: string) => {
-      if (table === 'filament_spools') return chainableResult({ data: null, error: { message: 'falhou', code: '500' } })
+      if (table === 'filament_spools')
+        return chainableResult({ data: null, error: { message: 'falhou', code: '500' } })
       return chainableResult({ data: [], error: null })
     })
 
@@ -77,7 +121,12 @@ describe('filamentSpools api', () => {
   })
 
   it('createFilamentSpool writes through the filament-spools Edge Function, not a direct insert', async () => {
-    const created = { id: 's1', code: 'RL-26-001', filament_type_id: 't1', nominal_weight_grams: 1000 }
+    const created = {
+      id: 's1',
+      code: 'RL-26-001',
+      filament_type_id: 't1',
+      nominal_weight_grams: 1000,
+    }
     callEdgeFunctionMock.mockResolvedValue(created)
 
     const result = await createFilamentSpool({ filament_type_id: 't1', nominal_weight_grams: 1000 })
@@ -99,7 +148,9 @@ describe('filamentSpools api', () => {
 
     const result = await updateFilamentSpool('s1', { status: 'ABERTO' })
 
-    expect(callEdgeFunctionMock).toHaveBeenCalledWith('filament-spools', '/s1', 'PATCH', { status: 'ABERTO' })
+    expect(callEdgeFunctionMock).toHaveBeenCalledWith('filament-spools', '/s1', 'PATCH', {
+      status: 'ABERTO',
+    })
     expect(result).toEqual(updated)
   })
 
@@ -115,9 +166,16 @@ describe('filamentSpools api', () => {
   it('deleteFilamentSpool propagates a standardized ApiError when blocked by movement history (defesa em profundidade — a interface não deveria mais chamar isto para um rolo com histórico)', async () => {
     const { ApiError } = await import('./errors')
     callEdgeFunctionMock.mockRejectedValue(
-      new ApiError('business_rule', 409, 'Este rolo possui movimentações registradas e não pode ser excluído.'),
+      new ApiError(
+        'business_rule',
+        409,
+        'Este rolo possui movimentações registradas e não pode ser excluído.',
+      ),
     )
 
-    await expect(deleteFilamentSpool('s1')).rejects.toMatchObject({ type: 'business_rule', status: 409 })
+    await expect(deleteFilamentSpool('s1')).rejects.toMatchObject({
+      type: 'business_rule',
+      status: 409,
+    })
   })
 })

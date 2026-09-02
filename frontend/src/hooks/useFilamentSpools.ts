@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   createFilamentSpool,
   deleteFilamentSpool,
@@ -10,12 +10,20 @@ import {
 import { ApiError } from '@/lib/api/errors'
 import type { FilamentSpool, FilamentSpoolStatus } from '@/types/domain'
 
+// `create` aceita a composição sem filament_type_id (modo tipo único —
+// injeta o id do próprio hook) OU com filament_type_id explícito (modo
+// grupo consolidado, "Ver rolos" com vários tipos/fabricantes — o chamador
+// diz a qual tipo o novo rolo pertence).
+type CreateSpoolInput = Omit<CreateFilamentSpoolInput, 'filament_type_id'> & {
+  filament_type_id?: string
+}
+
 interface UseFilamentSpoolsResult {
   spools: FilamentSpool[]
   isLoading: boolean
   error: ApiError | null
   refetch: () => void
-  create: (input: Omit<CreateFilamentSpoolInput, 'filament_type_id'>) => Promise<FilamentSpool>
+  create: (input: CreateSpoolInput) => Promise<FilamentSpool>
   update: (id: string, input: UpdateFilamentSpoolInput) => Promise<FilamentSpool>
   delete: (id: string) => Promise<void>
   // Atualização local pura (sem chamada de rede) — usada depois de uma
@@ -24,16 +32,31 @@ interface UseFilamentSpoolsResult {
   // ter mudado para ESGOTADO automaticamente), então buscar o rolo de novo
   // só para saber valores que a própria resposta já trouxe seria uma
   // requisição desnecessária — mesmo padrão de useAccessories.setLocalStock.
-  setLocalSpoolState: (id: string, patch: { current_net_weight_grams: number; status?: FilamentSpoolStatus }) => void
+  setLocalSpoolState: (
+    id: string,
+    patch: { current_net_weight_grams: number; status?: FilamentSpoolStatus },
+  ) => void
 }
 
 function toApiError(err: unknown): ApiError {
   return err instanceof ApiError ? err : new ApiError('database', 500, 'Erro desconhecido.')
 }
 
-// Um hook por tipo (filamentTypeId) — remontado do zero a cada tipo aberto,
-// mesmo padrão de useStockMovements (um hook por item).
-export function useFilamentSpools(filamentTypeId: string): UseFilamentSpoolsResult {
+// Um hook por tipo (string) OU por GRUPO consolidado de tipos (string[] —
+// listagem de Filamentos por Material+Linha+Cor, "Ver rolos" abre todos os
+// fabricantes do grupo). Remontado do zero quando o conjunto de ids muda.
+// listFilamentSpools carrega todos os ids numa única consulta (`.in`) — sem
+// N+1.
+export function useFilamentSpools(filamentTypeIds: string | string[]): UseFilamentSpoolsResult {
+  const ids = useMemo(
+    () => (Array.isArray(filamentTypeIds) ? [...filamentTypeIds] : [filamentTypeIds]),
+    [filamentTypeIds],
+  )
+  // Chave estável: reordenada e concatenada — o array pode trocar de
+  // referência a cada render sem trocar de conteúdo.
+  const idsKey = useMemo(() => [...ids].sort().join('|'), [ids])
+  const singleId = ids.length === 1 ? ids[0] : null
+
   const [spools, setSpools] = useState<FilamentSpool[]>([])
   const [error, setError] = useState<ApiError | null>(null)
   const [requestId, setRequestId] = useState(0)
@@ -43,8 +66,9 @@ export function useFilamentSpools(filamentTypeId: string): UseFilamentSpoolsResu
 
   useEffect(() => {
     let cancelled = false
+    const currentIds = idsKey ? idsKey.split('|') : []
 
-    listFilamentSpools(filamentTypeId)
+    listFilamentSpools(currentIds)
       .then((data) => {
         if (cancelled) return
         setSpools(data)
@@ -60,7 +84,7 @@ export function useFilamentSpools(filamentTypeId: string): UseFilamentSpoolsResu
     return () => {
       cancelled = true
     }
-  }, [filamentTypeId, requestId])
+  }, [idsKey, requestId])
 
   const refetch = useCallback(() => setRequestId((id) => id + 1), [])
 
@@ -69,13 +93,17 @@ export function useFilamentSpools(filamentTypeId: string): UseFilamentSpoolsResu
   // sempre zera current_net_weight_grams e não grava nenhuma linha em
   // filament_movements).
   const create = useCallback(
-    async (input: Omit<CreateFilamentSpoolInput, 'filament_type_id'>) => {
-      const created = await createFilamentSpool({ ...input, filament_type_id: filamentTypeId })
+    async (input: CreateSpoolInput) => {
+      const targetTypeId = input.filament_type_id ?? singleId
+      if (!targetTypeId) {
+        throw new ApiError('validation', 400, 'Informe o tipo de filamento do novo rolo.')
+      }
+      const created = await createFilamentSpool({ ...input, filament_type_id: targetTypeId })
       const withHistory: FilamentSpool = { ...created, has_movement_history: false }
       setSpools((current) => [withHistory, ...current])
       return withHistory
     },
-    [filamentTypeId],
+    [singleId],
   )
 
   // A resposta de update_filament_spool não inclui has_movement_history
@@ -122,5 +150,14 @@ export function useFilamentSpools(filamentTypeId: string): UseFilamentSpoolsResu
     [],
   )
 
-  return { spools, isLoading, error, refetch, create, update, delete: deleteItem, setLocalSpoolState }
+  return {
+    spools,
+    isLoading,
+    error,
+    refetch,
+    create,
+    update,
+    delete: deleteItem,
+    setLocalSpoolState,
+  }
 }
