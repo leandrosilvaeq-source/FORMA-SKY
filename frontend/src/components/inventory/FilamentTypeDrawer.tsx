@@ -97,12 +97,15 @@ export interface FilamentTypeDrawerProps {
 }
 
 // Ao abrir um grupo: resumo consolidado (saldo/rolos vindos de
-// vw_filament_type_summary, somados por grupo), a lista de tipos/fabricantes
-// do grupo (cada um com Editar/Ativar-Desativar/Excluir tipo + "Novo rolo"),
-// e a lista de rolos de TODOS os fabricantes — cada rolo mostra a que
-// fabricante/tipo pertence. Nenhuma regra de negócio de rolo mudou:
-// delete guards, arquivamento, histórico, DESCARTADO terminal, bloqueios e
-// mensagens reais do backend são preservados.
+// vw_filament_type_summary, somados por grupo); logo abaixo do título
+// "Rolos em estoque", a lista física dos rolos de TODOS os fabricantes do
+// grupo — cada rolo mostra a que fabricante/tipo pertence; e, no rodapé,
+// os controles inferiores: "Mostrar arquivados" e os botões de ação de
+// TIPO (Novo rolo / Editar tipo / Ativar-Desativar tipo / Excluir tipo),
+// um conjunto por tipo, cada um ligado ao seu filament_type_id. Nenhuma
+// regra de negócio de rolo mudou: delete guards, arquivamento, histórico,
+// DESCARTADO terminal, bloqueios e mensagens reais do backend são
+// preservados.
 export function FilamentTypeDrawer({
   group,
   onSummaryChanged,
@@ -377,32 +380,70 @@ export function FilamentTypeDrawer({
     )
   }
 
-  function TypeActionsMenu({ type }: { type: FilamentTypeSummary }) {
+  // As ações de TIPO (por filament_type_id) eram um menu de três pontos numa
+  // linha redundante acima da tabela; agora são botões visíveis no rodapé da
+  // janela. Um conjunto por tipo — quando o grupo reúne tipos históricos de
+  // fabricantes diferentes, cada conjunto é rotulado e ligado ao seu
+  // filament_type_id, nunca ao tipo errado. Os callbacks (onEditType /
+  // onToggleType / onDeleteType / openCreateDialog) e seus diálogos e
+  // confirmações continuam os mesmos — só muda o gatilho.
+  function TypeActionButtons({
+    type,
+    showLabel,
+  }: {
+    type: FilamentTypeSummary
+    showLabel: boolean
+  }) {
     return (
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          aria-label={`Ações do tipo ${type.manufacturer} — ${type.commercial_color}`}
-          render={
-            <Button
-              variant="outline"
-              size="icon-sm"
-              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0"
-            />
-          }
-        >
-          <EllipsisIcon className="size-4" aria-hidden="true" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent>
-          <DropdownMenuItem onClick={() => onEditType(type)}>Editar tipo</DropdownMenuItem>
-          <DropdownMenuItem
+      <div
+        role="group"
+        aria-label={`Ações do tipo ${type.manufacturer} — ${type.commercial_color}`}
+        className="flex flex-col gap-1.5"
+      >
+        {showLabel && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">{type.manufacturer}</span>
+            <span className="text-muted-foreground text-xs">
+              {type.line} · {type.commercial_color}
+            </span>
+            {!type.is_active && (
+              <span className="border-input text-muted-foreground inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium">
+                Inativo
+              </span>
+            )}
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => openCreateDialog(type.filament_type_id)}
+            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+          >
+            Novo rolo
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onEditType(type)}
+            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+          >
+            Editar tipo
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             disabled={pendingToggleTypeId === type.filament_type_id}
             onClick={() => onToggleType(type)}
+            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
           >
             {type.is_active ? 'Desativar tipo' : 'Ativar tipo'}
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => onDeleteType(type)}>Excluir tipo</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+          </Button>
+          <Button variant="destructive" size="sm" onClick={() => onDeleteType(type)}>
+            Excluir tipo
+          </Button>
+        </div>
+      </div>
     )
   }
 
@@ -438,42 +479,106 @@ export function FilamentTypeDrawer({
         </div>
       </div>
 
-      {/* Rolos em estoque do grupo — ações INDIVIDUAIS de tipo por
-          filament_type_id (Editar/Ativar/Excluir tipo, Novo rolo). */}
+      {/* Rolos em estoque — a listagem física dos rolos vem logo abaixo do
+          título. Não há mais a linha redundante de tipo/fabricante aqui: as
+          ações de TIPO foram para os botões do rodapé (TypeActionButtons) e
+          o menu de três pontos de cada rolo físico continua na coluna
+          "Ações" da tabela/card. */}
       <div className="flex flex-col gap-2">
         <p className="text-sm font-semibold">Rolos em estoque</p>
-        <div className="flex flex-col gap-2">
-          {group.types.map((type) => (
-            <div
-              key={type.filament_type_id}
-              data-testid={`filament-type-row-${type.filament_type_id}`}
-              className="border-input flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium">{type.manufacturer}</span>
-                <span className="text-muted-foreground text-xs">
-                  {type.line} · {type.commercial_color}
-                </span>
-                {!type.is_active && (
-                  <span className="border-input text-muted-foreground inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium">
-                    Inativo
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-1.5">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => openCreateDialog(type.filament_type_id)}
-                  className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0"
-                >
-                  Novo rolo
-                </Button>
-                <TypeActionsMenu type={type} />
-              </div>
+
+        {isLoading ? (
+          <div role="status" className="flex flex-col gap-2">
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+            <span className="sr-only">Carregando rolos...</span>
+          </div>
+        ) : spools.length === 0 ? (
+          <p role="status" className="text-muted-foreground text-sm">
+            Nenhum rolo cadastrado para este grupo.
+          </p>
+        ) : visibleSpools.length === 0 ? (
+          <p role="status" className="text-muted-foreground text-sm">
+            Todos os rolos deste grupo estão arquivados. Marque "Mostrar arquivados" para
+            consultá-los.
+          </p>
+        ) : (
+          <>
+            <div className="hidden sm:block">
+              <Table className="table-fixed text-sm">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="h-auto w-[15%] py-2 whitespace-normal">
+                      Identificador
+                    </TableHead>
+                    <TableHead className="h-auto w-[22%] py-2 whitespace-normal">
+                      Fabricante / tipo
+                    </TableHead>
+                    <TableHead className="h-auto w-[21%] py-2 whitespace-normal">Peso</TableHead>
+                    <TableHead className="h-auto w-[14%] py-2 whitespace-normal">Status</TableHead>
+                    <TableHead className="h-auto w-[28%] py-2 text-right whitespace-normal">
+                      Ações
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {visibleSpools.map((spool) => (
+                    <TableRow
+                      key={spool.id}
+                      className="odd:bg-brand-primary-soft/50 hover:bg-brand-primary-soft even:bg-white"
+                    >
+                      <TableCell className="truncate" title={spool.code}>
+                        {spool.code}
+                      </TableCell>
+                      <TableCell className="truncate" title={spoolManufacturerLabel(spool)}>
+                        {spoolManufacturerLabel(spool)}
+                      </TableCell>
+                      <TableCell className="tabular-nums">{formatPeso(spool)}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap items-center gap-1.5 whitespace-normal">
+                          <span>{spool.status}</span>
+                          {!spool.is_active && <ArchivedBadge />}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex min-w-0 items-center justify-end gap-2">
+                          <ManageSpoolButton spool={spool} />
+                          <SpoolActionsMenu spool={spool} />
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </div>
-          ))}
-        </div>
+
+            <div className="flex flex-col gap-3 sm:hidden">
+              {visibleSpools.map((spool) => (
+                <Card key={spool.id} size="sm">
+                  <CardContent className="flex flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-medium">{spool.code}</span>
+                      {!spool.is_active && <ArchivedBadge />}
+                    </div>
+                    <div className="text-muted-foreground grid grid-cols-1 gap-1 text-xs">
+                      <span>Fabricante / tipo: {spoolManufacturerLabel(spool)}</span>
+                      <span>Peso: {formatPeso(spool)}</span>
+                      <span>Status: {spool.status}</span>
+                      <span>
+                        Abertura:{' '}
+                        {formatDate(spool.opened_at ? spool.opened_at.slice(0, 10) : null)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-end gap-2">
+                      <ManageSpoolButton spool={spool} />
+                      <SpoolActionsMenu spool={spool} />
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       {error && (
@@ -488,106 +593,29 @@ export function FilamentTypeDrawer({
         </div>
       )}
 
-      <label className="flex w-fit items-center gap-2 text-sm">
-        <Switch
-          checked={showArchived}
-          onCheckedChange={(checked) => setShowArchived(checked === true)}
-          className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
-        />
-        Mostrar arquivados
-      </label>
+      {/* Controles e ações inferiores — depois da tabela/cards/estado vazio:
+          o filtro "Mostrar arquivados" e, abaixo dele, os botões de ação do
+          tipo (um conjunto por tipo do grupo). */}
+      <div className="flex flex-col gap-3 border-t pt-4">
+        <label className="flex w-fit items-center gap-2 text-sm">
+          <Switch
+            checked={showArchived}
+            onCheckedChange={(checked) => setShowArchived(checked === true)}
+            className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
+          />
+          Mostrar arquivados
+        </label>
 
-      {isLoading ? (
-        <div role="status" className="flex flex-col gap-2">
-          <Skeleton className="h-8 w-full" />
-          <Skeleton className="h-8 w-full" />
-          <span className="sr-only">Carregando rolos...</span>
+        <div className="flex flex-col gap-3">
+          {group.types.map((type) => (
+            <TypeActionButtons
+              key={type.filament_type_id}
+              type={type}
+              showLabel={group.types.length > 1}
+            />
+          ))}
         </div>
-      ) : spools.length === 0 ? (
-        <p role="status" className="text-muted-foreground text-sm">
-          Nenhum rolo cadastrado para este grupo.
-        </p>
-      ) : visibleSpools.length === 0 ? (
-        <p role="status" className="text-muted-foreground text-sm">
-          Todos os rolos deste grupo estão arquivados. Marque "Mostrar arquivados" para
-          consultá-los.
-        </p>
-      ) : (
-        <>
-          <div className="hidden sm:block">
-            <Table className="table-fixed text-sm">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="h-auto w-[15%] py-2 whitespace-normal">
-                    Identificador
-                  </TableHead>
-                  <TableHead className="h-auto w-[22%] py-2 whitespace-normal">
-                    Fabricante / tipo
-                  </TableHead>
-                  <TableHead className="h-auto w-[21%] py-2 whitespace-normal">Peso</TableHead>
-                  <TableHead className="h-auto w-[14%] py-2 whitespace-normal">Status</TableHead>
-                  <TableHead className="h-auto w-[28%] py-2 text-right whitespace-normal">
-                    Ações
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {visibleSpools.map((spool) => (
-                  <TableRow
-                    key={spool.id}
-                    className="odd:bg-brand-primary-soft/50 hover:bg-brand-primary-soft even:bg-white"
-                  >
-                    <TableCell className="truncate" title={spool.code}>
-                      {spool.code}
-                    </TableCell>
-                    <TableCell className="truncate" title={spoolManufacturerLabel(spool)}>
-                      {spoolManufacturerLabel(spool)}
-                    </TableCell>
-                    <TableCell className="tabular-nums">{formatPeso(spool)}</TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap items-center gap-1.5 whitespace-normal">
-                        <span>{spool.status}</span>
-                        {!spool.is_active && <ArchivedBadge />}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex min-w-0 items-center justify-end gap-2">
-                        <ManageSpoolButton spool={spool} />
-                        <SpoolActionsMenu spool={spool} />
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-
-          <div className="flex flex-col gap-3 sm:hidden">
-            {visibleSpools.map((spool) => (
-              <Card key={spool.id} size="sm">
-                <CardContent className="flex flex-col gap-2">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="font-medium">{spool.code}</span>
-                    {!spool.is_active && <ArchivedBadge />}
-                  </div>
-                  <div className="text-muted-foreground grid grid-cols-1 gap-1 text-xs">
-                    <span>Fabricante / tipo: {spoolManufacturerLabel(spool)}</span>
-                    <span>Peso: {formatPeso(spool)}</span>
-                    <span>Status: {spool.status}</span>
-                    <span>
-                      Abertura: {formatDate(spool.opened_at ? spool.opened_at.slice(0, 10) : null)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-end gap-2">
-                    <ManageSpoolButton spool={spool} />
-                    <SpoolActionsMenu spool={spool} />
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </>
-      )}
+      </div>
 
       <DialogFooter>
         <Button

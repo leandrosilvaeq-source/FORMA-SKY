@@ -733,11 +733,16 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     ]) {
       expect(within(dialog).getByText(label)).toBeInTheDocument()
     }
-    // "Novo rolo", menu de ações do tipo e "Mostrar arquivados" seguem ativos.
-    expect(within(dialog).getByRole('button', { name: 'Novo rolo' })).toBeInTheDocument()
-    expect(
-      within(dialog).getByRole('button', { name: /Ações do tipo Voolt3D — Preto/i }),
-    ).toBeInTheDocument()
+    // Ações do tipo agora são botões visíveis no rodapé (não mais um menu de
+    // três pontos), e "Mostrar arquivados" continua ativo.
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo Voolt3D — Preto/i,
+    })
+    expect(within(typeActions).getByRole('button', { name: 'Novo rolo' })).toBeInTheDocument()
+    expect(within(typeActions).getByRole('button', { name: 'Editar tipo' })).toBeInTheDocument()
+    expect(within(typeActions).getByRole('button', { name: 'Desativar tipo' })).toBeInTheDocument()
+    expect(within(typeActions).getByRole('button', { name: 'Excluir tipo' })).toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: /Ações do tipo Voolt3D/i })).toBeNull()
     expect(within(dialog).getByRole('switch', { name: 'Mostrar arquivados' })).toBeInTheDocument()
   })
 
@@ -765,7 +770,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     expect(within(rl2).getByText('National3D · Sólida · Preto')).toBeInTheDocument()
   })
 
-  it('o painel lista cada tipo/fabricante do grupo com Editar/Ativar/Excluir tipo — as ações agem no tipo individual', async () => {
+  it('o rodapé traz um conjunto de botões por tipo/fabricante do grupo — cada botão age no tipo individual', async () => {
     const update = vi.fn().mockResolvedValue(typeFixture({ is_active: false }))
     mockTypes(
       [
@@ -778,13 +783,113 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     const user = userEvent.setup()
 
     const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
-    await user.click(
-      within(dialog).getByRole('button', { name: /Ações do tipo National3D — Preto/i }),
-    )
-    await user.click(await screen.findByRole('menuitem', { name: 'Desativar tipo' }))
+    // Nenhum menu de três pontos de tipo — os botões são visíveis, um grupo
+    // por tipo, identificado pelo fabricante/cor.
+    const nationalActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo National3D — Preto/i,
+    })
+    await user.click(within(nationalActions).getByRole('button', { name: 'Desativar tipo' }))
     await user.click(await screen.findByRole('button', { name: /^desativar$/i }))
 
     await waitFor(() => expect(update).toHaveBeenCalledWith('b', { is_active: false }))
+  })
+
+  it('não há mais a antiga linha de tipo acima da tabela nem o menu de três pontos de tipo', async () => {
+    mockTypes([
+      typeFixture({ filament_type_id: 'a', manufacturer: 'Voolt3D' }),
+      typeFixture({ filament_type_id: 'b', manufacturer: 'National3D' }),
+    ])
+    mockSpools([spoolFixture({ id: 's1', code: 'RL-26-001', filament_type_id: 'a' })])
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    // O bloco data-testid="filament-type-row-*" foi removido.
+    expect(within(dialog).queryByTestId('filament-type-row-a')).toBeNull()
+    expect(within(dialog).queryByTestId('filament-type-row-b')).toBeNull()
+    // Nenhum trigger de menu de três pontos de TIPO (o do rolo físico
+    // continua e é testado à parte).
+    expect(within(dialog).queryByRole('button', { name: /^Ações do tipo/i })).toBeNull()
+    expect(
+      within(getSpoolsTable(dialog)).getByRole('button', {
+        name: 'Mais ações para o rolo RL-26-001',
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('a listagem física vem logo abaixo de "Rolos em estoque" e antes do filtro e dos botões inferiores (desktop e mobile)', async () => {
+    mockTypes([typeFixture({ filament_type_id: 'a', manufacturer: 'Voolt3D' })])
+    mockSpools([spoolFixture({ id: 's1', code: 'RL-26-001', filament_type_id: 'a' })])
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const heading = within(dialog).getByText('Rolos em estoque')
+    const table = getSpoolsTable(dialog)
+    // Card mobile do mesmo rolo (fora da <table>).
+    const mobileCard = within(dialog).getByText(/Fabricante \/ tipo:/i)
+    const archivedSwitch = within(dialog).getByRole('switch', { name: 'Mostrar arquivados' })
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo Voolt3D — Preto/i,
+    })
+    const closeButton = within(dialog).getByRole('button', { name: 'Fechar' })
+
+    const FOLLOWING = Node.DOCUMENT_POSITION_FOLLOWING
+    // título -> tabela -> card mobile -> filtro -> botões de tipo -> Fechar
+    expect(heading.compareDocumentPosition(table) & FOLLOWING).toBeTruthy()
+    expect(table.compareDocumentPosition(mobileCard) & FOLLOWING).toBeTruthy()
+    expect(mobileCard.compareDocumentPosition(archivedSwitch) & FOLLOWING).toBeTruthy()
+    expect(archivedSwitch.compareDocumentPosition(typeActions) & FOLLOWING).toBeTruthy()
+    expect(typeActions.compareDocumentPosition(closeButton) & FOLLOWING).toBeTruthy()
+  })
+
+  it('grupo com mais de um tipo histórico: cada conjunto de botões age só no seu filament_type_id', async () => {
+    const deleteType = vi.fn().mockResolvedValue(undefined)
+    mockTypes(
+      [
+        typeFixture({ filament_type_id: 'a', manufacturer: 'Voolt3D' }),
+        typeFixture({ filament_type_id: 'b', manufacturer: 'National3D' }),
+      ],
+      { delete: deleteType },
+    )
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const voolt = within(dialog).getByRole('group', { name: /Ações do tipo Voolt3D — Preto/i })
+    const national = within(dialog).getByRole('group', {
+      name: /Ações do tipo National3D — Preto/i,
+    })
+    // Cada conjunto é rotulado com o seu fabricante.
+    expect(within(voolt).getByText('Voolt3D')).toBeInTheDocument()
+    expect(within(national).getByText('National3D')).toBeInTheDocument()
+
+    await user.click(within(national).getByRole('button', { name: 'Excluir tipo' }))
+    await user.click(await screen.findByRole('button', { name: /^excluir definitivamente$/i }))
+
+    await waitFor(() => expect(deleteType).toHaveBeenCalledWith('b'))
+    expect(deleteType).toHaveBeenCalledTimes(1)
+  })
+
+  it('estado vazio: mensagem abaixo de "Rolos em estoque" e "Novo rolo" ainda cadastra o primeiro rolo', async () => {
+    const create = vi.fn().mockResolvedValue(spoolFixture())
+    mockTypes([typeFixture({ filament_type_id: 'a', manufacturer: 'Voolt3D' })])
+    mockSpools([], { create })
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    expect(within(dialog).getByText('Nenhum rolo cadastrado para este grupo.')).toBeInTheDocument()
+
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo Voolt3D — Preto/i,
+    })
+    await user.click(within(typeActions).getByRole('button', { name: 'Novo rolo' }))
+    await user.type(screen.getByLabelText(/peso nominal/i), '1000')
+    await user.click(screen.getByRole('button', { name: /^salvar$/i }))
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    expect(create.mock.calls[0][0]).toMatchObject({ filament_type_id: 'a' })
   })
 
   it('editar um tipo movendo-o para outro Material/Linha/Cor: quando era o único tipo, o grupo some e o painel fecha', async () => {
@@ -817,8 +922,10 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     const user = userEvent.setup()
 
     const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
-    await user.click(within(dialog).getByRole('button', { name: /Ações do tipo Voolt3D — Preto/i }))
-    await user.click(await screen.findByRole('menuitem', { name: 'Editar tipo' }))
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo Voolt3D — Preto/i,
+    })
+    await user.click(within(typeActions).getByRole('button', { name: 'Editar tipo' }))
     await user.clear(screen.getByLabelText('Cor'))
     await user.type(screen.getByLabelText('Cor'), 'Azul')
     await user.click(screen.getByRole('button', { name: /salvar altera/i }))
@@ -843,8 +950,10 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     const user = userEvent.setup()
 
     const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
-    await user.click(within(dialog).getByRole('button', { name: /Ações do tipo Voolt3D — Preto/i }))
-    await user.click(await screen.findByRole('menuitem', { name: 'Excluir tipo' }))
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo Voolt3D — Preto/i,
+    })
+    await user.click(within(typeActions).getByRole('button', { name: 'Excluir tipo' }))
     await user.click(await screen.findByRole('button', { name: /^excluir definitivamente$/i }))
 
     expect(
@@ -1001,8 +1110,8 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     const user = userEvent.setup()
 
     await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
-    const nationalRow = screen.getByTestId('filament-type-row-b')
-    await user.click(within(nationalRow).getByRole('button', { name: 'Novo rolo' }))
+    const nationalActions = screen.getByRole('group', { name: /Ações do tipo National3D — Preto/i })
+    await user.click(within(nationalActions).getByRole('button', { name: 'Novo rolo' }))
     await user.type(screen.getByLabelText(/peso nominal/i), '1000')
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
@@ -1263,10 +1372,10 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     const user = userEvent.setup()
 
     const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
-    await user.click(
-      within(dialog).getByRole('button', { name: /Ações do tipo National3D — Preto/i }),
-    )
-    await user.click(await screen.findByRole('menuitem', { name: 'Editar tipo' }))
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo National3D — Preto/i,
+    })
+    await user.click(within(typeActions).getByRole('button', { name: 'Editar tipo' }))
 
     expect(screen.getByLabelText('Fabricante')).toHaveValue('National3D')
   })
