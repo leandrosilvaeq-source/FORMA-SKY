@@ -1156,6 +1156,65 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     await user.click(screen.getByRole('button', { name: 'Novo tipo de filamento' }))
     expect(screen.queryByLabelText(/código da cor/i)).not.toBeInTheDocument()
   })
+
+  it('"Novo tipo de filamento" não exibe o campo Fabricante/Fornecedor nem o erro "Informe o fabricante"', async () => {
+    const create = vi.fn().mockResolvedValue(typeFixture())
+    mockTypes([], { create })
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Novo tipo de filamento' }))
+    expect(screen.queryByLabelText(/fabricante/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/fornecedor/i)).not.toBeInTheDocument()
+
+    // Salvar só com Material + Linha + Cor: nada de erro de fabricante.
+    await user.click(screen.getByRole('radio', { name: 'PLA' }))
+    await user.type(screen.getByLabelText('Linha'), 'Sólida')
+    await user.type(screen.getByLabelText('Cor'), 'Preto')
+    await user.click(screen.getByRole('button', { name: /^salvar$/i }))
+
+    expect(screen.queryByText(/informe o fabricante/i)).not.toBeInTheDocument()
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+  })
+
+  it('a criação envia manufacturer: "Não informado" e os demais campos corretamente', async () => {
+    const create = vi.fn().mockResolvedValue(typeFixture())
+    mockTypes([], { create })
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Novo tipo de filamento' }))
+    await user.click(screen.getByRole('radio', { name: 'PETG' }))
+    await user.type(screen.getByLabelText('Linha'), 'Matte')
+    await user.type(screen.getByLabelText('Cor'), 'Vermelho')
+    await user.type(screen.getByLabelText(/peso mínimo de alerta/i), '300')
+    await user.type(screen.getByLabelText(/observações/i), 'lote de teste')
+    await user.click(screen.getByRole('button', { name: /^salvar$/i }))
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    expect(create.mock.calls[0][0]).toEqual({
+      material: 'PETG',
+      manufacturer: 'Não informado',
+      line: 'Matte',
+      commercial_color: 'Vermelho',
+      minimum_stock_grams: 300,
+      notes: 'lote de teste',
+    })
+  })
+
+  it('"Editar tipo de filamento" continua com o campo Fabricante para tipos históricos', async () => {
+    mockTypes([typeFixture({ filament_type_id: 't1', manufacturer: 'National3D' })])
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    await user.click(
+      within(dialog).getByRole('button', { name: /Ações do tipo National3D — Preto/i }),
+    )
+    await user.click(await screen.findByRole('menuitem', { name: 'Editar tipo' }))
+
+    expect(screen.getByLabelText('Fabricante')).toHaveValue('National3D')
+  })
 })
 
 describe('FilamentsInventoryPage — colunas redimensionáveis e persistidas', () => {

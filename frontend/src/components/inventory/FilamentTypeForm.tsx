@@ -17,6 +17,15 @@ const MATERIAL_OPTIONS: FilamentMaterial[] = ['PLA', 'PETG', 'TPU']
 // usuário pode digitar qualquer outra linha livremente.
 const LINE_SUGGESTIONS = ['Sólida', 'Silk', 'Velvet', 'Translúcido', 'DuoColor']
 
+// Fabricante saiu da janela "Novo tipo de filamento" (decisão revisada do
+// usuário, 2026-09-01): no modo CREATE o formulário não exibe nem exige o
+// campo. Como filament_types.manufacturer é NOT NULL no schema atual (e
+// alterar isso está fora de escopo: nenhuma migration/RPC/Edge Function),
+// a criação envia internamente este valor. O modo EDIT continua com o
+// campo, para consultar/corrigir tipos históricos e os criados por Compras
+// (que podem ter um fabricante real informado na compra).
+export const UNSPECIFIED_MANUFACTURER = 'Não informado'
+
 // color_code (código da cor do fabricante) foi removido da interface nesta
 // rodada (pedido explícito: "remover da interface a necessidade de
 // informar código da cor/filamento") — nunca exigido para cadastrar/editar
@@ -76,6 +85,8 @@ export function FilamentTypeForm({
   const [notes, setNotes] = useState(initialValues?.notes ?? '')
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
 
+  const isEditMode = mode === 'edit'
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
@@ -83,8 +94,10 @@ export function FilamentTypeForm({
 
     if (!material) errors.material = 'Selecione o material.'
 
+    // Fabricante só é editável/exigido no modo EDIT. No modo CREATE o campo
+    // nem aparece e o valor enviado é UNSPECIFIED_MANUFACTURER.
     const trimmedManufacturer = manufacturer.trim()
-    if (!trimmedManufacturer) errors.manufacturer = 'Informe o fabricante.'
+    if (isEditMode && !trimmedManufacturer) errors.manufacturer = 'Informe o fabricante.'
 
     const trimmedLine = line.trim()
     if (!trimmedLine) errors.line = 'Informe a linha.'
@@ -92,7 +105,9 @@ export function FilamentTypeForm({
     const trimmedColor = commercialColor.trim()
     if (!trimmedColor) errors.commercial_color = 'Informe a cor.'
 
-    const minimumStockResult = parseNumberField(minimumStockGrams, 'o peso mínimo de alerta', { min: 0 })
+    const minimumStockResult = parseNumberField(minimumStockGrams, 'o peso mínimo de alerta', {
+      min: 0,
+    })
     if (minimumStockResult.error) errors.minimum_stock_grams = minimumStockResult.error
 
     if (Object.keys(errors).length > 0) {
@@ -103,7 +118,7 @@ export function FilamentTypeForm({
 
     onSubmit({
       material: material as FilamentMaterial,
-      manufacturer: trimmedManufacturer,
+      manufacturer: isEditMode ? trimmedManufacturer : UNSPECIFIED_MANUFACTURER,
       line: trimmedLine,
       commercial_color: trimmedColor,
       minimum_stock_grams: minimumStockResult.value ?? null,
@@ -141,21 +156,26 @@ export function FilamentTypeForm({
         {fieldErrors.material && <p className="text-destructive text-sm">{fieldErrors.material}</p>}
       </div>
 
-      <div className="flex flex-col gap-2">
-        <Label htmlFor={`${idPrefix}-manufacturer`}>Fabricante</Label>
-        <Input
-          id={`${idPrefix}-manufacturer`}
-          value={manufacturer}
-          onChange={(event) => {
-            setManufacturer(event.target.value)
-            setFieldErrors((current) => ({ ...current, manufacturer: '' }))
-          }}
-          disabled={isSubmitting}
-          aria-invalid={fieldErrors.manufacturer ? true : undefined}
-          className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
-        />
-        {fieldErrors.manufacturer && <p className="text-destructive text-sm">{fieldErrors.manufacturer}</p>}
-      </div>
+      {/* Fabricante: só no modo EDIT (ver UNSPECIFIED_MANUFACTURER). */}
+      {isEditMode && (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={`${idPrefix}-manufacturer`}>Fabricante</Label>
+          <Input
+            id={`${idPrefix}-manufacturer`}
+            value={manufacturer}
+            onChange={(event) => {
+              setManufacturer(event.target.value)
+              setFieldErrors((current) => ({ ...current, manufacturer: '' }))
+            }}
+            disabled={isSubmitting}
+            aria-invalid={fieldErrors.manufacturer ? true : undefined}
+            className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
+          />
+          {fieldErrors.manufacturer && (
+            <p className="text-destructive text-sm">{fieldErrors.manufacturer}</p>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-col gap-2">
         <Label htmlFor={`${idPrefix}-line`}>Linha</Label>
@@ -202,7 +222,9 @@ export function FilamentTypeForm({
           aria-invalid={fieldErrors.commercial_color ? true : undefined}
           className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
         />
-        {fieldErrors.commercial_color && <p className="text-destructive text-sm">{fieldErrors.commercial_color}</p>}
+        {fieldErrors.commercial_color && (
+          <p className="text-destructive text-sm">{fieldErrors.commercial_color}</p>
+        )}
       </div>
 
       <div className="flex flex-col gap-2">
@@ -214,9 +236,11 @@ export function FilamentTypeForm({
           onChange={(event) => setMinimumStockGrams(event.target.value)}
           disabled={isSubmitting}
           aria-invalid={fieldErrors.minimum_stock_grams ? true : undefined}
-          className="w-32 focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
+          className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-32"
         />
-        {fieldErrors.minimum_stock_grams && <p className="text-destructive text-sm">{fieldErrors.minimum_stock_grams}</p>}
+        {fieldErrors.minimum_stock_grams && (
+          <p className="text-destructive text-sm">{fieldErrors.minimum_stock_grams}</p>
+        )}
       </div>
 
       <div className="flex flex-col gap-2">

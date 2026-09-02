@@ -58,10 +58,15 @@ import type { FilamentTypeSummary } from '@/types/domain'
 // Módulo 3 (Estoque) — listagem de Filamentos CONSOLIDADA por Material +
 // Linha + Cor (2026-09-01). A coluna Fabricante saiu da listagem principal
 // (tipos de fabricantes diferentes com o mesmo Material+Linha+Cor viram uma
-// única linha); o fabricante continua íntegro no banco, no cadastro, nas
-// compras, nos rolos, no histórico e nos detalhes de "Ver rolos". Nenhuma
-// alteração de schema/migration/RPC/dado — só leitura via
-// vw_filament_type_summary + agrupamento em JS.
+// única linha) e o campo Fabricante também saiu da janela "Novo tipo de
+// filamento" (decisão revisada do usuário) — a criação envia internamente
+// manufacturer 'Não informado' (UNSPECIFIED_MANUFACTURER em
+// FilamentTypeForm), já que filament_types.manufacturer é NOT NULL no
+// schema atual. O fabricante continua íntegro no banco e é editável no
+// modo "Editar tipo de filamento", nas compras, nos rolos, no histórico e
+// nos detalhes de "Ver rolos". Nenhuma alteração de schema/migration/RPC/
+// Edge Function/dado — só leitura via vw_filament_type_summary +
+// agrupamento em JS.
 
 const FILAMENTS_TABLE_ID = 'inventory-filaments'
 // Sem a coluna 'manufacturer' e sem a coluna 'is_active' (Switch por tipo,
