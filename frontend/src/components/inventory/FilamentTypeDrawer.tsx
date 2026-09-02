@@ -408,15 +408,10 @@ export function FilamentTypeDrawer({
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <p className="text-muted-foreground text-xs">Grupo</p>
-        <p className="text-base font-medium">
-          {group.material} · {group.lineLabel} · {group.colorLabel}
-        </p>
-        <p className="text-muted-foreground mt-0.5 text-xs">
-          Fabricantes: {group.manufacturers.join(', ')}
-        </p>
-      </div>
+      {/* A identificação do grupo (Material - Linha - Cor) fica só no título
+          da janela (DialogTitle em FilamentsInventoryPage) — não é repetida
+          aqui. O fabricante continua íntegro no banco e por rolo/tipo mais
+          abaixo; só não aparece mais como resumo no topo. */}
 
       {/* Resumo consolidado — soma de vw_filament_type_summary por grupo,
           nunca recalculado aqui. Abertos/Esgotados são contagens de exibição
@@ -443,9 +438,10 @@ export function FilamentTypeDrawer({
         </div>
       </div>
 
-      {/* Tipos / fabricantes do grupo — ações INDIVIDUAIS por filament_type_id. */}
+      {/* Rolos em estoque do grupo — ações INDIVIDUAIS de tipo por
+          filament_type_id (Editar/Ativar/Excluir tipo, Novo rolo). */}
       <div className="flex flex-col gap-2">
-        <p className="text-sm font-semibold">Tipos e fabricantes</p>
+        <p className="text-sm font-semibold">Rolos em estoque</p>
         <div className="flex flex-col gap-2">
           {group.types.map((type) => (
             <div

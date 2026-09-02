@@ -205,9 +205,16 @@ function getVisibleGroupLabels(): string[] {
     .map((cells) => `${cells[0].textContent}/${cells[1].textContent}/${cells[2].textContent}`)
 }
 
-async function openDrawer(user: ReturnType<typeof userEvent.setup>, groupRow: HTMLElement) {
+// O botão externo continua "Ver rolos"; a JANELA aberta tem como título a
+// identificação dinâmica do grupo (Material - Linha - Cor), então o diálogo
+// é localizado por esse nome (default = fixture PLA/Sólida/Preto).
+async function openDrawer(
+  user: ReturnType<typeof userEvent.setup>,
+  groupRow: HTMLElement,
+  dialogName: string | RegExp = 'PLA - Sólida - Preto',
+) {
   await user.click(within(groupRow).getByRole('button', { name: /^ver rolos/i }))
-  return screen.getByRole('dialog', { name: 'Ver rolos' })
+  return screen.getByRole('dialog', { name: dialogName })
 }
 
 function getSpoolsTable(dialog: HTMLElement): HTMLElement {
@@ -691,6 +698,49 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     expect(buttons).toEqual(['Ver rolos'])
   })
 
+  it('o botão da linha continua "Ver rolos", mas a janela aberta tem como título a identificação do grupo (Material - Linha - Cor)', async () => {
+    mockTypes([typeFixture({ filament_type_id: 'a', manufacturer: 'Voolt3D' })])
+    renderPage()
+    const user = userEvent.setup()
+
+    const row = getGroupRow('PLA', 'Sólida', 'Preto')
+    // O botão que abre a janela não muda: rótulo visível "Ver rolos".
+    const trigger = within(row).getByRole('button', { name: /^ver rolos/i })
+    expect(trigger).toHaveTextContent('Ver rolos')
+
+    const dialog = await openDrawer(user, row)
+    // A janela é localizada pelo nome acessível = título dinâmico do grupo.
+    expect(dialog).toBe(screen.getByRole('dialog', { name: 'PLA - Sólida - Preto' }))
+    // O título fixo "Ver rolos" não se repete dentro da janela.
+    expect(within(dialog).queryByText('Ver rolos')).not.toBeInTheDocument()
+    // Bloco "Grupo" e resumo "Fabricantes:" foram removidos.
+    expect(within(dialog).queryByText('Grupo')).not.toBeInTheDocument()
+    expect(within(dialog).queryByText(/Fabricantes:/)).not.toBeInTheDocument()
+    // A identificação não aparece duplicada como subtítulo (formato antigo
+    // com separador "·").
+    expect(within(dialog).queryByText('PLA · Sólida · Preto')).not.toBeInTheDocument()
+    // A seção passou a se chamar "Rolos em estoque".
+    expect(within(dialog).getByText('Rolos em estoque')).toBeInTheDocument()
+    expect(within(dialog).queryByText('Tipos e fabricantes')).not.toBeInTheDocument()
+    // Os cards de resumo continuam.
+    for (const label of [
+      'Disponível',
+      'Rolos disponíveis',
+      'Abertos',
+      'Esgotados',
+      'Estoque mínimo',
+      'Situação',
+    ]) {
+      expect(within(dialog).getByText(label)).toBeInTheDocument()
+    }
+    // "Novo rolo", menu de ações do tipo e "Mostrar arquivados" seguem ativos.
+    expect(within(dialog).getByRole('button', { name: 'Novo rolo' })).toBeInTheDocument()
+    expect(
+      within(dialog).getByRole('button', { name: /Ações do tipo Voolt3D — Preto/i }),
+    ).toBeInTheDocument()
+    expect(within(dialog).getByRole('switch', { name: 'Mostrar arquivados' })).toBeInTheDocument()
+  })
+
   it('"Ver rolos" abre TODOS os tipos/fabricantes do grupo, com o fabricante visível em cada rolo', async () => {
     mockTypes([
       typeFixture({ filament_type_id: 'a', manufacturer: 'Voolt3D' }),
@@ -704,7 +754,10 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     const user = userEvent.setup()
 
     const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
-    expect(within(dialog).getByText(/Fabricantes: National3D, Voolt3D/)).toBeInTheDocument()
+    // O resumo "Fabricantes: ..." foi removido do topo da janela; a
+    // identificação do grupo agora é só o título. O fabricante continua
+    // visível por rolo na tabela abaixo.
+    expect(within(dialog).queryByText(/Fabricantes:/)).not.toBeInTheDocument()
     const table = getSpoolsTable(dialog)
     const rl1 = within(table).getByText('RL-26-001').closest('tr') as HTMLElement
     const rl2 = within(table).getByText('RL-26-002').closest('tr') as HTMLElement
@@ -771,7 +824,9 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     await user.click(screen.getByRole('button', { name: /salvar altera/i }))
 
     await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: 'Ver rolos' })).not.toBeInTheDocument(),
+      expect(
+        screen.queryByRole('dialog', { name: 'PLA - Sólida - Preto' }),
+      ).not.toBeInTheDocument(),
     )
     expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/Azul'])
   })

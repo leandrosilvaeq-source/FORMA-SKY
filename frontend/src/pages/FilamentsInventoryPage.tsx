@@ -864,11 +864,15 @@ export function FilamentsInventoryPage() {
       <Dialog open={isDrawerVisible} onOpenChange={handleDrawerOpenChange}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
           <DialogHeader>
-            <DialogTitle>Ver rolos</DialogTitle>
-            <DialogDescription>
-              {openGroup &&
-                `${openGroup.material} · ${openGroup.lineLabel} · ${openGroup.colorLabel}`}
-            </DialogDescription>
+            {/* O título da janela É a identificação do grupo (Material -
+                Linha - Cor) — o botão que abre continua "Ver rolos", mas a
+                janela aberta não repete esse texto. Sem subtítulo: a
+                identificação não aparece duas vezes. */}
+            <DialogTitle>
+              {openGroup
+                ? `${openGroup.material} - ${openGroup.lineLabel} - ${openGroup.colorLabel}`
+                : ''}
+            </DialogTitle>
           </DialogHeader>
           {openGroup && (
             <FilamentTypeDrawer
