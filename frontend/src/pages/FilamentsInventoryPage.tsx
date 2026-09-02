@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react'
+import { useCallback, useId, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { FilterIcon } from 'lucide-react'
 import { InventoryPageShell } from '@/components/inventory/InventoryPageShell'
@@ -33,6 +33,7 @@ import { TableHead } from '@/components/ui/table'
 import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table'
 import { useAuth } from '@/context/AuthContext'
 import { useFilamentTypes } from '@/hooks/useFilamentTypes'
+import { useFilamentSpoolCounts } from '@/hooks/useFilamentSpoolCounts'
 import { usePersistentColumnWidths } from '@/hooks/usePersistentColumnWidths'
 import { ApiError } from '@/lib/api/errors'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
@@ -178,6 +179,24 @@ export function FilamentsInventoryPage() {
   const userId = session?.user.id ?? null
   const columnWidths = usePersistentColumnWidths(FILAMENTS_TABLE_ID, userId, FILAMENTS_COLUMN_SPECS)
 
+  // Contagem de ROLOS DISPONÍVEIS (saldo > 0) por tipo — uma consulta em
+  // lote sobre filament_spools; NUNCA usable_spool_count da view (que não
+  // exige saldo > 0). Enquanto carrega, a tabela espera; num erro, a coluna
+  // mostra "—", o filtro de faixa fica desabilitado e um aviso de "tentar
+  // novamente" aparece — nunca o número da view como fallback.
+  const allTypeIds = useMemo(() => types.map((type) => type.filament_type_id), [types])
+  const {
+    countByTypeId,
+    isLoading: countsLoading,
+    error: countsError,
+    refetch: refetchCounts,
+  } = useFilamentSpoolCounts(allTypeIds)
+
+  const refetchAll = useCallback(() => {
+    refetch()
+    refetchCounts()
+  }, [refetch, refetchCounts])
+
   const [filters, setFilters] = useState<FilamentGroupFilterState>(EMPTY_FILAMENT_GROUP_FILTERS)
   const [minSpoolsInput, setMinSpoolsInput] = useState('')
   const [maxSpoolsInput, setMaxSpoolsInput] = useState('')
@@ -209,8 +228,16 @@ export function FilamentsInventoryPage() {
   const [openGroupKey, setOpenGroupKey] = useState<string | null>(null)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
 
-  const groups = useMemo(() => groupFilamentTypes(types), [types])
+  // Na primeira carga da contagem (countByTypeId === null e ainda sem erro),
+  // os grupos nascem com availableSpoolCount = null e a tabela espera. Num
+  // erro, também é null (mostra "—"), nunca o número da view.
+  const availableCountByTypeId = countsError ? null : countByTypeId
+  const groups = useMemo(
+    () => groupFilamentTypes(types, availableCountByTypeId),
+    [types, availableCountByTypeId],
+  )
   const filterOptions = useMemo(() => filamentFilterOptions(types), [types])
+  const spoolRangeDisabled = countsError !== null
 
   const openGroup = useMemo(
     () => groups.find((group) => group.key === openGroupKey) ?? null,
@@ -369,7 +396,7 @@ export function FilamentsInventoryPage() {
     <InventoryPageShell
       area="filamentos"
       onPurchaseCompleted={(category) => {
-        if (category === 'FILAMENT') refetch()
+        if (category === 'FILAMENT') refetchAll()
       }}
     >
       <div className="mt-4 flex flex-col gap-3">
@@ -444,8 +471,23 @@ export function FilamentsInventoryPage() {
         </div>
       )}
 
+      {countsError && (
+        <div
+          role="alert"
+          className="border-destructive/50 bg-destructive/10 mt-4 flex items-center justify-between rounded-lg border p-3 text-sm"
+        >
+          <span>
+            Não foi possível carregar o número de rolos disponíveis. A coluna mostra "—" até tentar
+            de novo.
+          </span>
+          <Button variant="outline" size="sm" onClick={refetchCounts}>
+            Tentar novamente
+          </Button>
+        </div>
+      )}
+
       <div className="mt-3">
-        {isLoading ? (
+        {isLoading || (countsLoading && !countsError) ? (
           <div role="status" className="flex flex-col gap-2">
             <Skeleton className="h-8 w-full" />
             <Skeleton className="h-8 w-full" />
@@ -533,59 +575,74 @@ export function FilamentsInventoryPage() {
                         <PopoverContent aria-label="Faixa de rolos disponíveis" align="end">
                           <div className="flex flex-col gap-3 text-left">
                             <span className="text-sm font-semibold">Rolos disponíveis</span>
-                            <div className="flex items-end gap-2">
-                              <div className="flex flex-col gap-1">
-                                <Label htmlFor="filament-spools-min" className="text-xs">
-                                  Mínimo
-                                </Label>
-                                <Input
-                                  id="filament-spools-min"
-                                  inputMode="numeric"
-                                  value={minSpoolsInput}
-                                  onChange={(event) => setMinSpoolsInput(event.target.value)}
-                                  onBlur={() => commitSpoolRange(minSpoolsInput, maxSpoolsInput)}
-                                  className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 h-8 w-20"
-                                />
-                              </div>
-                              <div className="flex flex-col gap-1">
-                                <Label htmlFor="filament-spools-max" className="text-xs">
-                                  Máximo
-                                </Label>
-                                <Input
-                                  id="filament-spools-max"
-                                  inputMode="numeric"
-                                  value={maxSpoolsInput}
-                                  onChange={(event) => setMaxSpoolsInput(event.target.value)}
-                                  onBlur={() => commitSpoolRange(minSpoolsInput, maxSpoolsInput)}
-                                  className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 h-8 w-20"
-                                />
-                              </div>
-                            </div>
-                            {rangeInvalid && (
-                              <p role="alert" className="text-destructive text-xs">
-                                O mínimo não pode ser maior que o máximo.
+                            {spoolRangeDisabled ? (
+                              <p role="status" className="text-muted-foreground text-xs">
+                                Contagem de rolos disponíveis indisponível — não é possível filtrar
+                                por faixa agora.
                               </p>
+                            ) : (
+                              <>
+                                <div className="flex items-end gap-2">
+                                  <div className="flex flex-col gap-1">
+                                    <Label htmlFor="filament-spools-min" className="text-xs">
+                                      Mínimo
+                                    </Label>
+                                    <Input
+                                      id="filament-spools-min"
+                                      inputMode="numeric"
+                                      value={minSpoolsInput}
+                                      onChange={(event) => setMinSpoolsInput(event.target.value)}
+                                      onBlur={() =>
+                                        commitSpoolRange(minSpoolsInput, maxSpoolsInput)
+                                      }
+                                      className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 h-8 w-20"
+                                    />
+                                  </div>
+                                  <div className="flex flex-col gap-1">
+                                    <Label htmlFor="filament-spools-max" className="text-xs">
+                                      Máximo
+                                    </Label>
+                                    <Input
+                                      id="filament-spools-max"
+                                      inputMode="numeric"
+                                      value={maxSpoolsInput}
+                                      onChange={(event) => setMaxSpoolsInput(event.target.value)}
+                                      onBlur={() =>
+                                        commitSpoolRange(minSpoolsInput, maxSpoolsInput)
+                                      }
+                                      className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 h-8 w-20"
+                                    />
+                                  </div>
+                                </div>
+                                {rangeInvalid && (
+                                  <p role="alert" className="text-destructive text-xs">
+                                    O mínimo não pode ser maior que o máximo.
+                                  </p>
+                                )}
+                                <div className="flex gap-2">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={() => commitSpoolRange(minSpoolsInput, maxSpoolsInput)}
+                                    className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark h-7"
+                                  >
+                                    Aplicar
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={clearSpoolRange}
+                                    disabled={
+                                      filters.minSpools === null && filters.maxSpools === null
+                                    }
+                                    className="text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark h-7"
+                                  >
+                                    Limpar
+                                  </Button>
+                                </div>
+                              </>
                             )}
-                            <div className="flex gap-2">
-                              <Button
-                                type="button"
-                                size="sm"
-                                onClick={() => commitSpoolRange(minSpoolsInput, maxSpoolsInput)}
-                                className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark h-7"
-                              >
-                                Aplicar
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={clearSpoolRange}
-                                disabled={filters.minSpools === null && filters.maxSpools === null}
-                                className="text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark h-7"
-                              >
-                                Limpar
-                              </Button>
-                            </div>
                           </div>
                         </PopoverContent>
                       </Popover>
@@ -643,7 +700,7 @@ export function FilamentsInventoryPage() {
                         {formatGrams(group.availableGrams)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {group.usableSpoolCount}
+                        {group.availableSpoolCount === null ? '—' : group.availableSpoolCount}
                       </TableCell>
                       <TableCell>
                         <StockLevelBadge level={stockLevel} />
@@ -811,7 +868,7 @@ export function FilamentsInventoryPage() {
           {openGroup && (
             <FilamentTypeDrawer
               group={openGroup}
-              onSummaryChanged={refetch}
+              onSummaryChanged={refetchAll}
               onClose={() => handleDrawerOpenChange(false)}
               onEditType={openEditDialog}
               onToggleType={openToggleDialog}

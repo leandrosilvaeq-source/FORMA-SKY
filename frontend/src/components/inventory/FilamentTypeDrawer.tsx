@@ -423,7 +423,10 @@ export function FilamentTypeDrawer({
           dos rolos já carregados. */}
       <div className="border-brand-primary/20 bg-brand-primary-soft/40 grid grid-cols-2 gap-3 rounded-lg border px-3 py-3 sm:grid-cols-3 lg:grid-cols-6">
         <Field label="Disponível" value={formatGrams(group.availableGrams)} />
-        <Field label="Rolos disponíveis" value={String(group.usableSpoolCount)} />
+        <Field
+          label="Rolos disponíveis"
+          value={group.availableSpoolCount === null ? '—' : String(group.availableSpoolCount)}
+        />
         <Field label="Abertos" value={String(openCount)} />
         <Field label="Esgotados" value={String(exhaustedCount)} />
         <Field

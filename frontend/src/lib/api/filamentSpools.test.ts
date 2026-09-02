@@ -9,6 +9,7 @@ vi.mock('./edgeFunctionClient', () => ({ callEdgeFunction: callEdgeFunctionMock 
 import {
   createFilamentSpool,
   deleteFilamentSpool,
+  listAvailableSpoolCountsByType,
   listFilamentSpools,
   updateFilamentSpool,
 } from './filamentSpools'
@@ -77,6 +78,85 @@ describe('filamentSpools api', () => {
     const result = await listFilamentSpools('t1')
 
     expect(result[0].has_movement_history).toBe(false)
+  })
+
+  it('listAvailableSpoolCountsByType: uma única consulta .in em filament_spools (sem filament_movements), aplica a regra saldo > 0', async () => {
+    const builder = chainableResult({
+      data: [
+        {
+          id: 's1',
+          filament_type_id: 't1',
+          current_net_weight_grams: 100,
+          status: 'ABERTO',
+          is_active: true,
+        },
+        {
+          id: 's2',
+          filament_type_id: 't1',
+          current_net_weight_grams: 1000,
+          status: 'LACRADO',
+          is_active: true,
+        },
+        {
+          id: 's3',
+          filament_type_id: 't1',
+          current_net_weight_grams: 0,
+          status: 'ABERTO',
+          is_active: true,
+        },
+        {
+          id: 's4',
+          filament_type_id: 't2',
+          current_net_weight_grams: 250,
+          status: 'ABERTO',
+          is_active: true,
+        },
+        {
+          id: 's5',
+          filament_type_id: 't2',
+          current_net_weight_grams: 500,
+          status: 'DESCARTADO',
+          is_active: true,
+        },
+        {
+          id: 's6',
+          filament_type_id: 't2',
+          current_net_weight_grams: 500,
+          status: 'ABERTO',
+          is_active: false,
+        },
+      ],
+      error: null,
+    })
+    fromMock.mockImplementation((table: string) => {
+      if (table === 'filament_spools') return builder
+      throw new Error(`tabela inesperada: ${table}`)
+    })
+
+    const counts = await listAvailableSpoolCountsByType(['t1', 't2'])
+
+    expect(fromMock).toHaveBeenCalledTimes(1)
+    expect(fromMock).toHaveBeenCalledWith('filament_spools')
+    expect(builder.in).toHaveBeenCalledWith('filament_type_id', ['t1', 't2'])
+    expect(builder.select).toHaveBeenCalledWith(
+      'id, filament_type_id, current_net_weight_grams, status, is_active',
+    )
+    expect(counts.get('t1')).toBe(2)
+    expect(counts.get('t2')).toBe(1)
+  })
+
+  it('listAvailableSpoolCountsByType: lista vazia não consulta nada', async () => {
+    const counts = await listAvailableSpoolCountsByType([])
+    expect(counts.size).toBe(0)
+    expect(fromMock).not.toHaveBeenCalled()
+  })
+
+  it('listAvailableSpoolCountsByType: erro na consulta propaga ApiError (nunca devolve contagem parcial silenciosa)', async () => {
+    const { ApiError } = await import('./errors')
+    fromMock.mockImplementation(() =>
+      chainableResult({ data: null, error: { message: 'falhou', code: '500' } }),
+    )
+    await expect(listAvailableSpoolCountsByType(['t1'])).rejects.toBeInstanceOf(ApiError)
   })
 
   it('listFilamentSpools aceita vários filament_type_id (grupo consolidado) numa única consulta com .in', async () => {

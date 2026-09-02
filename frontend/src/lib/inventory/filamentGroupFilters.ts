@@ -107,9 +107,13 @@ export function matchesFilamentGroupFilters(
   if (filters.colors.size > 0 && !filters.colors.has(normalizeFilamentToken(group.colorLabel)))
     return false
 
-  if (!isFilamentSpoolRangeInvalid(filters)) {
-    if (filters.minSpools !== null && group.usableSpoolCount < filters.minSpools) return false
-    if (filters.maxSpools !== null && group.usableSpoolCount > filters.maxSpools) return false
+  // A faixa usa a contagem CONSOLIDADA de rolos DISPONÍVEIS (saldo > 0).
+  // Quando ela ainda não está disponível (null: carregando ou erro), a
+  // faixa não pode ser avaliada e nunca descarta o grupo — a interface
+  // também desabilita o controle nesse caso, nunca cai no número da view.
+  if (!isFilamentSpoolRangeInvalid(filters) && group.availableSpoolCount !== null) {
+    if (filters.minSpools !== null && group.availableSpoolCount < filters.minSpools) return false
+    if (filters.maxSpools !== null && group.availableSpoolCount > filters.maxSpools) return false
   }
   return true
 }

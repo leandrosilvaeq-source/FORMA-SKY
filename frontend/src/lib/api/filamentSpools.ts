@@ -7,6 +7,7 @@
 import { mapSupabaseError } from './errors'
 import { supabase } from '@/lib/supabase'
 import { callEdgeFunction } from './edgeFunctionClient'
+import { countAvailableSpoolsByType } from '@/lib/inventory/filamentGroups'
 import type { FilamentSpool, FilamentSpoolStatus } from '@/types/domain'
 
 // Resposta crua das duas rotas de escrita (Edge Function -> RPC): nunca
@@ -60,6 +61,34 @@ export async function listFilamentSpools(
     ...spool,
     has_movement_history: spoolIdsWithHistory.has(spool.id),
   }))
+}
+
+// Contagem de ROLOS DISPONÍVEIS por filament_type_id para a listagem
+// consolidada — regra aprovada: is_active, status fora de
+// ESGOTADO/DESCARTADO E current_net_weight_grams > 0. NÃO usa
+// vw_filament_type_summary.usable_spool_count (que não exige saldo > 0).
+// Uma única consulta com `.in(...)` sobre filament_spools (SELECT já
+// concedido a authenticated / RLS is_active_user()), só os campos
+// necessários, SEM consultar filament_movements. Lista vazia -> sem
+// consulta. Cada spool.id é contado no máximo uma vez.
+export async function listAvailableSpoolCountsByType(
+  filamentTypeIds: string[],
+): Promise<Map<string, number>> {
+  if (filamentTypeIds.length === 0) return new Map()
+  const { data, error } = await supabase
+    .from('filament_spools')
+    .select('id, filament_type_id, current_net_weight_grams, status, is_active')
+    .in('filament_type_id', filamentTypeIds)
+  if (error) throw mapSupabaseError(error)
+  return countAvailableSpoolsByType(
+    data as Array<{
+      id: string
+      filament_type_id: string
+      current_net_weight_grams: number
+      status: FilamentSpoolStatus
+      is_active: boolean
+    }>,
+  )
 }
 
 export interface CreateFilamentSpoolInput {

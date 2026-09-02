@@ -7,7 +7,50 @@
 
 import { PT_BR_COLLATOR } from '@/components/dataTable/sorting'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
-import type { FilamentMaterial, FilamentTypeSummary } from '@/types/domain'
+import type { FilamentMaterial, FilamentSpoolStatus, FilamentTypeSummary } from '@/types/domain'
+
+// "Rolo disponível" (regra aprovada) — is_active, status fora de
+// ESGOTADO/DESCARTADO E saldo estritamente positivo. A view
+// vw_filament_type_summary.usable_spool_count NÃO exige o saldo > 0: um
+// rolo LACRADO recém-criado com 0 g (sem INITIAL_BALANCE ainda) entraria
+// nela — por isso a contagem de "Rolos disponíveis" é feita aqui, a partir
+// das linhas reais de filament_spools, nunca da view. Saldo negativo (não
+// deveria existir) também não conta.
+export function isFilamentSpoolAvailable(spool: {
+  is_active: boolean
+  status: FilamentSpoolStatus
+  current_net_weight_grams: number
+}): boolean {
+  return (
+    spool.is_active &&
+    spool.status !== 'ESGOTADO' &&
+    spool.status !== 'DESCARTADO' &&
+    spool.current_net_weight_grams > 0
+  )
+}
+
+// Contagem de rolos disponíveis por filament_type_id, a partir de um lote
+// de rolos já carregado (uma única consulta com .in(...)). Cada spool.id é
+// contado no máximo uma vez.
+export function countAvailableSpoolsByType(
+  spools: Array<{
+    id: string
+    filament_type_id: string
+    is_active: boolean
+    status: FilamentSpoolStatus
+    current_net_weight_grams: number
+  }>,
+): Map<string, number> {
+  const byType = new Map<string, number>()
+  const counted = new Set<string>()
+  for (const spool of spools) {
+    if (counted.has(spool.id)) continue
+    counted.add(spool.id)
+    if (!isFilamentSpoolAvailable(spool)) continue
+    byType.set(spool.filament_type_id, (byType.get(spool.filament_type_id) ?? 0) + 1)
+  }
+  return byType
+}
 
 // Chave de agrupamento por token: minúsculas + sem acentos (normalizeForSearch)
 // + espaços internos colapsados. "Basic  Matte" e "basic matte" caem no
@@ -40,10 +83,17 @@ export interface FilamentGroup {
   // dos tipos do grupo).
   lineLabel: string
   colorLabel: string
-  // Somatórios consolidados (vindos de vw_filament_type_summary, um tipo
-  // aparece uma única vez na view — nenhum rolo é contado duas vezes).
+  // Peso disponível consolidado — vem de vw_filament_type_summary
+  // (total_available_grams). Rolos zerados somam 0 g, então a view continua
+  // correta para o PESO; só a CONTAGEM precisava de correção.
   availableGrams: number
-  usableSpoolCount: number
+  // Nº de rolos disponíveis consolidado (is_active, não ESGOTADO/DESCARTADO,
+  // saldo > 0), calculado a partir das linhas reais de filament_spools —
+  // NUNCA de usable_spool_count da view (que não exige saldo > 0).
+  // `null` = contagem ainda não carregada ou a consulta falhou (a interface
+  // mostra "—" e desabilita o filtro de faixa; nunca cai no número da view
+  // como fallback silencioso).
+  availableSpoolCount: number | null
   // Estoque mínimo consolidado: MAIOR limite entre os tipos ATIVOS do grupo
   // (fabricantes diferentes representam o mesmo estoque comercial — somar os
   // limites multiplicaria o mínimo artificialmente). null quando nenhum
@@ -61,7 +111,17 @@ export interface FilamentGroup {
 // Agrupa os resumos de tipo por Material + Linha + Cor e devolve os grupos
 // já ordenados de forma determinística por Material -> Linha -> Cor (rótulo
 // consolidado) — nunca pela ordem/fabricante do primeiro tipo.
-export function groupFilamentTypes(types: FilamentTypeSummary[]): FilamentGroup[] {
+//
+// `availableCountByTypeId`: contagem de rolos disponíveis por filament_type_id
+// (de countAvailableSpoolsByType, a partir do lote real de filament_spools).
+// `null` => a contagem ainda não está disponível (carregando ou erro) e
+// cada grupo recebe availableSpoolCount = null. Um tipo ausente do mapa
+// conta como 0 rolos disponíveis (é o estado real de um tipo sem nenhum
+// rolo com saldo positivo).
+export function groupFilamentTypes(
+  types: FilamentTypeSummary[],
+  availableCountByTypeId: Map<string, number> | null = null,
+): FilamentGroup[] {
   const byKey = new Map<string, FilamentTypeSummary[]>()
   for (const type of types) {
     // JSON.stringify de uma tupla: chave sem separador que possa colidir
@@ -88,7 +148,13 @@ export function groupFilamentTypes(types: FilamentTypeSummary[]): FilamentGroup[
       lineLabel: pickCanonicalLabel(groupTypes.map((type) => type.line)),
       colorLabel: pickCanonicalLabel(groupTypes.map((type) => type.commercial_color)),
       availableGrams: groupTypes.reduce((sum, type) => sum + type.total_available_grams, 0),
-      usableSpoolCount: groupTypes.reduce((sum, type) => sum + type.usable_spool_count, 0),
+      availableSpoolCount:
+        availableCountByTypeId === null
+          ? null
+          : groupTypes.reduce(
+              (sum, type) => sum + (availableCountByTypeId.get(type.filament_type_id) ?? 0),
+              0,
+            ),
       minimumStockGrams: activeMinimums.length > 0 ? Math.max(...activeMinimums) : null,
       manufacturers: [...new Set(groupTypes.map((type) => type.manufacturer))].sort((a, b) =>
         PT_BR_COLLATOR.compare(a, b),

@@ -7,12 +7,14 @@ import type { FilamentSpool, FilamentTypeSummary } from '@/types/domain'
 const {
   useFilamentTypesMock,
   useFilamentSpoolsMock,
+  useFilamentSpoolCountsMock,
   useFilamentMovementsMock,
   useAuthMock,
   toastMock,
 } = vi.hoisted(() => ({
   useFilamentTypesMock: vi.fn(),
   useFilamentSpoolsMock: vi.fn(),
+  useFilamentSpoolCountsMock: vi.fn(),
   useFilamentMovementsMock: vi.fn(),
   useAuthMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
@@ -20,6 +22,9 @@ const {
 
 vi.mock('@/hooks/useFilamentTypes', () => ({ useFilamentTypes: useFilamentTypesMock }))
 vi.mock('@/hooks/useFilamentSpools', () => ({ useFilamentSpools: useFilamentSpoolsMock }))
+vi.mock('@/hooks/useFilamentSpoolCounts', () => ({
+  useFilamentSpoolCounts: useFilamentSpoolCountsMock,
+}))
 vi.mock('@/hooks/useFilamentMovements', () => ({ useFilamentMovements: useFilamentMovementsMock }))
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
 vi.mock('sonner', () => ({ toast: toastMock }))
@@ -135,15 +140,50 @@ function mockMovements(
   })
 }
 
+const refetchCountsMock = vi.fn()
+
+// Por padrão a contagem de rolos disponíveis é derivada dinamicamente do
+// `usable_spool_count` dos tipos configurados em useFilamentTypesMock — só
+// por conveniência de teste (o hook real faz a consulta correta em
+// filament_spools). Testes que precisam provar a divergência
+// (usable_spool_count != contagem real, erro, loading) sobrescrevem
+// useFilamentSpoolCountsMock explicitamente via mockSpoolCounts.
+function mockSpoolCounts(
+  overrides: Partial<{
+    countByTypeId: Map<string, number> | null
+    isLoading: boolean
+    error: unknown
+    refetch: ReturnType<typeof vi.fn>
+  }> = {},
+) {
+  useFilamentSpoolCountsMock.mockImplementation(() => {
+    if ('countByTypeId' in overrides || overrides.isLoading !== undefined || overrides.error) {
+      return {
+        countByTypeId: overrides.countByTypeId ?? null,
+        isLoading: overrides.isLoading ?? false,
+        error: overrides.error ?? null,
+        refetch: overrides.refetch ?? refetchCountsMock,
+      }
+    }
+    const { types } = useFilamentTypesMock() as { types: FilamentTypeSummary[] }
+    return {
+      countByTypeId: new Map(types.map((type) => [type.filament_type_id, type.usable_spool_count])),
+      isLoading: false,
+      error: null,
+      refetch: overrides.refetch ?? refetchCountsMock,
+    }
+  })
+}
+
 function renderPage() {
   useAuthMock.mockReturnValue({ session: { user: { email: 'op@formasky.com' } }, signOut: vi.fn() })
   return render(<FilamentsInventoryPage />, { wrapper: MemoryRouter })
 }
 
-// Linha da listagem principal (consolidada) por rótulo Material·Linha·Cor.
+// Linha da listagem principal (consolidada) por rótulo Material·Linha·Cor —
+// o material aparece em várias linhas, então casa a linha que também tem a
+// linha e a cor esperadas.
 function getGroupRow(material: string, line: string, color: string): HTMLElement {
-  const cell = within(screen.getByRole('table')).getByRole('cell', { name: material })
-  // material aparece em várias linhas; casa a linha que também tem a linha+cor.
   const rows = within(screen.getByRole('table')).getAllByRole('row')
   const match = rows.find((row) => {
     const cells = within(row).queryAllByRole('cell')
@@ -154,7 +194,6 @@ function getGroupRow(material: string, line: string, color: string): HTMLElement
     )
   })
   if (!match) throw new Error(`linha não encontrada: ${material} / ${line} / ${color}`)
-  void cell
   return match
 }
 
@@ -181,6 +220,7 @@ describe('FilamentsInventoryPage — listagem consolidada por Material + Linha +
     toastMock.error.mockReset()
     mockSpools([])
     mockMovements()
+    mockSpoolCounts()
   })
 
   it('não exibe a coluna Fabricante nem o Switch "Ativo" na listagem principal', () => {
@@ -407,6 +447,7 @@ describe('FilamentsInventoryPage — filtros Material / Linha / Cor', () => {
     toastMock.error.mockReset()
     mockSpools([])
     mockMovements()
+    mockSpoolCounts()
     mockTypes([
       typeFixture({
         filament_type_id: '1',
@@ -531,6 +572,7 @@ describe('FilamentsInventoryPage — filtro de Nº de rolos disponíveis (mín/m
     toastMock.error.mockReset()
     mockSpools([])
     mockMovements()
+    mockSpoolCounts()
     mockTypes([
       typeFixture({ filament_type_id: '1', commercial_color: 'A', usable_spool_count: 0 }),
       typeFixture({ filament_type_id: '2', commercial_color: 'B', usable_spool_count: 2 }),
@@ -633,6 +675,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     toastMock.error.mockReset()
     mockSpools([])
     mockMovements()
+    mockSpoolCounts()
   })
 
   it('a linha consolidada só tem "Ver rolos" — nunca Editar/Excluir sobre um filament_type_id arbitrário', () => {
@@ -772,7 +815,9 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
   beforeEach(() => {
     toastMock.success.mockReset()
     toastMock.error.mockReset()
+    refetchCountsMock.mockReset()
     mockMovements()
+    mockSpoolCounts()
   })
 
   it('registrar movimentação atualiza o saldo local do rolo e aciona o refetch do resumo', async () => {
@@ -909,6 +954,184 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
     expect(create.mock.calls[0][0]).toMatchObject({ filament_type_id: 'b' })
   })
+
+  it('movimentar/pesar dentro de "Ver rolos" também aciona o refetch da contagem de rolos disponíveis', async () => {
+    const register = vi.fn().mockResolvedValue({
+      id: 'm1',
+      filament_type_id: 't1',
+      spool_id: 's1',
+      movement_type: 'PURCHASE',
+      quantity_delta: 100,
+      balance_before: 500,
+      balance_after: 600,
+      reason: null,
+      reference_type: null,
+      reference_id: null,
+      idempotency_key: null,
+      occurred_at: '2026-08-27T12:00:00Z',
+      created_by: 'u1',
+      created_at: '2026-08-27T12:00:00Z',
+    })
+    mockTypes([typeFixture()])
+    mockSpools([spoolFixture()])
+    mockMovements({ register })
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    await user.click(
+      within(getSpoolsTable(dialog)).getByRole('button', {
+        name: /movimentar, pesar ou consultar histórico/i,
+      }),
+    )
+    await user.click(screen.getByRole('radio', { name: 'Entrada' }))
+    await user.click(screen.getByRole('radio', { name: 'Compra' }))
+    await user.type(screen.getByLabelText('Quantidade (g)'), '100')
+    await user.click(screen.getByRole('button', { name: /^registrar movimentação$/i }))
+
+    await waitFor(() => expect(register).toHaveBeenCalledTimes(1))
+    expect(refetchCountsMock).toHaveBeenCalled()
+  })
+})
+
+describe('FilamentsInventoryPage — contagem de rolos DISPONÍVEIS (regra: saldo > 0, nunca usable_spool_count)', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+    refetchCountsMock.mockReset()
+    mockSpools([])
+    mockMovements()
+  })
+
+  it('a coluna mostra a contagem correta, NÃO usable_spool_count da view, quando os dois divergem', () => {
+    // A view diria 5 rolos "utilizáveis"; a contagem real de rolos com
+    // saldo > 0 é 2.
+    mockTypes([typeFixture({ filament_type_id: 't1', usable_spool_count: 5 })])
+    mockSpoolCounts({ countByTypeId: new Map([['t1', 2]]) })
+    renderPage()
+    expect(within(getGroupRow('PLA', 'Sólida', 'Preto')).getAllByRole('cell')[4].textContent).toBe(
+      '2',
+    )
+  })
+
+  it('dois fabricantes consolidados: soma das contagens corretas, sem duplicação', () => {
+    mockTypes([
+      typeFixture({ filament_type_id: 'a', manufacturer: 'A', usable_spool_count: 9 }),
+      typeFixture({ filament_type_id: 'b', manufacturer: 'B', usable_spool_count: 9 }),
+    ])
+    mockSpoolCounts({
+      countByTypeId: new Map([
+        ['a', 1],
+        ['b', 2],
+      ]),
+    })
+    renderPage()
+    expect(within(getGroupRow('PLA', 'Sólida', 'Preto')).getAllByRole('cell')[4].textContent).toBe(
+      '3',
+    )
+  })
+
+  it('grupo cujos rolos estão todos zerados (tipo ausente do mapa) conta 0 e o filtro 0–0 o encontra', async () => {
+    mockTypes([
+      typeFixture({ filament_type_id: 'a', commercial_color: 'Zerado', usable_spool_count: 4 }),
+      typeFixture({ filament_type_id: 'b', commercial_color: 'Cheio', usable_spool_count: 4 }),
+    ])
+    mockSpoolCounts({ countByTypeId: new Map([['b', 3]]) })
+    renderPage()
+    const user = userEvent.setup()
+
+    expect(within(getGroupRow('PLA', 'Sólida', 'Zerado')).getAllByRole('cell')[4].textContent).toBe(
+      '0',
+    )
+
+    await user.click(
+      screen.getByRole('button', { name: 'Filtrar por número de rolos disponíveis' }),
+    )
+    await user.clear(await screen.findByLabelText('Mínimo'))
+    await user.type(screen.getByLabelText('Mínimo'), '0')
+    await user.clear(screen.getByLabelText('Máximo'))
+    await user.type(screen.getByLabelText('Máximo'), '0')
+    await user.click(screen.getByRole('button', { name: 'Aplicar' }))
+
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/Zerado'])
+  })
+
+  it('o filtro mínimo/máximo usa a contagem correta, não a da view', async () => {
+    mockTypes([
+      typeFixture({ filament_type_id: 'a', commercial_color: 'A', usable_spool_count: 9 }),
+      typeFixture({ filament_type_id: 'b', commercial_color: 'B', usable_spool_count: 9 }),
+      typeFixture({ filament_type_id: 'c', commercial_color: 'C', usable_spool_count: 9 }),
+    ])
+    mockSpoolCounts({
+      countByTypeId: new Map([
+        ['a', 1],
+        ['b', 3],
+        ['c', 5],
+      ]),
+    })
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(
+      screen.getByRole('button', { name: 'Filtrar por número de rolos disponíveis' }),
+    )
+    await user.type(await screen.findByLabelText('Mínimo'), '3')
+    await user.click(screen.getByRole('button', { name: 'Aplicar' }))
+
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/B', 'PLA/Sólida/C'])
+  })
+
+  it('listagem e drawer exibem a MESMA quantidade', async () => {
+    mockTypes([typeFixture({ filament_type_id: 't1', usable_spool_count: 7 })])
+    mockSpools([spoolFixture()])
+    mockSpoolCounts({ countByTypeId: new Map([['t1', 2]]) })
+    renderPage()
+    const user = userEvent.setup()
+
+    const row = getGroupRow('PLA', 'Sólida', 'Preto')
+    expect(within(row).getAllByRole('cell')[4].textContent).toBe('2')
+    const dialog = await openDrawer(user, row)
+    const rolosField = within(dialog).getByText('Rolos disponíveis').parentElement as HTMLElement
+    expect(within(rolosField).getByText('2')).toBeInTheDocument()
+  })
+
+  it('erro ao carregar a contagem: coluna e drawer mostram "—", filtro de faixa desabilitado, aviso com "Tentar novamente" — nunca cai em usable_spool_count', async () => {
+    const { ApiError } = await import('@/lib/api/errors')
+    mockTypes([typeFixture({ filament_type_id: 't1', usable_spool_count: 9 })])
+    mockSpools([spoolFixture()])
+    mockSpoolCounts({ error: new ApiError('database', 500, 'falhou') })
+    renderPage()
+    const user = userEvent.setup()
+
+    expect(within(getGroupRow('PLA', 'Sólida', 'Preto')).getAllByRole('cell')[4].textContent).toBe(
+      '—',
+    )
+    expect(screen.queryByText('9')).not.toBeInTheDocument()
+
+    const banner = screen
+      .getByText(/número de rolos disponíveis/i)
+      .closest('[role="alert"]') as HTMLElement
+    await user.click(within(banner).getByRole('button', { name: /tentar novamente/i }))
+    expect(refetchCountsMock).toHaveBeenCalled()
+
+    await user.click(
+      screen.getByRole('button', { name: 'Filtrar por número de rolos disponíveis' }),
+    )
+    expect(await screen.findByText(/indisponível/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText('Mínimo')).not.toBeInTheDocument()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const rolosField = within(dialog).getByText('Rolos disponíveis').parentElement as HTMLElement
+    expect(within(rolosField).getByText('—')).toBeInTheDocument()
+  })
+
+  it('enquanto a contagem carrega, a tabela espera (skeleton), sem mostrar número da view', () => {
+    mockTypes([typeFixture({ usable_spool_count: 9 })])
+    mockSpoolCounts({ isLoading: true, countByTypeId: null })
+    renderPage()
+    expect(screen.getByRole('status')).toBeInTheDocument()
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  })
 })
 
 describe('FilamentsInventoryPage — Compras e ausência do código da cor', () => {
@@ -917,6 +1140,7 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     toastMock.error.mockReset()
     mockSpools([])
     mockMovements()
+    mockSpoolCounts()
   })
 
   it('o botão "Compras" aparece na área Filamentos', async () => {
@@ -943,6 +1167,7 @@ describe('FilamentsInventoryPage — colunas redimensionáveis e persistidas', (
     toastMock.error.mockReset()
     mockSpools([])
     mockMovements()
+    mockSpoolCounts()
     mockTypes([typeFixture()])
   })
 

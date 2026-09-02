@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  countAvailableSpoolsByType,
   groupFilamentTypes,
+  isFilamentSpoolAvailable,
   matchesFilamentGroupSearch,
   normalizeFilamentToken,
 } from './filamentGroups'
-import type { FilamentTypeSummary } from '@/types/domain'
+import type { FilamentSpoolStatus, FilamentTypeSummary } from '@/types/domain'
 
 function typeFixture(overrides: Partial<FilamentTypeSummary> = {}): FilamentTypeSummary {
   return {
@@ -23,6 +25,25 @@ function typeFixture(overrides: Partial<FilamentTypeSummary> = {}): FilamentType
   }
 }
 
+function spoolRow(
+  overrides: Partial<{
+    id: string
+    filament_type_id: string
+    is_active: boolean
+    status: FilamentSpoolStatus
+    current_net_weight_grams: number
+  }> = {},
+) {
+  return {
+    id: 's1',
+    filament_type_id: 't1',
+    is_active: true,
+    status: 'ABERTO' as FilamentSpoolStatus,
+    current_net_weight_grams: 100,
+    ...overrides,
+  }
+}
+
 describe('normalizeFilamentToken', () => {
   it('minúsculas, sem acento, espaços internos colapsados, borda aparada', () => {
     expect(normalizeFilamentToken('  Basic   Matte ')).toBe('basic matte')
@@ -30,46 +51,105 @@ describe('normalizeFilamentToken', () => {
   })
 })
 
+describe('isFilamentSpoolAvailable — regra aprovada (is_active, status ok, saldo > 0)', () => {
+  it.each([
+    ['ativo, ABERTO, 100g', spoolRow({ status: 'ABERTO', current_net_weight_grams: 100 }), true],
+    [
+      'ativo, LACRADO, 1000g',
+      spoolRow({ status: 'LACRADO', current_net_weight_grams: 1000 }),
+      true,
+    ],
+    ['ativo, ABERTO, 0g', spoolRow({ status: 'ABERTO', current_net_weight_grams: 0 }), false],
+    ['ativo, LACRADO, 0g', spoolRow({ status: 'LACRADO', current_net_weight_grams: 0 }), false],
+    ['ativo, ABERTO, -5g', spoolRow({ status: 'ABERTO', current_net_weight_grams: -5 }), false],
+    ['ativo, ESGOTADO, 0g', spoolRow({ status: 'ESGOTADO', current_net_weight_grams: 0 }), false],
+    [
+      'ativo, DESCARTADO, 500g',
+      spoolRow({ status: 'DESCARTADO', current_net_weight_grams: 500 }),
+      false,
+    ],
+    [
+      'inativo/arquivado, 500g',
+      spoolRow({ is_active: false, current_net_weight_grams: 500 }),
+      false,
+    ],
+  ])('%s -> %s', (_label, spool, expected) => {
+    expect(isFilamentSpoolAvailable(spool)).toBe(expected)
+  })
+})
+
+describe('countAvailableSpoolsByType', () => {
+  it('conta por filament_type_id, aplicando a regra, cada spool.id no máximo uma vez', () => {
+    const counts = countAvailableSpoolsByType([
+      spoolRow({ id: 's1', filament_type_id: 'a', current_net_weight_grams: 100 }),
+      spoolRow({
+        id: 's2',
+        filament_type_id: 'a',
+        status: 'LACRADO',
+        current_net_weight_grams: 1000,
+      }),
+      spoolRow({ id: 's3', filament_type_id: 'a', current_net_weight_grams: 0 }), // zerado -> fora
+      spoolRow({ id: 's4', filament_type_id: 'b', current_net_weight_grams: 250 }),
+      spoolRow({ id: 's4', filament_type_id: 'b', current_net_weight_grams: 250 }), // id repetido -> não dobra
+      spoolRow({
+        id: 's5',
+        filament_type_id: 'b',
+        status: 'ESGOTADO',
+        current_net_weight_grams: 0,
+      }),
+    ])
+    expect(counts.get('a')).toBe(2)
+    expect(counts.get('b')).toBe(1)
+  })
+
+  it('tipo sem nenhum rolo disponível não aparece no mapa (get -> undefined)', () => {
+    const counts = countAvailableSpoolsByType([
+      spoolRow({ id: 's1', filament_type_id: 'a', current_net_weight_grams: 0 }),
+    ])
+    expect(counts.get('a')).toBeUndefined()
+  })
+})
+
 describe('groupFilamentTypes — consolidação por Material + Linha + Cor', () => {
   it('dois fabricantes com mesmo Material + Linha + Cor viram UMA linha', () => {
     const groups = groupFilamentTypes([
-      typeFixture({
-        filament_type_id: 'a',
-        manufacturer: 'Voolt3D',
-        total_available_grams: 500,
-        usable_spool_count: 1,
-      }),
-      typeFixture({
-        filament_type_id: 'b',
-        manufacturer: '3D Fila',
-        total_available_grams: 300,
-        usable_spool_count: 2,
-      }),
+      typeFixture({ filament_type_id: 'a', manufacturer: 'Voolt3D' }),
+      typeFixture({ filament_type_id: 'b', manufacturer: '3D Fila' }),
     ])
     expect(groups).toHaveLength(1)
     expect(groups[0].filamentTypeIds.sort()).toEqual(['a', 'b'])
     expect(groups[0].manufacturers).toEqual(['3D Fila', 'Voolt3D'])
   })
 
-  it('soma o peso disponível e o número de rolos disponíveis de todos os tipos do grupo', () => {
-    const [group] = groupFilamentTypes([
-      typeFixture({ filament_type_id: 'a', total_available_grams: 500, usable_spool_count: 1 }),
-      typeFixture({ filament_type_id: 'b', total_available_grams: 300.5, usable_spool_count: 2 }),
-    ])
-    expect(group.availableGrams).toBe(800.5)
-    expect(group.usableSpoolCount).toBe(3)
+  it('peso disponível = soma da view; rolos disponíveis = soma do mapa de contagem (NUNCA usable_spool_count)', () => {
+    const groups = groupFilamentTypes(
+      [
+        typeFixture({ filament_type_id: 'a', total_available_grams: 500, usable_spool_count: 9 }),
+        typeFixture({ filament_type_id: 'b', total_available_grams: 300.5, usable_spool_count: 9 }),
+      ],
+      new Map([
+        ['a', 1],
+        ['b', 2],
+      ]),
+    )
+    expect(groups[0].availableGrams).toBe(800.5)
+    expect(groups[0].availableSpoolCount).toBe(3)
   })
 
-  it('fabricante diferente (mesmo Material/Linha/Cor) NÃO cria linha adicional', () => {
-    const groups = groupFilamentTypes([
-      typeFixture({ filament_type_id: 'a', manufacturer: 'A' }),
-      typeFixture({ filament_type_id: 'b', manufacturer: 'B' }),
-      typeFixture({ filament_type_id: 'c', manufacturer: 'C' }),
-    ])
-    expect(groups).toHaveLength(1)
+  it('sem mapa de contagem: availableSpoolCount = null (nunca cai na view)', () => {
+    const [group] = groupFilamentTypes([typeFixture({ usable_spool_count: 5 })])
+    expect(group.availableSpoolCount).toBeNull()
   })
 
-  it('Material, Linha ou Cor diferentes criam grupos distintos', () => {
+  it('tipo ausente do mapa conta como 0 rolos disponíveis', () => {
+    const [group] = groupFilamentTypes(
+      [typeFixture({ filament_type_id: 'a' }), typeFixture({ filament_type_id: 'b' })],
+      new Map([['a', 2]]),
+    )
+    expect(group.availableSpoolCount).toBe(2)
+  })
+
+  it('fabricante diferente não cria linha adicional; Material/Linha/Cor diferentes criam grupos distintos', () => {
     const groups = groupFilamentTypes([
       typeFixture({
         filament_type_id: 'a',
@@ -95,6 +175,12 @@ describe('groupFilamentTypes — consolidação por Material + Linha + Cor', () 
         line: 'Basic',
         commercial_color: 'Branco',
       }),
+      typeFixture({
+        filament_type_id: 'e',
+        material: 'PLA',
+        line: 'Basic',
+        commercial_color: 'Preto',
+      }),
     ])
     expect(groups).toHaveLength(4)
   })
@@ -109,7 +195,7 @@ describe('groupFilamentTypes — consolidação por Material + Linha + Cor', () 
     expect(groups[0].filamentTypeIds).toHaveLength(3)
   })
 
-  it('preserva um rótulo canônico legível (grafia mais frequente; empate = ordem pt-BR)', () => {
+  it('rótulo canônico = grafia mais frequente (empate: ordem pt-BR)', () => {
     const [group] = groupFilamentTypes([
       typeFixture({ filament_type_id: 'a', commercial_color: 'Preto' }),
       typeFixture({ filament_type_id: 'b', commercial_color: 'Preto' }),
@@ -118,43 +204,19 @@ describe('groupFilamentTypes — consolidação por Material + Linha + Cor', () 
     expect(group.colorLabel).toBe('Preto')
   })
 
-  it('estoque mínimo consolidado = maior limite entre os tipos ATIVOS (nunca soma)', () => {
-    const [group] = groupFilamentTypes([
+  it('estoque mínimo consolidado = maior limite entre os tipos ATIVOS (nunca soma); null se nenhum ativo tem limite', () => {
+    const [withMin] = groupFilamentTypes([
       typeFixture({ filament_type_id: 'a', is_active: true, minimum_stock_grams: 200 }),
       typeFixture({ filament_type_id: 'b', is_active: true, minimum_stock_grams: 500 }),
       typeFixture({ filament_type_id: 'c', is_active: false, minimum_stock_grams: 9000 }),
     ])
-    expect(group.minimumStockGrams).toBe(500)
-  })
+    expect(withMin.minimumStockGrams).toBe(500)
 
-  it('estoque mínimo consolidado = null quando nenhum tipo ativo tem limite', () => {
-    const [group] = groupFilamentTypes([
+    const [noMin] = groupFilamentTypes([
       typeFixture({ filament_type_id: 'a', is_active: true, minimum_stock_grams: null }),
       typeFixture({ filament_type_id: 'b', is_active: false, minimum_stock_grams: 300 }),
     ])
-    expect(group.minimumStockGrams).toBeNull()
-  })
-
-  it('rolos arquivados/DESCARTADO/ESGOTADO/zerados já não entram em usable_spool_count (via view) — a soma consolidada só repassa', () => {
-    // A view (vw_filament_type_summary) já exclui is_active=false e
-    // status ESGOTADO/DESCARTADO de usable_spool_count/total_available_grams.
-    // A consolidação apenas soma esses agregados por grupo.
-    const [group] = groupFilamentTypes([
-      typeFixture({
-        filament_type_id: 'a',
-        usable_spool_count: 2,
-        total_spool_count: 5,
-        total_available_grams: 400,
-      }),
-      typeFixture({
-        filament_type_id: 'b',
-        usable_spool_count: 0,
-        total_spool_count: 3,
-        total_available_grams: 0,
-      }),
-    ])
-    expect(group.usableSpoolCount).toBe(2)
-    expect(group.availableGrams).toBe(400)
+    expect(noMin.minimumStockGrams).toBeNull()
   })
 
   it('ordena por Material -> Linha -> Cor (rótulo consolidado), nunca por fabricante', () => {

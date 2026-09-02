@@ -28,44 +28,44 @@ function typeFixture(overrides: Partial<FilamentTypeSummary> = {}): FilamentType
 }
 
 const types: FilamentTypeSummary[] = [
-  typeFixture({
-    filament_type_id: '1',
-    material: 'PLA',
-    line: 'Basic',
-    commercial_color: 'Preto',
-    usable_spool_count: 3,
-  }),
+  typeFixture({ filament_type_id: '1', material: 'PLA', line: 'Basic', commercial_color: 'Preto' }),
   typeFixture({
     filament_type_id: '2',
     material: 'PLA',
     line: 'Matte',
     commercial_color: 'Branco',
-    usable_spool_count: 1,
   }),
   typeFixture({
     filament_type_id: '3',
     material: 'PETG',
     line: 'Basic',
     commercial_color: 'Preto',
-    usable_spool_count: 5,
   }),
   typeFixture({
     filament_type_id: '4',
     material: 'PETG',
     line: 'Matte',
     commercial_color: 'Vermelho',
-    usable_spool_count: 0,
   }),
   typeFixture({
     filament_type_id: '5',
     material: 'TPU',
     line: 'Basic',
     commercial_color: 'Branco',
-    usable_spool_count: 2,
   }),
 ]
 
-const groups = groupFilamentTypes(types)
+// Contagem de rolos disponíveis por tipo (o que o mapa real traria).
+const counts = new Map<string, number>([
+  ['1', 3],
+  ['2', 1],
+  ['3', 5],
+  // '4' ausente -> 0 rolos disponíveis
+  ['5', 2],
+])
+
+const groups = groupFilamentTypes(types, counts)
+const groupsUnknownCount = groupFilamentTypes(types, null)
 
 function state(overrides: Partial<FilamentGroupFilterState> = {}): FilamentGroupFilterState {
   return { ...EMPTY_FILAMENT_GROUP_FILTERS, ...overrides }
@@ -111,7 +111,7 @@ describe('matchesFilamentGroupFilters / filterFilamentGroups', () => {
     expect(result.some((g) => g.material === 'TPU')).toBe(false)
   })
 
-  it('filtro de Linha (OR dentro do grupo, por token normalizado)', () => {
+  it('filtro de Linha (token normalizado)', () => {
     const result = filterFilamentGroups(groups, state({ lines: new Set(['matte']) }))
     expect(result.every((g) => g.lineLabel === 'Matte')).toBe(true)
     expect(result).toHaveLength(2)
@@ -137,31 +137,38 @@ describe('matchesFilamentGroupFilters / filterFilamentGroups', () => {
     ])
   })
 
-  it('faixa de rolos: somente mínimo (inclusivo)', () => {
+  it('faixa: usa a contagem consolidada de rolos DISPONÍVEIS — somente mínimo (inclusivo)', () => {
     const result = filterFilamentGroups(groups, state({ minSpools: 2 }))
-    expect(result.every((g) => g.usableSpoolCount >= 2)).toBe(true)
-    expect(result.map((g) => g.usableSpoolCount).sort()).toEqual([2, 3, 5])
+    expect(result.map((g) => g.availableSpoolCount).sort()).toEqual([2, 3, 5])
   })
 
-  it('faixa de rolos: somente máximo (inclusivo)', () => {
+  it('faixa: somente máximo (inclusivo)', () => {
     const result = filterFilamentGroups(groups, state({ maxSpools: 3 }))
-    expect(result.every((g) => g.usableSpoolCount <= 3)).toBe(true)
+    expect(result.every((g) => (g.availableSpoolCount ?? 0) <= 3)).toBe(true)
   })
 
-  it('faixa de rolos: intervalo [2, 5]', () => {
+  it('faixa: intervalo [2, 5]', () => {
     const result = filterFilamentGroups(groups, state({ minSpools: 2, maxSpools: 5 }))
-    expect(result.map((g) => g.usableSpoolCount).sort()).toEqual([2, 3, 5])
+    expect(result.map((g) => g.availableSpoolCount).sort()).toEqual([2, 3, 5])
   })
 
-  it('faixa de rolos: 0 a 0 = grupos sem rolo disponível', () => {
+  it('faixa: 0 a 0 = grupos com zero rolos DISPONÍVEIS (inclui grupo cujo tipo está ausente do mapa)', () => {
     const result = filterFilamentGroups(groups, state({ minSpools: 0, maxSpools: 0 }))
-    expect(result.map((g) => g.usableSpoolCount)).toEqual([0])
+    expect(result.map((g) => `${g.material}/${g.lineLabel}/${g.colorLabel}`)).toEqual([
+      'PETG/Matte/Vermelho',
+    ])
+    expect(result[0].availableSpoolCount).toBe(0)
   })
 
-  it('mínimo > máximo é inválido: nunca aplica a faixa (todos passam nela)', () => {
+  it('mínimo > máximo é inválido: nunca aplica a faixa', () => {
     const filters = state({ minSpools: 5, maxSpools: 2 })
     expect(isFilamentSpoolRangeInvalid(filters)).toBe(true)
     expect(filterFilamentGroups(groups, filters)).toHaveLength(groups.length)
+  })
+
+  it('contagem desconhecida (null): a faixa NUNCA descarta o grupo (não cai na view)', () => {
+    const result = filterFilamentGroups(groupsUnknownCount, state({ minSpools: 3, maxSpools: 3 }))
+    expect(result).toHaveLength(groupsUnknownCount.length)
   })
 
   it('faixa combina com Material/Linha/Cor', () => {
