@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { EllipsisIcon } from 'lucide-react'
+import { EllipsisIcon, SlidersHorizontalIcon } from 'lucide-react'
 import { FilamentSpoolForm, type FilamentSpoolFormValues } from './FilamentSpoolForm'
 import { FilamentSpoolPanel } from './FilamentSpoolPanel'
 import { StockLevelBadge, getStockLevel } from './StockMovementPanel'
@@ -47,13 +47,6 @@ function formatGrams(value: number): string {
 function formatDate(value: string | null): string {
   if (!value) return '—'
   return new Date(`${value}T00:00:00`).toLocaleDateString('pt-BR')
-}
-
-function formatPeso(spool: FilamentSpool): string {
-  const percentRemaining = Math.round(
-    (spool.current_net_weight_grams / spool.nominal_weight_grams) * 100,
-  )
-  return `${formatGrams(spool.current_net_weight_grams)} / ${formatGrams(spool.nominal_weight_grams)} · ${percentRemaining}%`
 }
 
 function typeLabel(type: FilamentTypeSummary): string {
@@ -152,17 +145,6 @@ export function FilamentTypeDrawer({
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
 
-  const [togglingSpool, setTogglingSpool] = useState<FilamentSpool | null>(null)
-  const [isToggleDialogOpen, setIsToggleDialogOpen] = useState(false)
-  const [isConfirmingToggle, setIsConfirmingToggle] = useState(false)
-  const [toggleError, setToggleError] = useState<string | null>(null)
-  const [pendingToggleId, setPendingToggleId] = useState<string | null>(null)
-
-  const [discardingSpool, setDiscardingSpool] = useState<FilamentSpool | null>(null)
-  const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false)
-  const [isDiscarding, setIsDiscarding] = useState(false)
-  const [discardError, setDiscardError] = useState<string | null>(null)
-
   const [deletingSpool, setDeletingSpool] = useState<FilamentSpool | null>(null)
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -170,6 +152,11 @@ export function FilamentTypeDrawer({
 
   const [managingSpool, setManagingSpool] = useState<FilamentSpool | null>(null)
   const [isManageDialogOpen, setIsManageDialogOpen] = useState(false)
+  // Como a janela "Gerenciar" foi aberta: null = botão "Gerenciar" (estado
+  // inicial previsível, sem operação marcada); 'ADJUST' = atalho "Ajustar
+  // peso" (já entra em Movimentar com "Ajuste" selecionado). Só um sinal de
+  // abertura — o painel é remontado a cada abertura do diálogo.
+  const [manageInitialOperation, setManageInitialOperation] = useState<'ADJUST' | null>(null)
 
   const openCount = useMemo(
     () => spools.filter((spool) => spool.status === 'ABERTO').length,
@@ -184,8 +171,15 @@ export function FilamentTypeDrawer({
     [spools, showArchived],
   )
   const stockLevel = getStockLevel(group.availableGrams, group.minimumStockGrams)
-  const deletingSpoolHasHistory = deletingSpool?.has_movement_history ?? false
   const createTargetType = createTargetTypeId ? (typeById.get(createTargetTypeId) ?? null) : null
+
+  // Cabeçalho da janela "Gerenciar": Marca - Cor - Tipo (fabricante - cor
+  // comercial - linha), com o código do rolo como subtítulo. Sem o tipo do
+  // grupo carregado, cai no próprio código.
+  function spoolTitleLabel(spool: FilamentSpool): string {
+    const type = typeById.get(spool.filament_type_id)
+    return type ? `${type.manufacturer} - ${type.commercial_color} - ${type.line}` : spool.code
+  }
 
   function openCreateDialog(typeId: string) {
     setCreateTargetTypeId(typeId)
@@ -241,59 +235,17 @@ export function FilamentTypeDrawer({
     }
   }
 
-  function openToggleDialog(spool: FilamentSpool) {
-    setTogglingSpool(spool)
-    setToggleError(null)
-    setIsToggleDialogOpen(true)
-  }
-
-  async function handleConfirmToggle() {
-    if (!togglingSpool) return
-    const willActivate = !togglingSpool.is_active
-    setIsConfirmingToggle(true)
-    setPendingToggleId(togglingSpool.id)
-    setToggleError(null)
-    try {
-      await update(togglingSpool.id, { is_active: willActivate })
-      toast.success(`Rolo ${willActivate ? 'ativado' : 'arquivado'}.`)
-      setIsToggleDialogOpen(false)
-      onSummaryChanged()
-    } catch (err) {
-      setToggleError(toErrorMessage(err))
-    } finally {
-      setIsConfirmingToggle(false)
-      setPendingToggleId(null)
-    }
-  }
-
-  function openDiscardDialog(spool: FilamentSpool) {
-    setDiscardingSpool(spool)
-    setDiscardError(null)
-    setIsDiscardDialogOpen(true)
-  }
-
-  async function handleConfirmDiscard() {
-    if (!discardingSpool) return
-    setIsDiscarding(true)
-    setDiscardError(null)
-    try {
-      await update(discardingSpool.id, { status: 'DESCARTADO' })
-      toast.success('Rolo descartado.')
-      setIsDiscardDialogOpen(false)
-      onSummaryChanged()
-    } catch (err) {
-      setDiscardError(toErrorMessage(err))
-    } finally {
-      setIsDiscarding(false)
-    }
-  }
-
   function openDeleteDialog(spool: FilamentSpool) {
     setDeletingSpool(spool)
     setDeleteError(null)
     setIsDeleteDialogOpen(true)
   }
 
+  // "Excluir rolo" é sempre exclusão real e definitiva via
+  // delete_filament_spool (Edge Function DELETE /filament-spools/:id) — a
+  // RPC bloqueia por FILAMENT_SPOOL_HAS_MOVEMENTS e nunca cascateia; quando
+  // isso acontece, a mensagem real do backend aparece no diálogo. Nunca
+  // arquiva nem desativa como alternativa.
   async function handleConfirmDelete() {
     if (!deletingSpool) return
     setIsDeleting(true)
@@ -310,29 +262,27 @@ export function FilamentTypeDrawer({
     }
   }
 
-  async function handleConfirmArchive() {
-    if (!deletingSpool) return
-    setIsDeleting(true)
-    setDeleteError(null)
-    try {
-      await update(deletingSpool.id, { is_active: false })
-      toast.success('Rolo arquivado.')
-      setIsDeleteDialogOpen(false)
-      onSummaryChanged()
-    } catch (err) {
-      setDeleteError(toErrorMessage(err))
-    } finally {
-      setIsDeleting(false)
-    }
-  }
-
   function openManageDialog(spool: FilamentSpool) {
     setManagingSpool(spool)
+    setManageInitialOperation(null)
     setIsManageDialogOpen(true)
   }
 
+  // Atalho "Ajustar peso" da tabela/cards: mesma janela do botão
+  // "Gerenciar", mas já entra na aba "Movimentar" com a operação "Ajuste"
+  // pré-selecionada — sem exigir um segundo clique. O rolo é mantido pelo
+  // id; o ajuste só é gravado após a confirmação do formulário.
+  function openAdjustDialog(spool: FilamentSpool) {
+    setManagingSpool(spool)
+    setManageInitialOperation('ADJUST')
+    setIsManageDialogOpen(true)
+  }
+
+  // Menu de três pontos de cada rolo físico — só "Editar" e "Excluir rolo"
+  // (decisão do usuário, 2026-09-02). Desativar/Descartar/Arquivar saíram
+  // deste menu. "Excluir rolo" é sempre exclusão real e definitiva (ver
+  // handleConfirmDelete).
   function SpoolActionsMenu({ spool }: { spool: FilamentSpool }) {
-    const isDiscarded = spool.status === 'DESCARTADO'
     return (
       <DropdownMenu>
         <DropdownMenuTrigger
@@ -350,19 +300,28 @@ export function FilamentTypeDrawer({
         <DropdownMenuContent>
           <DropdownMenuItem onClick={() => openEditDialog(spool)}>Editar</DropdownMenuItem>
           <DropdownMenuItem
-            disabled={pendingToggleId === spool.id}
-            onClick={() => openToggleDialog(spool)}
+            onClick={() => openDeleteDialog(spool)}
+            className="text-destructive data-highlighted:text-destructive"
           >
-            {spool.is_active ? 'Desativar' : 'Ativar'}
-          </DropdownMenuItem>
-          {!isDiscarded && (
-            <DropdownMenuItem onClick={() => openDiscardDialog(spool)}>Descartar</DropdownMenuItem>
-          )}
-          <DropdownMenuItem onClick={() => openDeleteDialog(spool)}>
-            {spool.has_movement_history ? 'Arquivar rolo' : 'Excluir rolo'}
+            Excluir rolo
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+    )
+  }
+
+  function AdjustWeightButton({ spool }: { spool: FilamentSpool }) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => openAdjustDialog(spool)}
+        aria-label={`Ajustar peso do rolo ${spool.code}`}
+        className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0"
+      >
+        <SlidersHorizontalIcon className="size-4" aria-hidden="true" />
+        Ajustar peso
+      </Button>
     )
   }
 
@@ -508,15 +467,20 @@ export function FilamentTypeDrawer({
               <Table className="table-fixed text-sm">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="h-auto w-[15%] py-2 whitespace-normal">
+                    <TableHead className="h-auto w-[13%] py-2 whitespace-normal">
                       Identificador
                     </TableHead>
-                    <TableHead className="h-auto w-[22%] py-2 whitespace-normal">
+                    <TableHead className="h-auto w-[19%] py-2 whitespace-normal">
                       Fabricante / tipo
                     </TableHead>
-                    <TableHead className="h-auto w-[21%] py-2 whitespace-normal">Peso</TableHead>
-                    <TableHead className="h-auto w-[14%] py-2 whitespace-normal">Status</TableHead>
-                    <TableHead className="h-auto w-[28%] py-2 text-right whitespace-normal">
+                    <TableHead className="h-auto w-[15%] py-2 whitespace-normal">
+                      Peso Líquido
+                    </TableHead>
+                    <TableHead className="h-auto w-[11%] py-2 whitespace-normal">Status</TableHead>
+                    <TableHead className="h-auto w-[18%] py-2 whitespace-normal">
+                      Ajustar peso
+                    </TableHead>
+                    <TableHead className="h-auto w-[24%] py-2 text-right whitespace-normal">
                       Ações
                     </TableHead>
                   </TableRow>
@@ -533,12 +497,17 @@ export function FilamentTypeDrawer({
                       <TableCell className="truncate" title={spoolManufacturerLabel(spool)}>
                         {spoolManufacturerLabel(spool)}
                       </TableCell>
-                      <TableCell className="tabular-nums">{formatPeso(spool)}</TableCell>
+                      <TableCell className="tabular-nums">
+                        {formatGrams(spool.current_net_weight_grams)}
+                      </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap items-center gap-1.5 whitespace-normal">
                           <span>{spool.status}</span>
                           {!spool.is_active && <ArchivedBadge />}
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        <AdjustWeightButton spool={spool} />
                       </TableCell>
                       <TableCell>
                         <div className="flex min-w-0 items-center justify-end gap-2">
@@ -562,14 +531,15 @@ export function FilamentTypeDrawer({
                     </div>
                     <div className="text-muted-foreground grid grid-cols-1 gap-1 text-xs">
                       <span>Fabricante / tipo: {spoolManufacturerLabel(spool)}</span>
-                      <span>Peso: {formatPeso(spool)}</span>
+                      <span>Peso Líquido: {formatGrams(spool.current_net_weight_grams)}</span>
                       <span>Status: {spool.status}</span>
                       <span>
                         Abertura:{' '}
                         {formatDate(spool.opened_at ? spool.opened_at.slice(0, 10) : null)}
                       </span>
                     </div>
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <AdjustWeightButton spool={spool} />
                       <ManageSpoolButton spool={spool} />
                       <SpoolActionsMenu spool={spool} />
                     </div>
@@ -673,95 +643,13 @@ export function FilamentTypeDrawer({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isToggleDialogOpen} onOpenChange={setIsToggleDialogOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{togglingSpool?.is_active ? 'Arquivar rolo' : 'Ativar rolo'}</DialogTitle>
-            <DialogDescription>
-              {togglingSpool &&
-                (togglingSpool.is_active
-                  ? `Tem certeza que deseja arquivar o rolo "${togglingSpool.code}"? Um rolo arquivado sai da lista ativa e da quantidade disponível do grupo — o histórico continua acessível.`
-                  : `Tem certeza que deseja ativar o rolo "${togglingSpool.code}"?`)}
-            </DialogDescription>
-          </DialogHeader>
-          {toggleError && (
-            <p role="alert" className="text-destructive text-sm">
-              {toggleError}
-            </p>
-          )}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setIsToggleDialogOpen(false)}
-              disabled={isConfirmingToggle}
-              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-            >
-              Cancelar
-            </Button>
-            <Button
-              type="button"
-              onClick={() => void handleConfirmToggle()}
-              disabled={isConfirmingToggle}
-              className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
-            >
-              {isConfirmingToggle
-                ? 'Salvando...'
-                : togglingSpool?.is_active
-                  ? 'Arquivar'
-                  : 'Ativar'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={isDiscardDialogOpen} onOpenChange={setIsDiscardDialogOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Descartar rolo</DialogTitle>
-            <DialogDescription>
-              {discardingSpool &&
-                `Tem certeza que deseja descartar o rolo "${discardingSpool.code}"? Esta ação é definitiva — um rolo descartado nunca é reativado automaticamente e deixa de aceitar novas movimentações. O histórico já registrado permanece disponível para consulta.`}
-            </DialogDescription>
-          </DialogHeader>
-          {discardError && (
-            <p role="alert" className="text-destructive text-sm">
-              {discardError}
-            </p>
-          )}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setIsDiscardDialogOpen(false)}
-              disabled={isDiscarding}
-              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-            >
-              Cancelar
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={() => void handleConfirmDiscard()}
-              disabled={isDiscarding}
-            >
-              {isDiscarding ? 'Descartando...' : 'Descartar definitivamente'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>{deletingSpoolHasHistory ? 'Arquivar rolo' : 'Excluir rolo'}</DialogTitle>
+            <DialogTitle>Excluir rolo</DialogTitle>
             <DialogDescription>
               {deletingSpool &&
-                !deletingSpoolHasHistory &&
-                `Tem certeza que deseja excluir o rolo "${deletingSpool.code}"? Esta ação não poderá ser desfeita.`}
-              {deletingSpool &&
-                deletingSpoolHasHistory &&
-                `Este rolo possui histórico e não pode ser apagado definitivamente. Deseja arquivá-lo? Um rolo arquivado sai da lista ativa e da quantidade disponível do grupo, mas todo o histórico permanece acessível (use "Mostrar arquivados" para consultá-lo depois).`}
+                `Tem certeza que deseja excluir o rolo "${deletingSpool.code}"? Esta exclusão é permanente e não poderá ser desfeita — não é arquivamento nem desativação. Se o rolo tiver movimentações vinculadas, o sistema não permitirá a exclusão.`}
             </DialogDescription>
           </DialogHeader>
           {deleteError && (
@@ -779,25 +667,14 @@ export function FilamentTypeDrawer({
             >
               Cancelar
             </Button>
-            {deletingSpoolHasHistory ? (
-              <Button
-                type="button"
-                onClick={() => void handleConfirmArchive()}
-                disabled={isDeleting}
-                className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
-              >
-                {isDeleting ? 'Arquivando...' : 'Arquivar rolo'}
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                variant="destructive"
-                onClick={() => void handleConfirmDelete()}
-                disabled={isDeleting}
-              >
-                {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
-              </Button>
-            )}
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => void handleConfirmDelete()}
+              disabled={isDeleting}
+            >
+              {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -805,14 +682,17 @@ export function FilamentTypeDrawer({
       <Dialog open={isManageDialogOpen} onOpenChange={setIsManageDialogOpen}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Movimentar / Pesar / Histórico</DialogTitle>
+            {/* Cabeçalho da janela "Gerenciar": Marca - Cor - Tipo, com o
+                código do rolo (uma única vez) como subtítulo. Sem o texto
+                fixo "Movimentar / Pesar / Histórico". */}
+            <DialogTitle>{managingSpool ? spoolTitleLabel(managingSpool) : ''}</DialogTitle>
             <DialogDescription>{managingSpool?.code}</DialogDescription>
           </DialogHeader>
           {managingSpool && (
             <FilamentSpoolPanel
-              key={managingSpool.id}
+              key={`${managingSpool.id}-${manageInitialOperation ?? 'manage'}`}
               spool={managingSpool}
-              filamentTypeLabel={spoolManufacturerLabel(managingSpool)}
+              initialMovementOperation={manageInitialOperation}
               onSpoolChanged={(patch) => {
                 setLocalSpoolState(managingSpool.id, patch)
                 setManagingSpool((current) => (current ? { ...current, ...patch } : current))

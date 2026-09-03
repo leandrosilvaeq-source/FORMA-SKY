@@ -1,6 +1,10 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { FilamentMovementForm, type FilamentMovementFormValues } from './FilamentMovementForm'
+import {
+  FilamentMovementForm,
+  type FilamentMovementFormValues,
+  type FilamentMovementOperation,
+} from './FilamentMovementForm'
 import { FilamentWeighingForm, type FilamentWeighingFormValues } from './FilamentWeighingForm'
 import { FilamentMovementHistory } from './FilamentMovementHistory'
 import { Button } from '@/components/ui/button'
@@ -31,15 +35,27 @@ type PanelAction = 'MOVE' | 'WEIGH'
 
 const ACTION_BUTTON_CLASSNAME =
   'focus-visible:ring-brand-accent inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50'
-const ACTION_BUTTON_SELECTED_CLASSNAME = 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
-const ACTION_BUTTON_UNSELECTED_CLASSNAME = 'border-input text-muted-foreground hover:bg-muted hover:text-foreground'
+const ACTION_BUTTON_SELECTED_CLASSNAME =
+  'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
+const ACTION_BUTTON_UNSELECTED_CLASSNAME =
+  'border-input text-muted-foreground hover:bg-muted hover:text-foreground'
 
 export interface FilamentSpoolPanelProps {
   spool: FilamentSpool
-  filamentTypeLabel: string
+  // Pré-seleção da operação de movimentação ao abrir — o atalho "Ajustar
+  // peso" da janela "Ver rolos" passa 'ADJUST' e já entra na aba
+  // "Movimentar" com "Ajuste" marcado. Sem valor (abertura normal pelo
+  // botão "Gerenciar"), nenhuma operação vem marcada e o estado inicial é
+  // previsível. O painel é remontado a cada abertura (o diálogo desmonta os
+  // filhos ao fechar), então esta prop nunca "vaza" de uma abertura para a
+  // seguinte.
+  initialMovementOperation?: FilamentMovementOperation | null
   // O chamador (FilamentTypeDrawer) aplica isso ao estado local via
   // useFilamentSpools.setLocalSpoolState, sem refetch.
-  onSpoolChanged: (patch: { current_net_weight_grams: number; status?: FilamentSpool['status'] }) => void
+  onSpoolChanged: (patch: {
+    current_net_weight_grams: number
+    status?: FilamentSpool['status']
+  }) => void
   onClose: () => void
 }
 
@@ -49,8 +65,14 @@ export interface FilamentSpoolPanelProps {
 // NÃO fecha sozinho após uma ação bem-sucedida (o usuário pode encadear
 // mais de uma ação — ex.: movimentar e depois consultar o histórico
 // atualizado — antes de fechar manualmente).
-export function FilamentSpoolPanel({ spool, filamentTypeLabel, onSpoolChanged, onClose }: FilamentSpoolPanelProps) {
-  const { movements, isLoading, loadError, refetch, isRegistering, register, isWeighing, weigh } = useFilamentMovements(spool.id)
+export function FilamentSpoolPanel({
+  spool,
+  initialMovementOperation = null,
+  onSpoolChanged,
+  onClose,
+}: FilamentSpoolPanelProps) {
+  const { movements, isLoading, loadError, refetch, isRegistering, register, isWeighing, weigh } =
+    useFilamentMovements(spool.id)
   const [action, setAction] = useState<PanelAction>('MOVE')
   const [submitError, setSubmitError] = useState<string | null>(null)
 
@@ -64,7 +86,16 @@ export function FilamentSpoolPanel({ spool, filamentTypeLabel, onSpoolChanged, o
   // mensagem, exatamente como já acontecia para DESCARTADO.
   const isArchived = !spool.is_active
   const isReadOnly = isDiscarded || isArchived
-  const isEligibleForInitialBalance = spool.current_net_weight_grams === 0 && !isLoading && !loadError && movements.length === 0
+
+  // Peso Disponível = Peso Líquido − peso reservado para pedidos, com piso
+  // em 0: peso_disponivel = max(0, peso_liquido − peso_reservado). O modelo
+  // atual não tem nenhum campo nem cálculo de reserva persistido (o motor
+  // de reserva Pedidos → Estoque do Módulo 3 ainda não existe), então por
+  // ora o reservado é 0 e o Peso Disponível é igual ao Peso Líquido.
+  // Quando a integração for desenvolvida, só esta linha muda — o resto do
+  // resumo já está preparado para os dois valores divergirem.
+  const reservedGrams = 0
+  const availableGrams = Math.max(0, spool.current_net_weight_grams - reservedGrams)
 
   async function handleRegisterMovement(values: FilamentMovementFormValues) {
     setSubmitError(null)
@@ -100,36 +131,25 @@ export function FilamentSpoolPanel({ spool, filamentTypeLabel, onSpoolChanged, o
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-muted-foreground text-xs">{filamentTypeLabel}</p>
-          <p className="text-base font-medium">{spool.code}</p>
-        </div>
-        {isArchived && (
-          <span className="border-input text-muted-foreground inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium">
-            Arquivado
-          </span>
-        )}
-      </div>
-
-      <div className="border-brand-primary/20 bg-brand-primary-soft/40 grid grid-cols-2 gap-2 rounded-lg border px-3 py-2 sm:grid-cols-4">
-        <Field label="Peso nominal" value={formatGrams(spool.nominal_weight_grams)} />
-        <Field label="Peso disponível" value={formatGrams(spool.current_net_weight_grams)} />
-        <Field
-          label="% restante"
-          value={`${Math.round((spool.current_net_weight_grams / spool.nominal_weight_grams) * 100)}%`}
-        />
+      {/* Identificação da janela (Marca - Cor - Tipo + código do rolo) fica
+          só no cabeçalho do diálogo (DialogTitle/DialogDescription em
+          FilamentTypeDrawer) — não é repetida aqui. */}
+      <div className="border-brand-primary/20 bg-brand-primary-soft/40 grid grid-cols-1 gap-2 rounded-lg border px-3 py-2 sm:grid-cols-3">
+        <Field label="Peso Líquido" value={formatGrams(spool.current_net_weight_grams)} />
         <Field label="Status" value={spool.status} />
+        <Field label="Peso Disponível" value={formatGrams(availableGrams)} />
       </div>
 
       {isDiscarded ? (
         <p role="status" className="text-muted-foreground text-sm">
-          Este rolo foi descartado e não aceita novas movimentações. O histórico abaixo permanece disponível para consulta.
+          Este rolo foi descartado e não aceita novas movimentações. O histórico abaixo permanece
+          disponível para consulta.
         </p>
       ) : isArchived ? (
         <p role="status" className="text-muted-foreground text-sm">
-          Este rolo está arquivado e não aceita movimentar ou pesar enquanto arquivado. Reative-o na lista de rolos para
-          voltar a movimentar. O histórico abaixo permanece disponível para consulta.
+          Este rolo está arquivado e não aceita movimentar ou pesar enquanto arquivado. Reative-o na
+          lista de rolos para voltar a movimentar. O histórico abaixo permanece disponível para
+          consulta.
         </p>
       ) : (
         <>
@@ -143,7 +163,12 @@ export function FilamentSpoolPanel({ spool, filamentTypeLabel, onSpoolChanged, o
                   setAction('MOVE')
                   setSubmitError(null)
                 }}
-                className={cn(ACTION_BUTTON_CLASSNAME, action === 'MOVE' ? ACTION_BUTTON_SELECTED_CLASSNAME : ACTION_BUTTON_UNSELECTED_CLASSNAME)}
+                className={cn(
+                  ACTION_BUTTON_CLASSNAME,
+                  action === 'MOVE'
+                    ? ACTION_BUTTON_SELECTED_CLASSNAME
+                    : ACTION_BUTTON_UNSELECTED_CLASSNAME,
+                )}
               >
                 Movimentar
               </button>
@@ -155,7 +180,12 @@ export function FilamentSpoolPanel({ spool, filamentTypeLabel, onSpoolChanged, o
                   setAction('WEIGH')
                   setSubmitError(null)
                 }}
-                className={cn(ACTION_BUTTON_CLASSNAME, action === 'WEIGH' ? ACTION_BUTTON_SELECTED_CLASSNAME : ACTION_BUTTON_UNSELECTED_CLASSNAME)}
+                className={cn(
+                  ACTION_BUTTON_CLASSNAME,
+                  action === 'WEIGH'
+                    ? ACTION_BUTTON_SELECTED_CLASSNAME
+                    : ACTION_BUTTON_UNSELECTED_CLASSNAME,
+                )}
               >
                 Registrar pesagem
               </button>
@@ -165,8 +195,7 @@ export function FilamentSpoolPanel({ spool, filamentTypeLabel, onSpoolChanged, o
           {action === 'MOVE' ? (
             <FilamentMovementForm
               currentWeightGrams={spool.current_net_weight_grams}
-              nominalWeightGrams={spool.nominal_weight_grams}
-              isEligibleForInitialBalance={isEligibleForInitialBalance}
+              initialOperation={initialMovementOperation}
               isSubmitting={isRegistering}
               submitError={submitError}
               onSubmit={(values) => void handleRegisterMovement(values)}
@@ -187,12 +216,22 @@ export function FilamentSpoolPanel({ spool, filamentTypeLabel, onSpoolChanged, o
 
       <div className="flex flex-col gap-2">
         <p className="text-sm font-medium">Histórico</p>
-        <FilamentMovementHistory movements={movements} isLoading={isLoading} error={loadError} onRetry={refetch} />
+        <FilamentMovementHistory
+          movements={movements}
+          isLoading={isLoading}
+          error={loadError}
+          onRetry={refetch}
+        />
       </div>
 
       {isReadOnly && (
         <div className="flex justify-end">
-          <Button type="button" variant="outline" onClick={onClose} className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onClose}
+            className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+          >
             Fechar
           </Button>
         </div>
