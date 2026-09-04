@@ -3,9 +3,11 @@ import { PT_BR_COLLATOR } from '@/components/dataTable/sorting'
 import {
   createFilamentType,
   deleteFilamentType,
+  getFilamentTypeRemovalPlan,
   listFilamentTypeSummaries,
   updateFilamentType,
   type CreateFilamentTypeInput,
+  type FilamentTypeRemovalPlan,
   type RemoveFilamentTypeResult,
   type UpdateFilamentTypeInput,
 } from '@/lib/api/filamentTypes'
@@ -19,12 +21,21 @@ interface UseFilamentTypesResult {
   refetch: () => void
   create: (input: CreateFilamentTypeInput) => Promise<FilamentTypeSummary>
   update: (id: string, input: UpdateFilamentTypeInput) => Promise<FilamentTypeSummary>
+  // Planejamento AUTORITATIVO da remoção (somente-leitura) — a interface
+  // consulta antes de abrir a confirmação e escolhe a variante do diálogo
+  // pelo planned_result. Não muta o estado local.
+  getRemovalPlan: (id: string) => Promise<FilamentTypeRemovalPlan>
   // Remoção segura: PHYSICALLY_DELETED remove o tipo do estado local;
   // ARCHIVED marca o tipo como inativo localmente (os rolos foram
   // arquivados no backend na mesma transação — o chamador deve disparar um
-  // refetch dos totais/contagens). O resultado estruturado é devolvido para
-  // a interface escolher a mensagem.
-  delete: (id: string) => Promise<RemoveFilamentTypeResult>
+  // refetch dos totais/contagens). expectedResult é o planned_result
+  // confirmado pelo usuário; o backend recusa (sem alterar nada) se o plano
+  // mudou entretanto. O resultado estruturado é devolvido para a interface
+  // escolher a mensagem.
+  delete: (
+    id: string,
+    expectedResult: 'PHYSICALLY_DELETED' | 'ARCHIVED',
+  ) => Promise<RemoveFilamentTypeResult>
 }
 
 function toApiError(err: unknown): ApiError {
@@ -126,24 +137,32 @@ export function useFilamentTypes(): UseFilamentTypesResult {
     return mergedSummary as FilamentTypeSummary
   }, [])
 
-  const deleteItem = useCallback(async (id: string) => {
-    const outcome = await deleteFilamentType(id)
-    if (outcome.result === 'PHYSICALLY_DELETED') {
-      setTypes((current) => current.filter((item) => item.filament_type_id !== id))
-    } else {
-      // ARCHIVED: o tipo e todos os seus rolos foram inativados no backend
-      // na mesma transação. Marca o tipo como inativo aqui; os totais
-      // agregados (que dependem dos rolos) o chamador reconcilia com um
-      // refetch — a listagem consolidada passa a ignorar o grupo por não
-      // ter mais nenhum tipo ativo.
-      setTypes((current) =>
-        current.map((item) =>
-          item.filament_type_id === id ? { ...item, is_active: false } : item,
-        ),
-      )
-    }
-    return outcome
-  }, [])
+  // Somente-leitura: nunca toca em `types`. A interface usa o resultado
+  // para escolher a variante da confirmação (A/B/C) e o expected_result do
+  // delete subsequente.
+  const getRemovalPlan = useCallback((id: string) => getFilamentTypeRemovalPlan(id), [])
 
-  return { types, isLoading, error, refetch, create, update, delete: deleteItem }
+  const deleteItem = useCallback(
+    async (id: string, expectedResult: 'PHYSICALLY_DELETED' | 'ARCHIVED') => {
+      const outcome = await deleteFilamentType(id, expectedResult)
+      if (outcome.result === 'PHYSICALLY_DELETED') {
+        setTypes((current) => current.filter((item) => item.filament_type_id !== id))
+      } else {
+        // ARCHIVED: o tipo e todos os seus rolos foram inativados no backend
+        // na mesma transação. Marca o tipo como inativo aqui; os totais
+        // agregados (que dependem dos rolos) o chamador reconcilia com um
+        // refetch — a listagem consolidada passa a ignorar o grupo por não
+        // ter mais nenhum tipo ativo.
+        setTypes((current) =>
+          current.map((item) =>
+            item.filament_type_id === id ? { ...item, is_active: false } : item,
+          ),
+        )
+      }
+      return outcome
+    },
+    [],
+  )
+
+  return { types, isLoading, error, refetch, create, update, getRemovalPlan, delete: deleteItem }
 }

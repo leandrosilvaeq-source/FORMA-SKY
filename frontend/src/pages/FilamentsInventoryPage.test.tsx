@@ -70,6 +70,28 @@ function spoolFixture(overrides: Partial<FilamentSpool> = {}): FilamentSpool {
   }
 }
 
+// Plano de remoção padrão, derivado do fixture: com rolo -> ARCHIVED, sem
+// rolo -> PHYSICALLY_DELETED. Testes de bloqueio/mudança de plano passam um
+// getRemovalPlan explícito.
+function defaultRemovalPlan(list: FilamentTypeSummary[]) {
+  return vi.fn(async (id: string) => {
+    const t = list.find((x) => x.filament_type_id === id)
+    const hasInventory = (t?.total_spool_count ?? 0) > 0
+    return {
+      success: true as const,
+      planned_result: hasInventory ? ('ARCHIVED' as const) : ('PHYSICALLY_DELETED' as const),
+      spool_count: t?.total_spool_count ?? 0,
+      active_spool_count: t?.total_spool_count ?? 0,
+      active_order_numbers: [] as string[],
+      has_movements: false,
+      has_purchases: false,
+      has_product_filaments: false,
+      has_product_plate_filaments: false,
+      has_order_selection: hasInventory,
+    }
+  })
+}
+
 function mockTypes(
   list: FilamentTypeSummary[],
   overrides: Partial<{
@@ -78,6 +100,7 @@ function mockTypes(
     refetch: ReturnType<typeof vi.fn>
     create: ReturnType<typeof vi.fn>
     update: ReturnType<typeof vi.fn>
+    getRemovalPlan: ReturnType<typeof vi.fn>
     delete: ReturnType<typeof vi.fn>
   }> = {},
 ) {
@@ -88,6 +111,7 @@ function mockTypes(
     refetch: overrides.refetch ?? vi.fn(),
     create: overrides.create ?? vi.fn().mockResolvedValue(typeFixture()),
     update: overrides.update ?? vi.fn().mockResolvedValue(typeFixture()),
+    getRemovalPlan: overrides.getRemovalPlan ?? defaultRemovalPlan(list),
     delete:
       overrides.delete ??
       vi.fn().mockResolvedValue({ success: true, result: 'ARCHIVED', archived_spool_count: 0 }),
@@ -868,11 +892,12 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     expect(within(voolt).getByText('Voolt3D')).toBeInTheDocument()
     expect(within(national).getByText('National3D')).toBeInTheDocument()
 
-    // typeFixture tem total_spool_count > 0 -> variante "Remover do estoque".
+    // typeFixture tem total_spool_count > 0 -> plano ARCHIVED -> variante
+    // "Remover do estoque", e o DELETE leva expected_result 'ARCHIVED'.
     await user.click(within(national).getByRole('button', { name: 'Excluir tipo' }))
     await user.click(await screen.findByRole('button', { name: /^remover do estoque$/i }))
 
-    await waitFor(() => expect(deleteType).toHaveBeenCalledWith('b'))
+    await waitFor(() => expect(deleteType).toHaveBeenCalledWith('b', 'ARCHIVED'))
     expect(deleteType).toHaveBeenCalledTimes(1)
   })
 
@@ -910,6 +935,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
         refetch: vi.fn(),
         create: vi.fn(),
         update,
+        getRemovalPlan: vi.fn(),
         delete: vi.fn(),
       })
       return currentTypes[0]
@@ -921,6 +947,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
       refetch: vi.fn(),
       create: vi.fn(),
       update,
+      getRemovalPlan: vi.fn(),
       delete: vi.fn(),
     })
     renderPage()
@@ -943,18 +970,21 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/Azul'])
   })
 
-  it('remoção de um tipo bloqueada por pedido ativo mostra o erro real do backend dentro do diálogo', async () => {
-    const { ApiError } = await import('@/lib/api/errors')
-    const deleteType = vi
-      .fn()
-      .mockRejectedValue(
-        new ApiError(
-          'business_rule',
-          409,
-          'Este tipo de filamento está sendo utilizado por pedido(s) ativo(s) e não pode ser removido. Pedido(s): FS-26-010.',
-        ),
-      )
-    mockTypes([typeFixture()], { delete: deleteType })
+  it('remoção bloqueada por pedido ativo: o plano já vem BLOCKED_ACTIVE_ORDER — a mensagem de bloqueio aparece e não há botão destrutivo', async () => {
+    const deleteType = vi.fn()
+    const getRemovalPlan = vi.fn().mockResolvedValue({
+      success: true,
+      planned_result: 'BLOCKED_ACTIVE_ORDER',
+      spool_count: 1,
+      active_spool_count: 1,
+      active_order_numbers: ['FS-26-010'],
+      has_movements: true,
+      has_purchases: false,
+      has_product_filaments: false,
+      has_product_plate_filaments: false,
+      has_order_selection: true,
+    })
+    mockTypes([typeFixture()], { delete: deleteType, getRemovalPlan })
     renderPage()
     const user = userEvent.setup()
 
@@ -963,13 +993,86 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
       name: /Ações do tipo Voolt3D — Preto/i,
     })
     await user.click(within(typeActions).getByRole('button', { name: 'Excluir tipo' }))
-    await user.click(await screen.findByRole('button', { name: /^remover do estoque$/i }))
 
+    const confirm = await screen.findByRole('dialog', { name: 'Não é possível remover o tipo' })
     expect(
-      await screen.findByText(
-        'Este tipo de filamento está sendo utilizado por pedido(s) ativo(s) e não pode ser removido. Pedido(s): FS-26-010.',
+      within(confirm).getByText(
+        /está sendo utilizado por pedido\(s\) ativo\(s\) e não pode ser removido\. Pedido\(s\): FS-26-010\./i,
       ),
     ).toBeInTheDocument()
+    // Sem ação destrutiva: nem "Remover do estoque" nem "Excluir definitivamente".
+    expect(
+      within(confirm).queryByRole('button', { name: /^remover do estoque$/i }),
+    ).not.toBeInTheDocument()
+    expect(
+      within(confirm).queryByRole('button', { name: /^excluir definitivamente$/i }),
+    ).not.toBeInTheDocument()
+    expect(within(confirm).getByRole('button', { name: 'Fechar' })).toBeInTheDocument()
+    expect(deleteType).not.toHaveBeenCalled()
+  })
+
+  it('plano muda entre a conferência e a execução (REMOVAL_PLAN_CHANGED): mantém o diálogo, recarrega o plano e pede nova confirmação', async () => {
+    const { ApiError } = await import('@/lib/api/errors')
+    // 1ª consulta do plano: PHYSICALLY_DELETED. 2ª (após o erro): ARCHIVED.
+    const getRemovalPlan = vi
+      .fn()
+      .mockResolvedValueOnce({
+        success: true,
+        planned_result: 'PHYSICALLY_DELETED',
+        spool_count: 0,
+        active_spool_count: 0,
+        active_order_numbers: [],
+        has_movements: false,
+        has_purchases: false,
+        has_product_filaments: false,
+        has_product_plate_filaments: false,
+        has_order_selection: false,
+      })
+      .mockResolvedValue({
+        success: true,
+        planned_result: 'ARCHIVED',
+        spool_count: 1,
+        active_spool_count: 1,
+        active_order_numbers: [],
+        has_movements: false,
+        has_purchases: true,
+        has_product_filaments: false,
+        has_product_plate_filaments: false,
+        has_order_selection: false,
+      })
+    const deleteType = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiError(
+          'business_rule',
+          409,
+          'O plano de remoção mudou desde a conferência (agora: ARCHIVED). Recarregue as informações e confirme novamente.',
+        ),
+      )
+    mockTypes([typeFixture({ filament_type_id: 'a', total_spool_count: 0 })], {
+      delete: deleteType,
+      getRemovalPlan,
+    })
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo Voolt3D — Preto/i,
+    })
+    await user.click(within(typeActions).getByRole('button', { name: 'Excluir tipo' }))
+    // Confirma a variante "permanente" que o 1º plano indicou.
+    await user.click(await screen.findByRole('button', { name: /^excluir definitivamente$/i }))
+
+    // O backend recusou por mudança de plano — nada foi removido, o diálogo
+    // continua aberto, recarrega o plano (agora ARCHIVED) e pede nova
+    // confirmação.
+    expect(
+      await screen.findByText(/As condições deste tipo mudaram desde a conferência/i),
+    ).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /^remover do estoque$/i })).toBeInTheDocument()
+    expect(getRemovalPlan).toHaveBeenCalledTimes(2)
+    expect(toastMock.success).not.toHaveBeenCalled()
   })
 
   it('o resumo consolidado do painel vem do backend (soma de vw_filament_type_summary), nunca recalculado dos rolos visíveis', async () => {
@@ -1867,13 +1970,56 @@ describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () 
     })
     await user.click(within(typeActions).getByRole('button', { name: 'Excluir tipo' }))
 
+    // O plano (PHYSICALLY_DELETED — sem rolos e sem nenhuma referência) vem
+    // do backend, não da presença de rolos.
     const confirm = await screen.findByRole('dialog', { name: 'Excluir tipo de filamento' })
     expect(within(confirm).getByText(/permanente e não poderá ser desfeita/i)).toBeInTheDocument()
     expect(within(confirm).queryByText(/Desative o tipo/i)).not.toBeInTheDocument()
     await user.click(within(confirm).getByRole('button', { name: /^excluir definitivamente$/i }))
 
-    await waitFor(() => expect(deleteType).toHaveBeenCalledWith('a'))
+    await waitFor(() => expect(deleteType).toHaveBeenCalledWith('a', 'PHYSICALLY_DELETED'))
     expect(toastMock.success).toHaveBeenCalledWith('Tipo de filamento excluído.')
+  })
+
+  it('tipo SEM rolos mas COM compra: o plano do backend é ARCHIVED — confirmação de arquivamento, nunca "permanente"', async () => {
+    const deleteType = vi
+      .fn()
+      .mockResolvedValue({ success: true, result: 'ARCHIVED', archived_spool_count: 0 })
+    // Sem rolos (total_spool_count 0), mas o backend enxerga uma compra ->
+    // plano ARCHIVED. A interface NÃO pode mostrar "exclusão permanente".
+    const getRemovalPlan = vi.fn().mockResolvedValue({
+      success: true,
+      planned_result: 'ARCHIVED',
+      spool_count: 0,
+      active_spool_count: 0,
+      active_order_numbers: [],
+      has_movements: false,
+      has_purchases: true,
+      has_product_filaments: false,
+      has_product_plate_filaments: false,
+      has_order_selection: false,
+    })
+    mockTypes(
+      [typeFixture({ filament_type_id: 'a', manufacturer: 'Voolt3D', total_spool_count: 0 })],
+      { delete: deleteType, getRemovalPlan },
+    )
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo Voolt3D — Preto/i,
+    })
+    await user.click(within(typeActions).getByRole('button', { name: 'Excluir tipo' }))
+
+    const confirm = await screen.findByRole('dialog', { name: 'Remover tipo do estoque' })
+    expect(within(confirm).queryByText(/permanente/i)).not.toBeInTheDocument()
+    await user.click(within(confirm).getByRole('button', { name: /^remover do estoque$/i }))
+
+    await waitFor(() => expect(deleteType).toHaveBeenCalledWith('a', 'ARCHIVED'))
+    expect(toastMock.success).toHaveBeenCalledWith(
+      'Tipo removido do estoque. Histórico preservado.',
+    )
   })
 
   it('tipo COM rolos: confirmação de ARQUIVAMENTO ("Remover tipo do estoque"), fala em preservar histórico, sem "permanente", botão "Remover do estoque"', async () => {
@@ -1897,7 +2043,7 @@ describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () 
     const confirm = await screen.findByRole('dialog', { name: 'Remover tipo do estoque' })
     expect(
       within(confirm).getByText(
-        /retirados do estoque ativo, mas históricos e movimentações serão preservados/i,
+        /retirados do estoque ativo\. Históricos, movimentações, compras e vínculos de pedidos finalizados são preservados/i,
       ),
     ).toBeInTheDocument()
     expect(within(confirm).queryByText(/permanente/i)).not.toBeInTheDocument()
@@ -1905,7 +2051,7 @@ describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () 
 
     await user.click(within(confirm).getByRole('button', { name: /^remover do estoque$/i }))
 
-    await waitFor(() => expect(deleteType).toHaveBeenCalledWith('a'))
+    await waitFor(() => expect(deleteType).toHaveBeenCalledWith('a', 'ARCHIVED'))
     expect(toastMock.success).toHaveBeenCalledWith(
       'Tipo removido do estoque. Histórico preservado.',
     )
@@ -1926,6 +2072,18 @@ describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () 
         total_spool_count: 1,
       }),
     ]
+    const getRemovalPlan = vi.fn().mockResolvedValue({
+      success: true,
+      planned_result: 'ARCHIVED',
+      spool_count: 1,
+      active_spool_count: 1,
+      active_order_numbers: [],
+      has_movements: false,
+      has_purchases: false,
+      has_product_filaments: false,
+      has_product_plate_filaments: false,
+      has_order_selection: false,
+    })
     const deleteType = vi.fn().mockImplementation(async () => {
       useFilamentTypesMock.mockReturnValue({
         types: archivedTypes,
@@ -1934,6 +2092,7 @@ describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () 
         refetch: vi.fn(),
         create: vi.fn(),
         update: vi.fn(),
+        getRemovalPlan,
         delete: deleteType,
       })
       return { success: true, result: 'ARCHIVED', archived_spool_count: 1 }
@@ -1945,6 +2104,7 @@ describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () 
       refetch: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
+      getRemovalPlan,
       delete: deleteType,
     })
     renderPage()

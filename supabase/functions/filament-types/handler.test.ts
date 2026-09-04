@@ -286,3 +286,113 @@ Deno.test("handleRequest aceita DELETE como método válido em /filament-types/:
   // Sem sessão -> 401; o que importa é NÃO ser 405 (método não permitido).
   assertEquals(res.status === 405, false);
 });
+
+// ---------------------------------------------------------------------------
+// Rodada corretiva (migration 20260903130000): removal-plan autoritativo +
+// expected_result obrigatório no DELETE.
+// ---------------------------------------------------------------------------
+
+import {
+  normalizeFilamentTypeRemovalPlan,
+  requireExpectedRemovalResult,
+} from "./handler.ts";
+
+Deno.test("normalizeFilamentTypeRemovalPlan repassa um plano completo válido", () => {
+  assertEquals(
+    normalizeFilamentTypeRemovalPlan({
+      planned_result: "BLOCKED_ACTIVE_ORDER",
+      spool_count: 4,
+      active_spool_count: 2,
+      active_order_numbers: ["FS-26-009", "FS-26-010"],
+      has_movements: true,
+      has_purchases: false,
+      has_product_filaments: false,
+      has_product_plate_filaments: false,
+      has_order_selection: true,
+    }),
+    {
+      planned_result: "BLOCKED_ACTIVE_ORDER",
+      spool_count: 4,
+      active_spool_count: 2,
+      active_order_numbers: ["FS-26-009", "FS-26-010"],
+      has_movements: true,
+      has_purchases: false,
+      has_product_filaments: false,
+      has_product_plate_filaments: false,
+      has_order_selection: true,
+    },
+  );
+});
+
+Deno.test("normalizeFilamentTypeRemovalPlan aceita PHYSICALLY_DELETED e ARCHIVED", () => {
+  assertEquals(normalizeFilamentTypeRemovalPlan({ planned_result: "PHYSICALLY_DELETED" }).planned_result, "PHYSICALLY_DELETED");
+  assertEquals(normalizeFilamentTypeRemovalPlan({ planned_result: "ARCHIVED" }).planned_result, "ARCHIVED");
+});
+
+Deno.test("normalizeFilamentTypeRemovalPlan trata shape inesperado como ARCHIVED e zera o resto (nunca 'exclusão permanente')", () => {
+  assertEquals(normalizeFilamentTypeRemovalPlan(null), {
+    planned_result: "ARCHIVED",
+    spool_count: 0,
+    active_spool_count: 0,
+    active_order_numbers: [],
+    has_movements: false,
+    has_purchases: false,
+    has_product_filaments: false,
+    has_product_plate_filaments: false,
+    has_order_selection: false,
+  });
+  assertEquals(normalizeFilamentTypeRemovalPlan({ planned_result: "SOMETHING_ELSE" }).planned_result, "ARCHIVED");
+  // active_order_numbers não-array -> [] ; entradas não-string são descartadas.
+  assertEquals(normalizeFilamentTypeRemovalPlan({ active_order_numbers: "x" }).active_order_numbers, []);
+  assertEquals(
+    normalizeFilamentTypeRemovalPlan({ active_order_numbers: ["FS-26-001", 2, null] }).active_order_numbers,
+    ["FS-26-001"],
+  );
+  // contadores não-numéricos -> 0 ; flags não-true -> false.
+  assertEquals(normalizeFilamentTypeRemovalPlan({ spool_count: "3", has_movements: "yes" }), {
+    planned_result: "ARCHIVED",
+    spool_count: 0,
+    active_spool_count: 0,
+    active_order_numbers: [],
+    has_movements: false,
+    has_purchases: false,
+    has_product_filaments: false,
+    has_product_plate_filaments: false,
+    has_order_selection: false,
+  });
+});
+
+Deno.test("requireExpectedRemovalResult aceita só PHYSICALLY_DELETED / ARCHIVED", () => {
+  assertEquals(requireExpectedRemovalResult("PHYSICALLY_DELETED"), "PHYSICALLY_DELETED");
+  assertEquals(requireExpectedRemovalResult("ARCHIVED"), "ARCHIVED");
+});
+
+Deno.test("requireExpectedRemovalResult rejeita ausente / BLOCKED_ACTIVE_ORDER / lixo", () => {
+  assertThrows(() => requireExpectedRemovalResult(undefined), (err) => {
+    if (!isValidationError(err)) throw new Error("esperado ValidationError");
+  });
+  assertThrows(() => requireExpectedRemovalResult("BLOCKED_ACTIVE_ORDER"));
+  assertThrows(() => requireExpectedRemovalResult("physically_deleted"));
+  assertThrows(() => requireExpectedRemovalResult(1));
+});
+
+Deno.test("handleRequest rejeita GET /filament-types/:id/removal-plan sem Authorization com 401 (auth antes do banco)", async () => {
+  const res = await handleRequest(
+    makeRequest("GET", "/123e4567-e89b-42d3-a456-426614174000/removal-plan"),
+  );
+  assertEquals(res.status, 401);
+});
+
+Deno.test("handleRequest não cai em 404/405 para GET /filament-types/:id/removal-plan (rota reconhecida)", async () => {
+  const res = await handleRequest(
+    makeRequest("GET", "/123e4567-e89b-42d3-a456-426614174000/removal-plan"),
+  );
+  assertEquals(res.status === 404 || res.status === 405, false);
+});
+
+Deno.test("handleRequest devolve 405 para POST em /filament-types/:id/removal-plan (só GET)", async () => {
+  const res = await handleRequest(
+    makeRequest("POST", "/123e4567-e89b-42d3-a456-426614174000/removal-plan", { x: 1 }),
+  );
+  assertEquals(res.status, 405);
+});

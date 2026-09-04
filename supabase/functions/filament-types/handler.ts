@@ -3,12 +3,21 @@
 // accessories/handler.ts e packaging/handler.ts.
 //
 // Rotas:
-//   POST   /filament-types       -> RPC create_filament_type
-//   PATCH  /filament-types/:id   -> RPC update_filament_type (edição e/ou ativar/desativar)
-//   DELETE /filament-types/:id   -> RPC remove_filament_type (remoção segura transacional:
+//   POST   /filament-types                    -> RPC create_filament_type
+//   PATCH  /filament-types/:id                -> RPC update_filament_type (edição e/ou ativar/desativar)
+//   GET    /filament-types/:id/removal-plan   -> RPC get_filament_type_removal_plan
+//                                   (planejamento AUTORITATIVO e somente-leitura da remoção:
+//                                   planned_result 'PHYSICALLY_DELETED' | 'ARCHIVED' |
+//                                   'BLOCKED_ACTIVE_ORDER' + contadores/flags). A interface
+//                                   consulta antes de abrir a confirmação.
+//   DELETE /filament-types/:id                -> RPC remove_filament_type (remoção segura transacional:
 //                                   exclusão física sem referência; arquivamento atômico
 //                                   do tipo + rolos com qualquer referência; bloqueio por
 //                                   pedido ativo — FILAMENT_TYPE_IN_ACTIVE_ORDER:).
+//                                   O corpo TEM de trazer expected_result ('PHYSICALLY_DELETED'
+//                                   | 'ARCHIVED') — o resultado que o usuário confirmou a
+//                                   partir do removal-plan. Se o plano mudou entretanto,
+//                                   FILAMENT_TYPE_REMOVAL_PLAN_CHANGED: (409) e nada é alterado.
 //                                   Resposta { result: 'PHYSICALLY_DELETED' | 'ARCHIVED',
 //                                   archived_spool_count: number }.
 //
@@ -75,6 +84,15 @@ export async function handleRequest(req: Request): Promise<Response> {
       if (req.method === "PATCH") return await handleUpdateFilamentType(req, route[0]);
       if (req.method === "DELETE") return await handleDeleteFilamentType(req, route[0]);
       throw new AppError("validation", 405, `Método ${req.method} não permitido em /filament-types/:id.`);
+    }
+
+    if (route.length === 2 && route[1] === "removal-plan") {
+      if (req.method === "GET") return await handleGetFilamentTypeRemovalPlan(req, route[0]);
+      throw new AppError(
+        "validation",
+        405,
+        `Método ${req.method} não permitido em /filament-types/:id/removal-plan.`,
+      );
     }
 
     throw new NotFoundError("Rota não encontrada.");
@@ -232,15 +250,94 @@ async function handleUpdateFilamentType(req: Request, filamentTypeId: string): P
 }
 
 // ---------------------------------------------------------------------------
-// DELETE /filament-types/:id -> remove_filament_type(p_filament_type_id, p_changed_by)
+// GET /filament-types/:id/removal-plan -> get_filament_type_removal_plan(
+//   p_filament_type_id, p_changed_by)
 //
-// Remoção segura transacional (migration 20260903120000): sem nenhuma
-// referência -> exclusão física; com qualquer referência -> arquiva o tipo
-// e todos os seus rolos na mesma transação; pedido ATIVO usando o tipo ->
-// bloqueio (FILAMENT_TYPE_IN_ACTIVE_ORDER:, mapeado para 409 com a mensagem
-// real). A RPC devolve jsonb { result, archived_spool_count } — repassado
-// ao frontend para escolher entre "excluído" e "removido do estoque".
+// Planejamento AUTORITATIVO e somente-leitura (migration 20260903130000). A
+// interface consulta ANTES de abrir a confirmação e escolhe a variante do
+// diálogo pelo planned_result — nunca mais deriva "exclusão permanente" só
+// da presença de rolos.
 // ---------------------------------------------------------------------------
+const REMOVAL_PLAN_RESULTS = ["PHYSICALLY_DELETED", "ARCHIVED", "BLOCKED_ACTIVE_ORDER"] as const;
+type RemovalPlanResult = (typeof REMOVAL_PLAN_RESULTS)[number];
+
+export interface FilamentTypeRemovalPlan {
+  planned_result: RemovalPlanResult;
+  spool_count: number;
+  active_spool_count: number;
+  active_order_numbers: string[];
+  has_movements: boolean;
+  has_purchases: boolean;
+  has_product_filaments: boolean;
+  has_product_plate_filaments: boolean;
+  has_order_selection: boolean;
+}
+
+// Normaliza o jsonb de get_filament_type_removal_plan sem confiar no shape
+// (defesa em profundidade). planned_result desconhecido cai em ARCHIVED (a
+// alternativa segura — nunca "exclusão permanente"); números e booleanos
+// só passam quando vêm do tipo certo; active_order_numbers só aceita
+// strings.
+export function normalizeFilamentTypeRemovalPlan(data: unknown): FilamentTypeRemovalPlan {
+  const obj = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  const planned = obj.planned_result;
+  const orders = Array.isArray(obj.active_order_numbers)
+    ? obj.active_order_numbers.filter((value): value is string => typeof value === "string")
+    : [];
+  const num = (value: unknown): number => (typeof value === "number" ? value : 0);
+  const bool = (value: unknown): boolean => value === true;
+  return {
+    planned_result: (REMOVAL_PLAN_RESULTS as readonly unknown[]).includes(planned)
+      ? (planned as RemovalPlanResult)
+      : "ARCHIVED",
+    spool_count: num(obj.spool_count),
+    active_spool_count: num(obj.active_spool_count),
+    active_order_numbers: orders,
+    has_movements: bool(obj.has_movements),
+    has_purchases: bool(obj.has_purchases),
+    has_product_filaments: bool(obj.has_product_filaments),
+    has_product_plate_filaments: bool(obj.has_product_plate_filaments),
+    has_order_selection: bool(obj.has_order_selection),
+  };
+}
+
+async function handleGetFilamentTypeRemovalPlan(
+  req: Request,
+  filamentTypeId: string,
+): Promise<Response> {
+  const operator = await resolveOperator(req);
+
+  if (!isUuid(filamentTypeId)) {
+    throw new ValidationError("Identificador de tipo de filamento inválido na rota.");
+  }
+
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("get_filament_type_removal_plan", {
+    p_filament_type_id: filamentTypeId,
+    p_changed_by: operator.userId,
+  });
+
+  if (error) throw mapPgError(error);
+
+  return jsonResponse(req, { success: true, ...normalizeFilamentTypeRemovalPlan(data) }, 200);
+}
+
+// ---------------------------------------------------------------------------
+// DELETE /filament-types/:id -> remove_filament_type(p_filament_type_id,
+//   p_changed_by, p_expected_result)
+//
+// Remoção segura transacional (migrations 20260903120000 + 20260903130000):
+// sem nenhuma referência -> exclusão física; com qualquer referência ->
+// arquiva o tipo e todos os seus rolos na mesma transação; pedido ATIVO
+// usando o tipo -> bloqueio (FILAMENT_TYPE_IN_ACTIVE_ORDER:, 409 com a
+// mensagem real). O corpo TEM de trazer expected_result — o resultado que o
+// usuário confirmou a partir do removal-plan; se o plano mudou entretanto,
+// a RPC levanta FILAMENT_TYPE_REMOVAL_PLAN_CHANGED: (409) e nada é alterado.
+// A RPC devolve jsonb { result, archived_spool_count } — repassado ao
+// frontend para escolher entre "excluído" e "removido do estoque".
+// ---------------------------------------------------------------------------
+const EXPECTED_REMOVAL_RESULTS = ["PHYSICALLY_DELETED", "ARCHIVED"] as const;
+
 // A RPC remove_filament_type devolve jsonb { result: 'PHYSICALLY_DELETED' |
 // 'ARCHIVED', archived_spool_count: number }. Normaliza para a interface
 // sem confiar cegamente no shape (defesa em profundidade): qualquer coisa
@@ -257,6 +354,19 @@ export function normalizeRemoveFilamentTypeResult(
   };
 }
 
+export function requireExpectedRemovalResult(value: unknown): "PHYSICALLY_DELETED" | "ARCHIVED" {
+  if (
+    typeof value !== "string" ||
+    !(EXPECTED_REMOVAL_RESULTS as readonly string[]).includes(value)
+  ) {
+    throw new ValidationError(
+      `Campo obrigatório ausente ou inválido: expected_result deve ser um de: ${EXPECTED_REMOVAL_RESULTS.join(", ")}. ` +
+        `Consulte GET /filament-types/:id/removal-plan e confirme o resultado planejado.`,
+    );
+  }
+  return value as "PHYSICALLY_DELETED" | "ARCHIVED";
+}
+
 async function handleDeleteFilamentType(req: Request, filamentTypeId: string): Promise<Response> {
   const operator = await resolveOperator(req);
 
@@ -264,10 +374,17 @@ async function handleDeleteFilamentType(req: Request, filamentTypeId: string): P
     throw new ValidationError("Identificador de tipo de filamento inválido na rota.");
   }
 
+  const rawBody = await req.text();
+  rejectIdentityFields(rawBody);
+  const body = parseJsonBody(rawBody);
+  rejectUnknownKeys(body, ["expected_result"], "corpo do DELETE");
+  const expectedResult = requireExpectedRemovalResult(body.expected_result);
+
   const admin = getAdminClient();
   const { data, error } = await admin.rpc("remove_filament_type", {
     p_filament_type_id: filamentTypeId,
     p_changed_by: operator.userId,
+    p_expected_result: expectedResult,
   });
 
   if (error) throw mapPgError(error);

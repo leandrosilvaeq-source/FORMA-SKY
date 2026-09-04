@@ -7,11 +7,13 @@ const {
   createFilamentTypeMock,
   updateFilamentTypeMock,
   deleteFilamentTypeMock,
+  getFilamentTypeRemovalPlanMock,
 } = vi.hoisted(() => ({
   listFilamentTypeSummariesMock: vi.fn(),
   createFilamentTypeMock: vi.fn(),
   updateFilamentTypeMock: vi.fn(),
   deleteFilamentTypeMock: vi.fn(),
+  getFilamentTypeRemovalPlanMock: vi.fn(),
 }))
 
 vi.mock('@/lib/api/filamentTypes', () => ({
@@ -19,6 +21,7 @@ vi.mock('@/lib/api/filamentTypes', () => ({
   createFilamentType: createFilamentTypeMock,
   updateFilamentType: updateFilamentTypeMock,
   deleteFilamentType: deleteFilamentTypeMock,
+  getFilamentTypeRemovalPlan: getFilamentTypeRemovalPlanMock,
 }))
 
 import { useFilamentTypes } from './useFilamentTypes'
@@ -45,6 +48,7 @@ describe('useFilamentTypes', () => {
     createFilamentTypeMock.mockReset()
     updateFilamentTypeMock.mockReset()
     deleteFilamentTypeMock.mockReset()
+    getFilamentTypeRemovalPlanMock.mockReset()
   })
 
   it('loads the type summary list on mount (vw_filament_type_summary, not the raw table)', async () => {
@@ -149,6 +153,35 @@ describe('useFilamentTypes', () => {
     expect(result.current.types).toEqual([summary])
   })
 
+  it('getRemovalPlan() apenas repassa a chamada da API, sem tocar no estado local', async () => {
+    listFilamentTypeSummariesMock.mockResolvedValue([summary])
+    const plan = {
+      success: true,
+      planned_result: 'ARCHIVED' as const,
+      spool_count: 2,
+      active_spool_count: 2,
+      active_order_numbers: [],
+      has_movements: true,
+      has_purchases: false,
+      has_product_filaments: false,
+      has_product_plate_filaments: false,
+      has_order_selection: false,
+    }
+    getFilamentTypeRemovalPlanMock.mockResolvedValue(plan)
+
+    const { result } = renderHook(() => useFilamentTypes())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    let got
+    await act(async () => {
+      got = await result.current.getRemovalPlan('t1')
+    })
+
+    expect(getFilamentTypeRemovalPlanMock).toHaveBeenCalledWith('t1')
+    expect(got).toBe(plan)
+    expect(result.current.types).toEqual([summary])
+  })
+
   it('delete() -> PHYSICALLY_DELETED remove só o tipo correspondente do array local', async () => {
     listFilamentTypeSummariesMock.mockResolvedValue([summary, otherSummary])
     deleteFilamentTypeMock.mockResolvedValue({
@@ -162,9 +195,10 @@ describe('useFilamentTypes', () => {
 
     let outcome: Awaited<ReturnType<typeof result.current.delete>> | undefined
     await act(async () => {
-      outcome = await result.current.delete('t1')
+      outcome = await result.current.delete('t1', 'PHYSICALLY_DELETED')
     })
 
+    expect(deleteFilamentTypeMock).toHaveBeenCalledWith('t1', 'PHYSICALLY_DELETED')
     expect(result.current.types).toEqual([otherSummary])
     expect(outcome).toMatchObject({ result: 'PHYSICALLY_DELETED' })
   })
@@ -182,9 +216,10 @@ describe('useFilamentTypes', () => {
 
     let outcome: Awaited<ReturnType<typeof result.current.delete>> | undefined
     await act(async () => {
-      outcome = await result.current.delete('t1')
+      outcome = await result.current.delete('t1', 'ARCHIVED')
     })
 
+    expect(deleteFilamentTypeMock).toHaveBeenCalledWith('t1', 'ARCHIVED')
     expect(result.current.types).toHaveLength(2)
     expect(result.current.types.find((t) => t.filament_type_id === 't1')?.is_active).toBe(false)
     expect(result.current.types.find((t) => t.filament_type_id === 't2')?.is_active).toBe(true)
@@ -204,7 +239,9 @@ describe('useFilamentTypes', () => {
     const { result } = renderHook(() => useFilamentTypes())
     await waitFor(() => expect(result.current.isLoading).toBe(false))
 
-    await expect(act(async () => result.current.delete('t1'))).rejects.toBeInstanceOf(ApiError)
+    await expect(act(async () => result.current.delete('t1', 'ARCHIVED'))).rejects.toBeInstanceOf(
+      ApiError,
+    )
     expect(result.current.types).toEqual([summary])
   })
 })

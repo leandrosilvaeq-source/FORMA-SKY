@@ -320,6 +320,41 @@ Deno.test("mapPgError mapeia FILAMENT_TYPE_IN_ACTIVE_ORDER: para BusinessRuleErr
   assertEquals(err.message.includes("FS-26-010"), true);
 });
 
+// -----------------------------------------------------------------------------
+// remove_filament_type (migration 20260903130000, rodada corretiva) —
+// FILAMENT_TYPE_REMOVAL_PLAN_CHANGED:
+// -----------------------------------------------------------------------------
+
+Deno.test("mapPgError mapeia FILAMENT_TYPE_REMOVAL_PLAN_CHANGED: para BusinessRuleError (409) e remove o marcador da mensagem", () => {
+  const err = mapPgError({
+    code: "P0001",
+    message:
+      "FILAMENT_TYPE_REMOVAL_PLAN_CHANGED: O plano de remoção mudou desde a conferência (agora: ARCHIVED). Recarregue as informações e confirme novamente.",
+  });
+  if (!(err instanceof BusinessRuleError)) {
+    throw new Error(`esperado BusinessRuleError, obtido ${err.constructor.name}`);
+  }
+  assertEquals(err.status, 409);
+  assertEquals(err.message.includes("FILAMENT_TYPE_REMOVAL_PLAN_CHANGED"), false);
+  // O fragmento estável que o frontend usa (isRemovalPlanChangedError) fica.
+  assertEquals(err.message.toLowerCase().includes("plano de remoção mudou"), true);
+});
+
+Deno.test("mapPgError não confunde FILAMENT_TYPE_REMOVAL_PLAN_CHANGED: com FILAMENT_TYPE_IN_ACTIVE_ORDER: — regressão cruzada", () => {
+  const planChanged = mapPgError({
+    code: "P0001",
+    message: "FILAMENT_TYPE_REMOVAL_PLAN_CHANGED: O plano de remoção mudou desde a conferência (agora: BLOCKED_ACTIVE_ORDER). Recarregue as informações e confirme novamente.",
+  });
+  const activeOrder = mapPgError({
+    code: "P0001",
+    message: "FILAMENT_TYPE_IN_ACTIVE_ORDER: Este tipo de filamento está sendo utilizado por pedido(s) ativo(s) e não pode ser removido. Pedido(s): FS-26-010.",
+  });
+  assertEquals(planChanged instanceof BusinessRuleError, true);
+  assertEquals(activeOrder instanceof BusinessRuleError, true);
+  assertEquals(planChanged.message.toLowerCase().includes("plano de remoção mudou"), true);
+  assertEquals(activeOrder.message.toLowerCase().includes("plano de remoção mudou"), false);
+});
+
 Deno.test("mapPgError mantém FILAMENT_TYPE_HAS_SPOOLS:/HAS_COMPOSITION: mapeados (regressão — bancos ainda não migrados)", () => {
   const spools = mapPgError({
     code: "P0001",

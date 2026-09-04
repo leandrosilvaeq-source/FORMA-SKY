@@ -242,6 +242,16 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
     "FILAMENT_TYPE_IN_ACTIVE_ORDER:",
     (message) => new BusinessRuleError(message.replace(/^FILAMENT_TYPE_IN_ACTIVE_ORDER:\s*/, "")),
   ],
+  // remove_filament_type (migration 20260903130000, rodada corretiva): o
+  // plano de remoção (get_filament_type_removal_plan) mudou entre a
+  // conferência da interface e a execução sob lock — nada foi alterado. 409
+  // com o prefixo removido; a interface reconhece a mensagem ("plano de
+  // remoção mudou"), recarrega o plano e pede nova confirmação. Substring
+  // própria, sem sobreposição com FILAMENT_TYPE_* acima.
+  [
+    "FILAMENT_TYPE_REMOVAL_PLAN_CHANGED:",
+    (message) => new BusinessRuleError(message.replace(/^FILAMENT_TYPE_REMOVAL_PLAN_CHANGED:\s*/, "")),
+  ],
   [
     "FILAMENT_SPOOL_HAS_MOVEMENTS:",
     (message) => new BusinessRuleError(message.replace(/^FILAMENT_SPOOL_HAS_MOVEMENTS:\s*/, "")),

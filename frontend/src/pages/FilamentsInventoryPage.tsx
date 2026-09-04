@@ -37,6 +37,7 @@ import { useFilamentTypes } from '@/hooks/useFilamentTypes'
 import { useFilamentSpoolCounts } from '@/hooks/useFilamentSpoolCounts'
 import { usePersistentColumnWidths } from '@/hooks/usePersistentColumnWidths'
 import { ApiError } from '@/lib/api/errors'
+import { isRemovalPlanChangedError, type FilamentTypeRemovalPlan } from '@/lib/api/filamentTypes'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
 import {
   groupFilamentTypes,
@@ -178,6 +179,7 @@ export function FilamentsInventoryPage() {
     refetch,
     create,
     update,
+    getRemovalPlan,
     delete: deleteType,
   } = useFilamentTypes()
   const [searchTerm, setSearchTerm] = useState('')
@@ -231,6 +233,16 @@ export function FilamentsInventoryPage() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  // Plano AUTORITATIVO da remoção, buscado no backend ao abrir o diálogo. A
+  // variante da confirmação (permanente / arquivamento / bloqueio) vem
+  // SEMPRE de deletePlan.planned_result — nunca mais da presença de rolos.
+  const [deletePlan, setDeletePlan] = useState<FilamentTypeRemovalPlan | null>(null)
+  const [isLoadingDeletePlan, setIsLoadingDeletePlan] = useState(false)
+  const [deletePlanError, setDeletePlanError] = useState<string | null>(null)
+  // true quando o backend recusou a execução porque o plano mudou entre a
+  // consulta e a confirmação (FILAMENT_TYPE_REMOVAL_PLAN_CHANGED). O diálogo
+  // fica aberto, recarrega o plano e pede nova confirmação.
+  const [deletePlanChanged, setDeletePlanChanged] = useState(false)
 
   // openGroupKey (não o grupo inteiro): o drawer precisa de um grupo VIVO —
   // derivado de `types` a cada render — para refletir um refetch disparado
@@ -382,28 +394,52 @@ export function FilamentsInventoryPage() {
     }
   }
 
-  // Heurística da interface para escolher a variante da confirmação: um tipo
-  // com rolos (total_spool_count > 0) sempre cairá no arquivamento no
-  // backend. Um tipo sem rolos PODE ainda ter outras referências (compras,
-  // composição legada, seleção em pedido finalizado) que o front não
-  // carrega — nesse caso a confirmação mostra a variante "permanente" mas o
-  // backend arquiva mesmo assim e o toast reflete o resultado real
-  // (ARCHIVED). O backend é sempre autoritativo; a interface nunca força
-  // uma exclusão física.
-  const deletingTypeHasInventory = (deletingType?.total_spool_count ?? 0) > 0
+  // Variante da confirmação, derivada SÓ do plano autoritativo do backend.
+  //   PHYSICALLY_DELETED -> exclusão física permanente (destrutiva).
+  //   ARCHIVED           -> remoção lógica, histórico preservado.
+  //   BLOCKED_ACTIVE_ORDER -> bloqueio: nenhuma ação destrutiva.
+  const deletePlanResult = deletePlan?.planned_result ?? null
+  // expected_result enviado no DELETE — só existe para os dois planos
+  // executáveis; BLOCKED_ACTIVE_ORDER não tem confirmação.
+  const deleteExpectedResult: 'PHYSICALLY_DELETED' | 'ARCHIVED' | null =
+    deletePlanResult === 'PHYSICALLY_DELETED' || deletePlanResult === 'ARCHIVED'
+      ? deletePlanResult
+      : null
+
+  const loadRemovalPlan = useCallback(
+    async (typeId: string) => {
+      setIsLoadingDeletePlan(true)
+      setDeletePlanError(null)
+      try {
+        const plan = await getRemovalPlan(typeId)
+        setDeletePlan(plan)
+      } catch (err) {
+        setDeletePlan(null)
+        setDeletePlanError(toErrorMessage(err))
+      } finally {
+        setIsLoadingDeletePlan(false)
+      }
+    },
+    [getRemovalPlan],
+  )
 
   function openDeleteDialog(type: FilamentTypeSummary) {
     setDeletingType(type)
     setDeleteError(null)
+    setDeletePlan(null)
+    setDeletePlanError(null)
+    setDeletePlanChanged(false)
     setIsDeleteDialogOpen(true)
+    void loadRemovalPlan(type.filament_type_id)
   }
 
   async function handleConfirmDelete() {
-    if (!deletingType) return
+    if (!deletingType || !deleteExpectedResult) return
     setIsDeleting(true)
     setDeleteError(null)
+    setDeletePlanChanged(false)
     try {
-      const outcome = await deleteType(deletingType.filament_type_id)
+      const outcome = await deleteType(deletingType.filament_type_id, deleteExpectedResult)
       if (outcome.result === 'PHYSICALLY_DELETED') {
         toast.success('Tipo de filamento excluído.')
       } else {
@@ -415,7 +451,14 @@ export function FilamentsInventoryPage() {
       }
       setIsDeleteDialogOpen(false)
     } catch (err) {
-      setDeleteError(toErrorMessage(err))
+      if (isRemovalPlanChangedError(err)) {
+        // O plano mudou entre a consulta e a execução — nada foi alterado.
+        // Recarrega o plano e mantém o diálogo aberto para nova confirmação.
+        setDeletePlanChanged(true)
+        void loadRemovalPlan(deletingType.filament_type_id)
+      } else {
+        setDeleteError(toErrorMessage(err))
+      }
     } finally {
       setIsDeleting(false)
     }
@@ -884,24 +927,48 @@ export function FilamentsInventoryPage() {
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            {/* Variante A (sem rolos): exclusão física permanente. Variante
-                B (com rolos): arquivamento do tipo e dos rolos, histórico
-                preservado — sem a palavra "permanente". O backend é
-                autoritativo: se o tipo tiver outras referências (compras,
-                composição, pedido finalizado) ele arquiva de qualquer
-                forma e o toast reflete o que de fato aconteceu. Pedido
-                ATIVO => o backend bloqueia e a mensagem real aparece
-                abaixo. */}
+            {/* Título e corpo vêm SEMPRE do plano autoritativo do backend
+                (get_filament_type_removal_plan), nunca da presença de
+                rolos:
+                  PHYSICALLY_DELETED   -> "Excluir tipo de filamento" (permanente);
+                  ARCHIVED             -> "Remover tipo do estoque" (histórico preservado);
+                  BLOCKED_ACTIVE_ORDER -> bloqueio, sem ação destrutiva.
+                Enquanto o plano carrega, um título neutro. */}
             <DialogTitle>
-              {deletingTypeHasInventory ? 'Remover tipo do estoque' : 'Excluir tipo de filamento'}
+              {deletePlanResult === 'PHYSICALLY_DELETED'
+                ? 'Excluir tipo de filamento'
+                : deletePlanResult === 'ARCHIVED'
+                  ? 'Remover tipo do estoque'
+                  : deletePlanResult === 'BLOCKED_ACTIVE_ORDER'
+                    ? 'Não é possível remover o tipo'
+                    : 'Remover tipo de filamento'}
             </DialogTitle>
             <DialogDescription>
-              {deletingType &&
-                (deletingTypeHasInventory
-                  ? `"${deletingType.manufacturer} — ${deletingType.commercial_color}" possui rolos. O tipo e todos os seus rolos serão retirados do estoque ativo, mas históricos e movimentações serão preservados.`
-                  : `Tem certeza que deseja excluir "${deletingType.manufacturer} — ${deletingType.commercial_color}"? Esta exclusão é permanente e não poderá ser desfeita.`)}
+              {!deletingType
+                ? null
+                : isLoadingDeletePlan
+                  ? 'Verificando o que será removido...'
+                  : deletePlanError
+                    ? deletePlanError
+                    : deletePlanResult === 'PHYSICALLY_DELETED'
+                      ? `Tem certeza que deseja excluir "${deletingType.manufacturer} — ${deletingType.commercial_color}"? Este tipo não possui rolos, movimentações, compras nem vínculo com pedidos — a exclusão é permanente e não poderá ser desfeita.`
+                      : deletePlanResult === 'ARCHIVED'
+                        ? `"${deletingType.manufacturer} — ${deletingType.commercial_color}" e todos os seus rolos serão retirados do estoque ativo. Históricos, movimentações, compras e vínculos de pedidos finalizados são preservados.`
+                        : deletePlanResult === 'BLOCKED_ACTIVE_ORDER'
+                          ? `"${deletingType.manufacturer} — ${deletingType.commercial_color}" está sendo utilizado por pedido(s) ativo(s) e não pode ser removido${
+                              deletePlan && deletePlan.active_order_numbers.length > 0
+                                ? `. Pedido(s): ${deletePlan.active_order_numbers.join(', ')}`
+                                : ''
+                            }.`
+                          : null}
             </DialogDescription>
           </DialogHeader>
+          {deletePlanChanged && (
+            <p role="status" className="text-sm">
+              As condições deste tipo mudaram desde a conferência. Revise as informações acima e
+              confirme novamente.
+            </p>
+          )}
           {deleteError && (
             <p role="alert" className="text-destructive text-sm">
               {deleteError}
@@ -915,27 +982,38 @@ export function FilamentsInventoryPage() {
               disabled={isDeleting}
               className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
             >
-              Cancelar
+              {deleteExpectedResult ? 'Cancelar' : 'Fechar'}
             </Button>
-            {deletingTypeHasInventory ? (
+            {deletePlanError ? (
+              <Button
+                type="button"
+                onClick={() => {
+                  if (deletingType) void loadRemovalPlan(deletingType.filament_type_id)
+                }}
+                disabled={isLoadingDeletePlan || !deletingType}
+                className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
+              >
+                Tentar novamente
+              </Button>
+            ) : deleteExpectedResult === 'ARCHIVED' ? (
               <Button
                 type="button"
                 onClick={() => void handleConfirmDelete()}
-                disabled={isDeleting}
+                disabled={isDeleting || isLoadingDeletePlan}
                 className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
               >
                 {isDeleting ? 'Removendo...' : 'Remover do estoque'}
               </Button>
-            ) : (
+            ) : deleteExpectedResult === 'PHYSICALLY_DELETED' ? (
               <Button
                 type="button"
                 variant="destructive"
                 onClick={() => void handleConfirmDelete()}
-                disabled={isDeleting}
+                disabled={isDeleting || isLoadingDeletePlan}
               >
                 {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
               </Button>
-            )}
+            ) : null}
           </DialogFooter>
         </DialogContent>
       </Dialog>

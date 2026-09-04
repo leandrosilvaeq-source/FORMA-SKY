@@ -4,10 +4,11 @@
 // (supabase/migrations/20260827100000_create_filament_types_table.sql,
 // 20260827110000_create_filament_movements_table.sql) — mesmo padrão de
 // accessories.ts/packaging.ts. Escrita (criar/editar/ativar-desativar/
-// remover): Edge Function `filament-types` (publicada e operacional para
-// POST/PATCH/DELETE).
+// remover) e o planejamento de remoção (GET /:id/removal-plan): Edge
+// Function `filament-types` (publicada e operacional para POST/PATCH/DELETE;
+// a rota GET /:id/removal-plan entra no deploy desta rodada corretiva).
 
-import { mapSupabaseError } from './errors'
+import { ApiError, mapSupabaseError } from './errors'
 import { supabase } from '@/lib/supabase'
 import { callEdgeFunction } from './edgeFunctionClient'
 import type { FilamentMaterial, FilamentType, FilamentTypeSummary } from '@/types/domain'
@@ -71,6 +72,31 @@ export async function updateFilamentType(
   return callEdgeFunction<FilamentType>('filament-types', `/${id}`, 'PATCH', input)
 }
 
+// GET /filament-types/:id/removal-plan -> get_filament_type_removal_plan:
+// planejamento AUTORITATIVO e somente-leitura da remoção. A interface
+// consulta ANTES de abrir a confirmação e escolhe a variante do diálogo
+// pelo planned_result — nunca mais deriva "exclusão permanente" só da
+// presença de rolos. Não altera nada.
+export type FilamentTypeRemovalPlanResult =
+  'PHYSICALLY_DELETED' | 'ARCHIVED' | 'BLOCKED_ACTIVE_ORDER'
+
+export interface FilamentTypeRemovalPlan {
+  success: true
+  planned_result: FilamentTypeRemovalPlanResult
+  spool_count: number
+  active_spool_count: number
+  active_order_numbers: string[]
+  has_movements: boolean
+  has_purchases: boolean
+  has_product_filaments: boolean
+  has_product_plate_filaments: boolean
+  has_order_selection: boolean
+}
+
+export async function getFilamentTypeRemovalPlan(id: string): Promise<FilamentTypeRemovalPlan> {
+  return callEdgeFunction<FilamentTypeRemovalPlan>('filament-types', `/${id}/removal-plan`, 'GET')
+}
+
 // DELETE /filament-types/:id -> remove_filament_type (remoção segura
 // transacional): sem nenhuma referência -> exclusão física definitiva
 // (result 'PHYSICALLY_DELETED'); com qualquer referência (rolos,
@@ -79,12 +105,33 @@ export async function updateFilamentType(
 // transação (result 'ARCHIVED', com a contagem de rolos arquivados);
 // pedido ATIVO usando o tipo -> bloqueio (ApiError business_rule, mensagem
 // real do backend). Nunca cascateia, nunca apaga histórico/movimentações.
+//
+// expectedResult é o planned_result confirmado pelo usuário a partir de
+// getFilamentTypeRemovalPlan. Se o plano real mudou entre a consulta e a
+// execução, o backend não altera nada e devolve um ApiError business_rule
+// cuja mensagem casa com REMOVAL_PLAN_CHANGED_HINT (isRemovalPlanChangedError)
+// — a interface recarrega o plano e pede nova confirmação.
 export interface RemoveFilamentTypeResult {
   success: true
   result: 'PHYSICALLY_DELETED' | 'ARCHIVED'
   archived_spool_count: number
 }
 
-export async function deleteFilamentType(id: string): Promise<RemoveFilamentTypeResult> {
-  return callEdgeFunction<RemoveFilamentTypeResult>('filament-types', `/${id}`, 'DELETE')
+export async function deleteFilamentType(
+  id: string,
+  expectedResult: 'PHYSICALLY_DELETED' | 'ARCHIVED',
+): Promise<RemoveFilamentTypeResult> {
+  return callEdgeFunction<RemoveFilamentTypeResult>('filament-types', `/${id}`, 'DELETE', {
+    expected_result: expectedResult,
+  })
+}
+
+// Fragmento estável da mensagem de FILAMENT_TYPE_REMOVAL_PLAN_CHANGED: (o
+// marcador é removido pelo backend antes de chegar ao cliente). Usado para
+// distinguir "plano mudou, reconfirme" de um bloqueio definitivo por pedido
+// ativo — ambos chegam como ApiError business_rule/409.
+export const REMOVAL_PLAN_CHANGED_HINT = 'plano de remoção mudou'
+
+export function isRemovalPlanChangedError(err: unknown): boolean {
+  return err instanceof ApiError && err.message.toLowerCase().includes(REMOVAL_PLAN_CHANGED_HINT)
 }
