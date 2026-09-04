@@ -1048,11 +1048,12 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     expect(screen.queryByRole('radiogroup', { name: 'Operação' })).not.toBeInTheDocument()
   })
 
-  it('rolo SEM histórico: menu oferece "Excluir rolo", exclui fisicamente e aciona o refetch do resumo', async () => {
+  it('rolo SEM histórico: "Excluir rolo" faz exclusão física definitiva e a confirmação informa que é permanente', async () => {
     const typesRefetch = vi.fn()
     const deleteSpool = vi.fn().mockResolvedValue(undefined)
+    const update = vi.fn()
     mockTypes([typeFixture()], { refetch: typesRefetch })
-    mockSpools([spoolFixture({ has_movement_history: false })], { delete: deleteSpool })
+    mockSpools([spoolFixture({ has_movement_history: false })], { delete: deleteSpool, update })
     renderPage()
     const user = userEvent.setup()
 
@@ -1063,25 +1064,21 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
       }),
     )
     await user.click(await screen.findByRole('menuitem', { name: 'Excluir rolo' }))
-    await user.click(await screen.findByRole('button', { name: /^excluir definitivamente$/i }))
+
+    const confirm = await screen.findByRole('dialog', { name: 'Excluir rolo' })
+    expect(within(confirm).getByText(/permanente e não poderá ser desfeita/i)).toBeInTheDocument()
+    await user.click(within(confirm).getByRole('button', { name: /^excluir definitivamente$/i }))
 
     await waitFor(() => expect(deleteSpool).toHaveBeenCalledWith('s1'))
+    expect(update).not.toHaveBeenCalled()
     expect(typesRefetch).toHaveBeenCalled()
   })
 
-  it('rolo COM histórico: "Excluir rolo" tenta a exclusão real (nunca arquiva) e mostra o erro do backend quando bloqueada', async () => {
-    const { ApiError } = await import('@/lib/api/errors')
-    const update = vi.fn()
-    const deleteSpool = vi
-      .fn()
-      .mockRejectedValue(
-        new ApiError(
-          'business_rule',
-          409,
-          'Este rolo possui movimentações vinculadas e não pode ser excluído.',
-        ),
-      )
-    mockTypes([typeFixture()])
+  it('rolo COM histórico: "Excluir rolo" NÃO chama DELETE — arquiva o rolo preservando o histórico, sem erro por movimentações', async () => {
+    const typesRefetch = vi.fn()
+    const update = vi.fn().mockResolvedValue(spoolFixture({ is_active: false }))
+    const deleteSpool = vi.fn()
+    mockTypes([typeFixture()], { refetch: typesRefetch })
     mockSpools([spoolFixture({ has_movement_history: true })], { update, delete: deleteSpool })
     renderPage()
     const user = userEvent.setup()
@@ -1092,18 +1089,128 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
         name: 'Mais ações para o rolo RL-26-001',
       }),
     )
-    // O menu não oferece mais "Arquivar rolo" nem "Desativar".
-    expect(screen.queryByRole('menuitem', { name: 'Arquivar rolo' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('menuitem', { name: 'Desativar' })).not.toBeInTheDocument()
-    await user.click(await screen.findByRole('menuitem', { name: 'Excluir rolo' }))
-    await user.click(await screen.findByRole('button', { name: /^excluir definitivamente$/i }))
+    // Menu segue só com Editar e Excluir rolo — sem Arquivar/Desativar/Descartar.
+    const items = (await screen.findAllByRole('menuitem')).map((i) => i.textContent)
+    expect(items).toEqual(['Editar', 'Excluir rolo'])
+    await user.click(screen.getByRole('menuitem', { name: 'Excluir rolo' }))
 
-    await waitFor(() => expect(deleteSpool).toHaveBeenCalledWith('s1'))
-    expect(update).not.toHaveBeenCalled()
+    // Confirmação diferente: fala em remover do estoque ativo, sem a palavra "permanente".
+    const confirm = await screen.findByRole('dialog', { name: 'Remover rolo do estoque' })
     expect(
-      await screen.findByText('Este rolo possui movimentações vinculadas e não pode ser excluído.'),
+      within(confirm).getByText(
+        'Este rolo possui histórico. Ele será removido do estoque ativo, mas suas movimentações serão preservadas.',
+      ),
     ).toBeInTheDocument()
+    expect(within(confirm).queryByText(/permanente/i)).not.toBeInTheDocument()
+    expect(within(confirm).queryByText(/Desative ou descarte o rolo/i)).not.toBeInTheDocument()
+    expect(
+      within(confirm).queryByText(/possui movimentações registradas e não pode ser excluído/i),
+    ).not.toBeInTheDocument()
+
+    await user.click(within(confirm).getByRole('button', { name: 'Remover do estoque' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('s1', { is_active: false }))
+    expect(deleteSpool).not.toHaveBeenCalled()
+    expect(toastMock.success).toHaveBeenCalledWith(
+      'Rolo removido do estoque. Histórico preservado.',
+    )
+    expect(typesRefetch).toHaveBeenCalled()
   })
+
+  it('depois de arquivar um rolo com histórico, ele some da listagem padrão e reaparece com "Mostrar arquivados"', async () => {
+    const typesRefetch = vi.fn()
+    const deleteSpool = vi.fn()
+    const activeSpool = spoolFixture({ id: 's1', code: 'RL-26-001', has_movement_history: true })
+    const archivedSpool = spoolFixture({
+      id: 's1',
+      code: 'RL-26-001',
+      is_active: false,
+      has_movement_history: true,
+    })
+    const update = vi.fn().mockImplementation(async () => {
+      useFilamentSpoolsMock.mockReturnValue({
+        spools: [archivedSpool],
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+        create: vi.fn(),
+        update,
+        delete: deleteSpool,
+        setLocalSpoolState: vi.fn(),
+      })
+      return archivedSpool
+    })
+    mockTypes([typeFixture()], { refetch: typesRefetch })
+    useFilamentSpoolsMock.mockReturnValue({
+      spools: [activeSpool],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+      create: vi.fn(),
+      update,
+      delete: deleteSpool,
+      setLocalSpoolState: vi.fn(),
+    })
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    expect(within(getSpoolsTable(dialog)).getByText('RL-26-001')).toBeInTheDocument()
+
+    await user.click(
+      within(getSpoolsTable(dialog)).getByRole('button', {
+        name: 'Mais ações para o rolo RL-26-001',
+      }),
+    )
+    await user.click(await screen.findByRole('menuitem', { name: 'Excluir rolo' }))
+    await user.click(await screen.findByRole('button', { name: 'Remover do estoque' }))
+
+    // Sumiu da listagem padrão.
+    await waitFor(() => expect(within(dialog).queryByText('RL-26-001')).not.toBeInTheDocument())
+    // Reaparece, identificado como arquivado, ao marcar "Mostrar arquivados".
+    await user.click(within(dialog).getByRole('switch', { name: 'Mostrar arquivados' }))
+    const archivedRow = within(getSpoolsTable(dialog))
+      .getByText('RL-26-001')
+      .closest('tr') as HTMLElement
+    expect(within(archivedRow).getByText('Arquivado')).toBeInTheDocument()
+    // "Excluir rolo" não repete a remoção num rolo já arquivado.
+    await user.click(
+      within(archivedRow).getByRole('button', { name: 'Mais ações para o rolo RL-26-001' }),
+    )
+    expect(await screen.findByRole('menuitem', { name: 'Excluir rolo' })).toHaveAttribute(
+      'data-disabled',
+    )
+  })
+
+  it('mobile: "Excluir rolo" de um rolo com histórico usa a mesma confirmação de arquivamento', async () => {
+    const update = vi.fn().mockResolvedValue(spoolFixture({ is_active: false }))
+    const deleteSpool = vi.fn()
+    mockTypes([typeFixture()])
+    mockSpools([spoolFixture({ has_movement_history: true })], { update, delete: deleteSpool })
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    // Card mobile (fora da <table>): mesmo componente de menu do rolo.
+    const mobileCard = within(dialog)
+      .getByText('Fabricante / tipo: Voolt3D · Sólida · Preto')
+      .closest('[data-slot="card"]') as HTMLElement
+    await user.click(
+      within(mobileCard).getByRole('button', { name: 'Mais ações para o rolo RL-26-001' }),
+    )
+    await user.click(await screen.findByRole('menuitem', { name: 'Excluir rolo' }))
+
+    const confirm = await screen.findByRole('dialog', { name: 'Remover rolo do estoque' })
+    expect(within(confirm).queryByText(/permanente/i)).not.toBeInTheDocument()
+    await user.click(within(confirm).getByRole('button', { name: 'Remover do estoque' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('s1', { is_active: false }))
+    expect(deleteSpool).not.toHaveBeenCalled()
+  })
+
+  it.todo(
+    'rolo vinculado a um Pedido bloqueia exclusão física E arquivamento com mensagem de vínculo — pendente do motor Pedidos → Estoque (Módulo 3): não existe hoje nenhuma estrutura que ligue filament_spools a orders (reference_type/reference_id de filament_movements são campos reservados, nunca populados), então não há o que verificar sem inventar mock enganoso',
+  )
 
   it('"Mostrar arquivados" só muda a visibilidade — nunca o resumo consolidado', async () => {
     mockTypes([typeFixture({ total_available_grams: 750, total_spool_count: 2 })])

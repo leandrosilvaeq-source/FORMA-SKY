@@ -241,18 +241,38 @@ export function FilamentTypeDrawer({
     setIsDeleteDialogOpen(true)
   }
 
-  // "Excluir rolo" é sempre exclusão real e definitiva via
-  // delete_filament_spool (Edge Function DELETE /filament-spools/:id) — a
-  // RPC bloqueia por FILAMENT_SPOOL_HAS_MOVEMENTS e nunca cascateia; quando
-  // isso acontece, a mensagem real do backend aparece no diálogo. Nunca
-  // arquiva nem desativa como alternativa.
-  async function handleConfirmDelete() {
+  // Regra revisada do usuário (2026-09-03) para "Excluir rolo":
+  //  - rolo SEM movimentações  -> exclusão física definitiva
+  //    (delete_filament_spool, DELETE /filament-spools/:id; a RPC nunca
+  //    cascateia e as FKs de filament_movements continuam intactas).
+  //  - rolo COM movimentações -> NÃO chama DELETE: só arquiva o rolo
+  //    (is_active=false via update_filament_spool, o mesmo mecanismo de
+  //    inativação segura que já existia). O histórico (pesagens, entradas,
+  //    perdas, ajustes) é preservado por inteiro; o rolo sai da listagem
+  //    padrão, das contagens e dos resumos, e continua acessível em
+  //    "Mostrar arquivados". Nenhum erro por possuir movimentações neste
+  //    fluxo.
+  //  - rolo VINCULADO A PEDIDO -> deveria bloquear as duas operações. Não
+  //    existe hoje NENHUMA estrutura que ligue rolo a pedido
+  //    (filament_movements.reference_type/reference_id são campos
+  //    reservados, nunca populados; nenhuma tabela/coluna/RPC associa
+  //    filament_spools a orders). Essa proteção será implementada junto ao
+  //    motor Pedidos -> Estoque do Módulo 3 — aqui não se inventa nenhuma
+  //    verificação falsa.
+  const deletingSpoolHasHistory = deletingSpool?.has_movement_history ?? false
+
+  async function handleConfirmRemoveSpool() {
     if (!deletingSpool) return
     setIsDeleting(true)
     setDeleteError(null)
     try {
-      await deleteSpool(deletingSpool.id)
-      toast.success('Rolo excluído.')
+      if (deletingSpool.has_movement_history) {
+        await update(deletingSpool.id, { is_active: false })
+        toast.success('Rolo removido do estoque. Histórico preservado.')
+      } else {
+        await deleteSpool(deletingSpool.id)
+        toast.success('Rolo excluído.')
+      }
       setIsDeleteDialogOpen(false)
       onSummaryChanged()
     } catch (err) {
@@ -279,9 +299,12 @@ export function FilamentTypeDrawer({
   }
 
   // Menu de três pontos de cada rolo físico — só "Editar" e "Excluir rolo"
-  // (decisão do usuário, 2026-09-02). Desativar/Descartar/Arquivar saíram
-  // deste menu. "Excluir rolo" é sempre exclusão real e definitiva (ver
-  // handleConfirmDelete).
+  // (Desativar/Descartar/Arquivar não voltam ao menu). "Excluir rolo"
+  // resolve entre exclusão física (sem histórico) e arquivamento com
+  // preservação do histórico (com movimentações) — ver
+  // handleConfirmRemoveSpool. Um rolo já arquivado (is_active=false) já foi
+  // removido do estoque ativo: "Excluir rolo" fica desabilitado para não
+  // repetir a remoção.
   function SpoolActionsMenu({ spool }: { spool: FilamentSpool }) {
     return (
       <DropdownMenu>
@@ -300,6 +323,7 @@ export function FilamentTypeDrawer({
         <DropdownMenuContent>
           <DropdownMenuItem onClick={() => openEditDialog(spool)}>Editar</DropdownMenuItem>
           <DropdownMenuItem
+            disabled={!spool.is_active}
             onClick={() => openDeleteDialog(spool)}
             className="text-destructive data-highlighted:text-destructive"
           >
@@ -646,10 +670,14 @@ export function FilamentTypeDrawer({
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Excluir rolo</DialogTitle>
+            <DialogTitle>
+              {deletingSpoolHasHistory ? 'Remover rolo do estoque' : 'Excluir rolo'}
+            </DialogTitle>
             <DialogDescription>
               {deletingSpool &&
-                `Tem certeza que deseja excluir o rolo "${deletingSpool.code}"? Esta exclusão é permanente e não poderá ser desfeita — não é arquivamento nem desativação. Se o rolo tiver movimentações vinculadas, o sistema não permitirá a exclusão.`}
+                (deletingSpoolHasHistory
+                  ? 'Este rolo possui histórico. Ele será removido do estoque ativo, mas suas movimentações serão preservadas.'
+                  : `Tem certeza que deseja excluir o rolo "${deletingSpool.code}"? Esta exclusão é permanente e não poderá ser desfeita — não é arquivamento nem desativação.`)}
             </DialogDescription>
           </DialogHeader>
           {deleteError && (
@@ -667,14 +695,25 @@ export function FilamentTypeDrawer({
             >
               Cancelar
             </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={() => void handleConfirmDelete()}
-              disabled={isDeleting}
-            >
-              {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
-            </Button>
+            {deletingSpoolHasHistory ? (
+              <Button
+                type="button"
+                onClick={() => void handleConfirmRemoveSpool()}
+                disabled={isDeleting}
+                className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
+              >
+                {isDeleting ? 'Removendo...' : 'Remover do estoque'}
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => void handleConfirmRemoveSpool()}
+                disabled={isDeleting}
+              >
+                {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
