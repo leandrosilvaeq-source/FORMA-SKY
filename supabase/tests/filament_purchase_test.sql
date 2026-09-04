@@ -2,7 +2,13 @@
 -- Forma Sky — Módulo 3 (Estoque e Inventário)
 -- TESTE DE INTEGRAÇÃO da Compra de Filamentos com MÚLTIPLOS itens (2026-09-04,
 -- migration 20260904130000_support_multi_item_filament_purchases.sql) —
--- register_filament_purchase + inventory_purchase_filament_items.
+-- register_filament_purchase + inventory_purchase_filament_items. A Seção 8
+-- cobre a migration seguinte da mesma rodada (reorganização compacta da
+-- janela, 20260904140000_add_purchase_channel_to_filament_purchases.sql):
+-- purchase_channel obrigatório, fechado aos 4 valores, persistido e
+-- comparado pela idempotência — todas as chamadas das Seções 1–5 (já
+-- existentes) foram atualizadas para informar p_purchase_channel, já que a
+-- RPC passou a exigi-lo.
 -- =============================================================================
 --
 -- ESTE ARQUIVO NÃO É UMA MIGRATION. Mesmo padrão de
@@ -122,7 +128,8 @@ begin
           'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 110.00
         )
       ),
-      p_idempotency_key => 'teste-compra-multi-1'
+      p_idempotency_key => 'teste-compra-multi-1',
+      p_purchase_channel => 'MERCADO_LIVRE'
     );
     v_purchase_id := (v_result ->> 'purchase_id')::uuid;
     select * into v_purchase from public.inventory_purchases where id = v_purchase_id;
@@ -206,6 +213,11 @@ begin
           where purchase_id = v_purchase_id and item_value <> quantity * unit_value
         ) = 0 then 'PASS' else 'FAIL' end, null);
 
+    insert into zz_test_results(section, test_name, status, details)
+      values ('1', '1.14 purchase_channel do cabeçalho é gravado como o valor informado (MERCADO_LIVRE)',
+        case when v_purchase.purchase_channel = 'MERCADO_LIVRE' then 'PASS' else 'FAIL' end,
+        'purchase_channel=' || coalesce(v_purchase.purchase_channel, 'null'));
+
     insert into zz_fixtures(key, value) values ('success_purchase_id', v_purchase_id::text)
       on conflict (key) do update set value = excluded.value;
   exception when others then
@@ -240,7 +252,8 @@ begin
       p_freight_value => -1, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
         'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
-      ))
+      )),
+      p_purchase_channel => 'MERCADO_LIVRE'
     );
     insert into zz_test_results(section, test_name, status, details) values ('2', '2.1 frete negativo rejeitado', 'FAIL', 'não levantou exceção');
   exception when others then
@@ -250,7 +263,10 @@ begin
 
   select count(*) into v_purchase_count_before from public.inventory_purchases;
   begin
-    perform public.register_filament_purchase(p_freight_value => 0, p_changed_by => v_user_id, p_items => '[]'::jsonb);
+    perform public.register_filament_purchase(
+      p_freight_value => 0, p_changed_by => v_user_id, p_items => '[]'::jsonb,
+      p_purchase_channel => 'MERCADO_LIVRE'
+    );
     insert into zz_test_results(section, test_name, status, details) values ('2', '2.2 lista de itens vazia rejeitada', 'FAIL', 'não levantou exceção');
   exception when others then
     insert into zz_test_results(section, test_name, status, details) values ('2', '2.2 lista de itens vazia rejeitada',
@@ -263,7 +279,8 @@ begin
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
         'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
-      ))
+      )),
+      p_purchase_channel => 'MERCADO_LIVRE'
     );
     insert into zz_test_results(section, test_name, status, details) values ('2', '2.3 item sem filament_type_id rejeitado', 'FAIL', 'não levantou exceção');
   exception when others then
@@ -277,7 +294,8 @@ begin
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
         'filament_type_id', v_type_a_id, 'manufacturer', '   ', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
-      ))
+      )),
+      p_purchase_channel => 'MERCADO_LIVRE'
     );
     insert into zz_test_results(section, test_name, status, details) values ('2', '2.4 item com marca vazia rejeitado', 'FAIL', 'não levantou exceção');
   exception when others then
@@ -291,7 +309,8 @@ begin
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
         'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 0, 'quantity', 1, 'unit_value', 10
-      ))
+      )),
+      p_purchase_channel => 'MERCADO_LIVRE'
     );
     insert into zz_test_results(section, test_name, status, details) values ('2', '2.5 item com peso líquido zero/negativo rejeitado', 'FAIL', 'não levantou exceção');
   exception when others then
@@ -305,7 +324,8 @@ begin
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
         'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 0, 'unit_value', 10
-      ))
+      )),
+      p_purchase_channel => 'MERCADO_LIVRE'
     );
     insert into zz_test_results(section, test_name, status, details) values ('2', '2.6 item com quantidade zero/negativa rejeitado', 'FAIL', 'não levantou exceção');
   exception when others then
@@ -319,7 +339,8 @@ begin
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
         'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', -1
-      ))
+      )),
+      p_purchase_channel => 'MERCADO_LIVRE'
     );
     insert into zz_test_results(section, test_name, status, details) values ('2', '2.7 item com valor unitário negativo rejeitado', 'FAIL', 'não levantou exceção');
   exception when others then
@@ -338,7 +359,8 @@ begin
       p_items => jsonb_build_array(
         jsonb_build_object('filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10),
         jsonb_build_object('filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', -1, 'unit_value', 10)
-      )
+      ),
+      p_purchase_channel => 'MERCADO_LIVRE'
     );
     insert into zz_test_results(section, test_name, status, details)
       values ('2', '2.8 um item inválido no meio da lista rejeita a compra inteira (nada do 1º item fica órfão)', 'FAIL', 'não levantou exceção');
@@ -372,7 +394,8 @@ begin
       p_items => jsonb_build_array(jsonb_build_object(
         'filament_type_id', gen_random_uuid(), 'manufacturer', 'X',
         'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
-      ))
+      )),
+      p_purchase_channel => 'MERCADO_LIVRE'
     );
     insert into zz_test_results(section, test_name, status, details)
       values ('3', '3.1 filament_type_id inexistente rejeitado', 'FAIL', 'não levantou exceção');
@@ -390,7 +413,8 @@ begin
       p_items => jsonb_build_array(jsonb_build_object(
         'filament_type_id', v_type_inactive_id, 'manufacturer', 'X',
         'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
-      ))
+      )),
+      p_purchase_channel => 'MERCADO_LIVRE'
     );
     insert into zz_test_results(section, test_name, status, details)
       values ('3', '3.2 filament_type_id inativo rejeitado, nunca reativado em silêncio', 'FAIL', 'não levantou exceção');
@@ -429,13 +453,13 @@ begin
   begin
     v_result_1 := public.register_filament_purchase(
       p_freight_value => 5, p_changed_by => v_user_id, p_items => v_items,
-      p_idempotency_key => 'teste-compra-multi-idempotencia'
+      p_idempotency_key => 'teste-compra-multi-idempotencia', p_purchase_channel => 'ALIEXPRESS'
     );
     select count(*) into v_purchase_count_before from public.inventory_purchases;
 
     v_result_2 := public.register_filament_purchase(
       p_freight_value => 5, p_changed_by => v_user_id, p_items => v_items,
-      p_idempotency_key => 'teste-compra-multi-idempotencia'
+      p_idempotency_key => 'teste-compra-multi-idempotencia', p_purchase_channel => 'ALIEXPRESS'
     );
     select count(*) into v_purchase_count_after from public.inventory_purchases;
 
@@ -453,7 +477,7 @@ begin
   begin
     perform public.register_filament_purchase(
       p_freight_value => 999, p_changed_by => v_user_id, p_items => v_items,
-      p_idempotency_key => 'teste-compra-multi-idempotencia'
+      p_idempotency_key => 'teste-compra-multi-idempotencia', p_purchase_channel => 'ALIEXPRESS'
     );
     insert into zz_test_results(section, test_name, status, details)
       values ('4', '4.2 mesma chave + payload diferente rejeitado (IDEMPOTENCY_KEY_CONFLICT)', 'FAIL', 'não levantou exceção');
@@ -512,7 +536,7 @@ begin
         jsonb_build_object('filament_type_id', v_type_a_id, 'manufacturer', 'TESTE MULTI ATOM A', 'nominal_weight_grams', 777, 'quantity', 1, 'unit_value', 10),
         jsonb_build_object('filament_type_id', v_type_b_id, 'manufacturer', 'TESTE MULTI ATOM B', 'nominal_weight_grams', 777, 'quantity', 1, 'unit_value', 10)
       ),
-      p_idempotency_key => 'teste-compra-multi-atomicidade'
+      p_idempotency_key => 'teste-compra-multi-atomicidade', p_purchase_channel => 'SHOPEE'
     );
 
     insert into zz_test_results(section, test_name, status, details)
@@ -609,6 +633,102 @@ begin
   exception when others then
     insert into zz_test_results(section, test_name, status, details)
       values ('7', '7.x checagens estruturais/privilégio', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- =============================================================================
+-- SEÇÃO 8 — purchase_channel (Local da compra, migration 20260904140000):
+-- obrigatório, fechado aos 4 valores, persistido, e comparado pela
+-- idempotência.
+-- =============================================================================
+
+do $$
+declare
+  v_user_id uuid;
+  v_type_a_id uuid;
+  v_purchase_count_before integer;
+  v_channel text;
+  v_result jsonb;
+  v_purchase_id uuid;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_type_a_id from zz_fixtures where key = 'type_a_id';
+
+  -- 8.1: purchase_channel ausente (null) é rejeitado, nada é criado.
+  select count(*) into v_purchase_count_before from public.inventory_purchases;
+  begin
+    perform public.register_filament_purchase(
+      p_freight_value => 0, p_changed_by => v_user_id,
+      p_items => jsonb_build_array(jsonb_build_object(
+        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
+      ))
+    );
+    insert into zz_test_results(section, test_name, status, details) values ('8', '8.1 purchase_channel ausente rejeitado', 'FAIL', 'não levantou exceção');
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details) values ('8', '8.1 purchase_channel ausente rejeitado',
+      case when sqlerrm like '%purchase_channel é obrigatório%'
+        and (select count(*) from public.inventory_purchases) = v_purchase_count_before
+      then 'PASS' else 'FAIL' end, sqlerrm);
+  end;
+
+  -- 8.2: purchase_channel com valor fora dos 4 aceitos é rejeitado.
+  select count(*) into v_purchase_count_before from public.inventory_purchases;
+  begin
+    perform public.register_filament_purchase(
+      p_freight_value => 0, p_changed_by => v_user_id,
+      p_items => jsonb_build_array(jsonb_build_object(
+        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
+      )),
+      p_purchase_channel => 'AMAZON'
+    );
+    insert into zz_test_results(section, test_name, status, details) values ('8', '8.2 purchase_channel inválido (fora dos 4 valores) rejeitado', 'FAIL', 'não levantou exceção');
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details) values ('8', '8.2 purchase_channel inválido (fora dos 4 valores) rejeitado',
+      case when sqlerrm like '%purchase_channel é obrigatório%'
+        and (select count(*) from public.inventory_purchases) = v_purchase_count_before
+      then 'PASS' else 'FAIL' end, sqlerrm);
+  end;
+
+  -- 8.3: os 4 valores oficiais são aceitos e persistidos corretamente, cada
+  -- um numa compra própria (idempotency_key distinta por valor).
+  foreach v_channel in array array['MERCADO_LIVRE', 'ALIEXPRESS', 'SHOPEE', 'PRESENCIAL']
+  loop
+    begin
+      v_result := public.register_filament_purchase(
+        p_freight_value => 0, p_changed_by => v_user_id,
+        p_items => jsonb_build_array(jsonb_build_object(
+          'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
+        )),
+        p_idempotency_key => 'teste-compra-multi-canal-' || v_channel,
+        p_purchase_channel => v_channel
+      );
+      v_purchase_id := (v_result ->> 'purchase_id')::uuid;
+      insert into zz_test_results(section, test_name, status, details)
+        values ('8', '8.3 purchase_channel=' || v_channel || ' aceito e persistido', case when (
+          select purchase_channel from public.inventory_purchases where id = v_purchase_id
+        ) = v_channel then 'PASS' else 'FAIL' end, null);
+    exception when others then
+      insert into zz_test_results(section, test_name, status, details)
+        values ('8', '8.3 purchase_channel=' || v_channel || ' aceito e persistido', 'FAIL', sqlerrm);
+    end;
+  end loop;
+
+  -- 8.4: idempotência também compara purchase_channel — mesma chave, mesmo
+  -- payload de itens/frete, mas canal DIFERENTE -> IDEMPOTENCY_KEY_CONFLICT:.
+  begin
+    perform public.register_filament_purchase(
+      p_freight_value => 0, p_changed_by => v_user_id,
+      p_items => jsonb_build_array(jsonb_build_object(
+        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
+      )),
+      p_idempotency_key => 'teste-compra-multi-canal-MERCADO_LIVRE', p_purchase_channel => 'SHOPEE'
+    );
+    insert into zz_test_results(section, test_name, status, details)
+      values ('8', '8.4 idempotência rejeita quando só o purchase_channel muda (mesma chave)', 'FAIL', 'não levantou exceção');
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('8', '8.4 idempotência rejeita quando só o purchase_channel muda (mesma chave)',
+        case when sqlerrm like 'IDEMPOTENCY_KEY_CONFLICT:%' then 'PASS' else 'FAIL' end, sqlerrm);
   end;
 end $$;
 

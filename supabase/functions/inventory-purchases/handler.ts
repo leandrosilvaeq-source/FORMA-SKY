@@ -33,7 +33,10 @@
 // commercial_color — caminho legado de find-or-create por nome, preservado
 // para compatibilidade, nunca os dois juntos — além de peso nominal/pesos
 // brutos, sempre exigidos) na rota base; para a rota /filament, freight_value
-// + uma lista não vazia de itens (filament_type_id/manufacturer/
+// + purchase_channel (2026-09-04, migration
+// 20260904140000_add_purchase_channel_to_filament_purchases.sql — local/canal
+// da compra, obrigatório, um de MERCADO_LIVRE/ALIEXPRESS/SHOPEE/PRESENCIAL) +
+// uma lista não vazia de itens (filament_type_id/manufacturer/
 // nominal_weight_grams/quantity/unit_value cada) — tudo que não depende de
 // ler o banco. Regras que dependem do banco (item realmente existe e está
 // ativo, tipo de filamento existe/está ativo, tipo inativo correspondente,
@@ -330,17 +333,28 @@ async function handleRegisterInventoryPurchase(req: Request): Promise<Response> 
 // ---------------------------------------------------------------------------
 // POST /inventory-purchases/filament -> register_filament_purchase
 //   (p_freight_value, p_changed_by, p_items, p_occurred_at, p_notes,
-//   p_idempotency_key) — compra de filamento com UM OU MAIS itens
-//   (2026-09-04). Cada item exige filament_type_id (tipo já cadastrado e
-//   ATIVO — nunca cria nem localiza por nome), manufacturer (marca da
-//   compra, distinta do fabricante interno do tipo), nominal_weight_grams,
-//   quantity e unit_value. Sem peso bruto individual por rolo nesta rota
-//   (requisito explícito da janela nova) — cada rolo nasce sem
-//   empty_spool_weight_grams/initial_gross_weight_grams, exatamente como um
-//   rolo criado manualmente.
+//   p_idempotency_key, p_purchase_channel) — compra de filamento com UM OU
+//   MAIS itens (2026-09-04). Cada item exige filament_type_id (tipo já
+//   cadastrado e ATIVO — nunca cria nem localiza por nome), manufacturer
+//   (marca da compra, distinta do fabricante interno do tipo),
+//   nominal_weight_grams, quantity e unit_value. Sem peso bruto individual
+//   por rolo nesta rota (requisito explícito da janela nova) — cada rolo
+//   nasce sem empty_spool_weight_grams/initial_gross_weight_grams,
+//   exatamente como um rolo criado manualmente. purchase_channel (2026-09-04,
+//   migration 20260904140000_add_purchase_channel_to_filament_purchases.sql)
+//   é o local/canal da compra — obrigatório, fechado aos 4 valores oficiais.
 // ---------------------------------------------------------------------------
 
-const FILAMENT_PURCHASE_KEYS = ["freight_value", "occurred_at", "notes", "idempotency_key", "items"] as const;
+const PURCHASE_CHANNELS = ["MERCADO_LIVRE", "ALIEXPRESS", "SHOPEE", "PRESENCIAL"] as const;
+
+const FILAMENT_PURCHASE_KEYS = [
+  "freight_value",
+  "occurred_at",
+  "notes",
+  "idempotency_key",
+  "items",
+  "purchase_channel",
+] as const;
 
 const FILAMENT_PURCHASE_ITEM_KEYS = [
   "filament_type_id",
@@ -349,6 +363,13 @@ const FILAMENT_PURCHASE_ITEM_KEYS = [
   "quantity",
   "unit_value",
 ] as const;
+
+export function requirePurchaseChannel(value: unknown): (typeof PURCHASE_CHANNELS)[number] {
+  if (typeof value !== "string" || !(PURCHASE_CHANNELS as readonly string[]).includes(value)) {
+    throw new ValidationError(`Campo inválido: purchase_channel deve ser um de: ${PURCHASE_CHANNELS.join(", ")}.`);
+  }
+  return value as (typeof PURCHASE_CHANNELS)[number];
+}
 
 export interface FilamentPurchaseItemParams {
   filament_type_id: string;
@@ -386,6 +407,7 @@ export function validateRegisterFilamentPurchasePayload(body: Record<string, unk
   const occurredAt = optionalTimestamp(body.occurred_at, "occurred_at");
   const notes = optionalNonEmptyString(body.notes, "notes");
   const idempotencyKey = optionalNonEmptyString(body.idempotency_key, "idempotency_key");
+  const purchaseChannel = requirePurchaseChannel(body.purchase_channel);
 
   if (!Array.isArray(body.items) || body.items.length === 0) {
     throw new ValidationError("Campo inválido: items deve ser uma lista com ao menos um item de compra.");
@@ -399,6 +421,7 @@ export function validateRegisterFilamentPurchasePayload(body: Record<string, unk
     p_notes: notes,
     p_idempotency_key: idempotencyKey,
     p_items: items,
+    p_purchase_channel: purchaseChannel,
   };
 }
 

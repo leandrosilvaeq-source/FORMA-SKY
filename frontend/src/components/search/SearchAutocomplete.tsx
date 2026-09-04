@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react'
 import { SearchIcon, XIcon } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
@@ -30,6 +37,13 @@ export interface SearchAutocompleteProps {
   listboxAriaLabel: string
   noResultsText: string
   className?: string
+  // Opcional (2026-09-04, "Compra de filamentos" compacta): foca o campo ao
+  // montar — usado só quando uma nova linha é adicionada dinamicamente a uma
+  // lista (ex.: PurchaseDialog.tsx, "Adicionar filamento"), nunca no
+  // carregamento inicial. Repassado direto ao <input> nativo (mesmo
+  // comportamento padrão do atributo HTML autoFocus); nenhum chamador
+  // existente passa este prop, então nenhum comportamento anterior muda.
+  autoFocus?: boolean
 }
 
 // Destaca o trecho correspondente ao termo buscado, reaproveitando
@@ -50,7 +64,9 @@ function highlightMatch(label: string, normalizedTerm: string): ReactNode {
   return (
     <>
       {label.slice(0, matchStart)}
-      <strong className="text-brand-primary-dark font-semibold">{label.slice(matchStart, matchEnd)}</strong>
+      <strong className="text-brand-primary-dark font-semibold">
+        {label.slice(matchStart, matchEnd)}
+      </strong>
       {label.slice(matchEnd)}
     </>
   )
@@ -76,6 +92,7 @@ export function SearchAutocomplete({
   listboxAriaLabel,
   noResultsText,
   className,
+  autoFocus,
 }: SearchAutocompleteProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
@@ -145,14 +162,18 @@ export function SearchAutocomplete({
         return
       }
       if (suggestions.length === 0) return
-      setActiveIndex((current) => (current === null ? 0 : Math.min(current + 1, suggestions.length - 1)))
+      setActiveIndex((current) =>
+        current === null ? 0 : Math.min(current + 1, suggestions.length - 1),
+      )
       return
     }
 
     if (event.key === 'ArrowUp') {
       event.preventDefault()
       if (!showSuggestions || suggestions.length === 0) return
-      setActiveIndex((current) => (current === null ? suggestions.length - 1 : Math.max(current - 1, 0)))
+      setActiveIndex((current) =>
+        current === null ? suggestions.length - 1 : Math.max(current - 1, 0),
+      )
       return
     }
 
@@ -198,7 +219,8 @@ export function SearchAutocomplete({
         placeholder={placeholder}
         aria-label={ariaLabel}
         autoComplete="off"
-        className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 pl-8 pr-8"
+        autoFocus={autoFocus}
+        className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 pr-8 pl-8"
       />
       {value && (
         <button
@@ -240,7 +262,9 @@ export function SearchAutocomplete({
                 onClick={() => selectSuggestion(suggestion.label)}
                 className={cn(
                   'flex cursor-default items-center gap-1.5 rounded-md px-2 py-1.5 text-sm select-none',
-                  index === activeIndex ? 'bg-brand-primary-soft text-brand-primary-dark' : 'text-foreground',
+                  index === activeIndex
+                    ? 'bg-brand-primary-soft text-brand-primary-dark'
+                    : 'text-foreground',
                 )}
               >
                 {suggestion.description && (
@@ -255,7 +279,9 @@ export function SearchAutocomplete({
                     {suggestion.description}
                   </span>
                 )}
-                <span className="min-w-0 truncate">{highlightMatch(suggestion.label, normalizedValue)}</span>
+                <span className="min-w-0 truncate">
+                  {highlightMatch(suggestion.label, normalizedValue)}
+                </span>
               </li>
             ))
           )}

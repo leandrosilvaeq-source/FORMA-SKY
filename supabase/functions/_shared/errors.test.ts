@@ -459,6 +459,33 @@ Deno.test("mapPgError mantém 'filament_types.id % não encontrado ou inativo' (
   assertEquals(err.status, 404);
 });
 
+Deno.test("mapPgError mapeia 'purchase_channel é obrigatório' (register_filament_purchase) para ValidationError (400)", () => {
+  const err = mapPgError({
+    code: "P0001",
+    message:
+      "register_filament_purchase: purchase_channel é obrigatório e deve ser um de MERCADO_LIVRE, ALIEXPRESS, SHOPEE ou PRESENCIAL (recebido null)",
+  });
+  if (!(err instanceof ValidationError)) {
+    throw new Error(`esperado ValidationError, obtido ${err.constructor.name}`);
+  }
+  assertEquals(err.status, 400);
+});
+
+Deno.test("mapPgError não confunde 'purchase_channel' com 'item ' (register_filament_purchase) — regressão cruzada", () => {
+  const channelMsg = mapPgError({
+    code: "P0001",
+    message: "register_filament_purchase: purchase_channel é obrigatório e deve ser um de MERCADO_LIVRE, ALIEXPRESS, SHOPEE ou PRESENCIAL (recebido AMAZON)",
+  });
+  const itemMsg = mapPgError({
+    code: "P0001",
+    message: "register_filament_purchase: item 1 — manufacturer (marca) não pode ser vazio",
+  });
+  assertEquals(channelMsg instanceof ValidationError, true);
+  assertEquals(itemMsg instanceof ValidationError, true);
+  assertEquals(channelMsg.message.includes("purchase_channel"), true);
+  assertEquals(itemMsg.message.includes("item 1"), true);
+});
+
 Deno.test("mapPgError não confunde as mensagens de register_filament_purchase com as de register_inventory_purchase — regressão cruzada", () => {
   const single = mapPgError({
     code: "P0001",

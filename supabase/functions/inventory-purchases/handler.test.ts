@@ -15,6 +15,8 @@
 //   - 2026-09-04 (compra de filamento com múltiplos itens):
 //     validateFilamentPurchaseItem/validateRegisterFilamentPurchasePayload
 //     (rota POST /inventory-purchases/filament, register_filament_purchase);
+//   - 2026-09-04, mesma rodada (Local da compra): requirePurchaseChannel
+//     (purchase_channel, obrigatório, 4 valores oficiais);
 //   - handleRequest: preflight CORS, 401 sem Authorization, 404 rota
 //     desconhecida, 405 método não permitido, resposta de erro sem
 //     detalhes internos — nas duas rotas (base e /filament).
@@ -49,6 +51,7 @@ import {
   requireGrossWeightsGrams,
   requirePositiveIntegerQuantity,
   requirePurchaseCategory,
+  requirePurchaseChannel,
   requireTrimmedString,
   requireUuid,
   validateFilamentPurchaseItem,
@@ -527,13 +530,17 @@ Deno.test("validateFilamentPurchaseItem rejeita valor que não é objeto", () =>
 });
 
 Deno.test("validateRegisterFilamentPurchasePayload aceita um payload mínimo válido com 1 item, freight_value=0 quando omitido", () => {
-  const result = validateRegisterFilamentPurchasePayload({ items: [VALID_ITEM] });
+  const result = validateRegisterFilamentPurchasePayload({
+    items: [VALID_ITEM],
+    purchase_channel: "MERCADO_LIVRE",
+  });
   assertEquals(result, {
     p_freight_value: 0,
     p_occurred_at: null,
     p_notes: null,
     p_idempotency_key: null,
     p_items: [VALID_ITEM],
+    p_purchase_channel: "MERCADO_LIVRE",
   });
 });
 
@@ -548,44 +555,96 @@ Deno.test("validateRegisterFilamentPurchasePayload aceita vários itens (tipos/m
   const result = validateRegisterFilamentPurchasePayload({
     freight_value: 30,
     items: [VALID_ITEM, secondItem],
+    purchase_channel: "ALIEXPRESS",
   });
   assertEquals(result.p_freight_value, 30);
   assertEquals(result.p_items, [VALID_ITEM, secondItem]);
+  assertEquals(result.p_purchase_channel, "ALIEXPRESS");
 });
 
 Deno.test("validateRegisterFilamentPurchasePayload rejeita freight_value negativo", () => {
-  assertThrows(() => validateRegisterFilamentPurchasePayload({ freight_value: -1, items: [VALID_ITEM] }));
+  assertThrows(() =>
+    validateRegisterFilamentPurchasePayload({
+      freight_value: -1,
+      items: [VALID_ITEM],
+      purchase_channel: "MERCADO_LIVRE",
+    }),
+  );
 });
 
 Deno.test("validateRegisterFilamentPurchasePayload rejeita items ausente/vazio/não-array", () => {
-  assertThrows(() => validateRegisterFilamentPurchasePayload({}));
-  assertThrows(() => validateRegisterFilamentPurchasePayload({ items: [] }));
-  assertThrows(() => validateRegisterFilamentPurchasePayload({ items: "not-an-array" }));
+  assertThrows(() => validateRegisterFilamentPurchasePayload({ purchase_channel: "MERCADO_LIVRE" }));
+  assertThrows(() =>
+    validateRegisterFilamentPurchasePayload({ items: [], purchase_channel: "MERCADO_LIVRE" }),
+  );
+  assertThrows(() =>
+    validateRegisterFilamentPurchasePayload({ items: "not-an-array", purchase_channel: "MERCADO_LIVRE" }),
+  );
 });
 
 Deno.test("validateRegisterFilamentPurchasePayload rejeita um item inválido dentro da lista (propaga o erro do item)", () => {
   assertThrows(() =>
-    validateRegisterFilamentPurchasePayload({ items: [VALID_ITEM, { ...VALID_ITEM, quantity: 0 }] }),
+    validateRegisterFilamentPurchasePayload({
+      items: [VALID_ITEM, { ...VALID_ITEM, quantity: 0 }],
+      purchase_channel: "MERCADO_LIVRE",
+    }),
   );
 });
 
 Deno.test("validateRegisterFilamentPurchasePayload rejeita campo desconhecido no corpo (ex.: os campos de item único da rota base)", () => {
   assertThrows(() =>
-    validateRegisterFilamentPurchasePayload({ items: [VALID_ITEM], category: "FILAMENT" }),
+    validateRegisterFilamentPurchasePayload({
+      items: [VALID_ITEM],
+      purchase_channel: "MERCADO_LIVRE",
+      category: "FILAMENT",
+    }),
   );
   assertThrows(() =>
-    validateRegisterFilamentPurchasePayload({ items: [VALID_ITEM], quantity: 1 }),
+    validateRegisterFilamentPurchasePayload({
+      items: [VALID_ITEM],
+      purchase_channel: "MERCADO_LIVRE",
+      quantity: 1,
+    }),
   );
 });
 
 Deno.test("validateRegisterFilamentPurchasePayload preserva idempotency_key e notes trimados", () => {
   const result = validateRegisterFilamentPurchasePayload({
     items: [VALID_ITEM],
+    purchase_channel: "SHOPEE",
     notes: "  compra com 2 marcas  ",
     idempotency_key: "11111111-1111-1111-1111-111111111111",
   });
   assertEquals(result.p_notes, "compra com 2 marcas");
   assertEquals(result.p_idempotency_key, "11111111-1111-1111-1111-111111111111");
+});
+
+// ---------------------------------------------------------------------------
+// requirePurchaseChannel / purchase_channel (2026-09-04, "Local da compra" —
+// migration 20260904140000_add_purchase_channel_to_filament_purchases.sql)
+// ---------------------------------------------------------------------------
+
+Deno.test("requirePurchaseChannel aceita os 4 valores oficiais", () => {
+  assertEquals(requirePurchaseChannel("MERCADO_LIVRE"), "MERCADO_LIVRE");
+  assertEquals(requirePurchaseChannel("ALIEXPRESS"), "ALIEXPRESS");
+  assertEquals(requirePurchaseChannel("SHOPEE"), "SHOPEE");
+  assertEquals(requirePurchaseChannel("PRESENCIAL"), "PRESENCIAL");
+});
+
+Deno.test("requirePurchaseChannel rejeita valor ausente/desconhecido", () => {
+  assertThrows(() => requirePurchaseChannel(undefined), (err) => {
+    if (!isValidationError(err)) throw new Error("esperado ValidationError");
+  });
+  assertThrows(() => requirePurchaseChannel(null));
+  assertThrows(() => requirePurchaseChannel("AMAZON"));
+  assertThrows(() => requirePurchaseChannel(""));
+});
+
+Deno.test("validateRegisterFilamentPurchasePayload rejeita purchase_channel ausente/inválido", () => {
+  assertThrows(() => validateRegisterFilamentPurchasePayload({ items: [VALID_ITEM] }));
+  assertThrows(() =>
+    validateRegisterFilamentPurchasePayload({ items: [VALID_ITEM], purchase_channel: "AMAZON" }),
+  );
 });
 
 Deno.test("rejectUnknownKeys aceita só chaves permitidas", () => {

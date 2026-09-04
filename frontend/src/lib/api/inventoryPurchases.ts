@@ -3,10 +3,11 @@
 // register_filament_purchase (FILAMENT, rota /filament — ver abaixo)
 // (supabase/migrations/20260828121000_create_register_inventory_purchase_function.sql,
 // 20260904120000_add_filament_type_id_to_purchase.sql,
-// 20260904130000_support_multi_item_filament_purchases.sql). Sem leitura
-// própria nesta rodada — nenhuma tela de histórico de compras ainda; a
-// listagem de destino (Filamentos/Acessórios/Embalagens) é atualizada via o
-// refetch de cada área depois de uma compra concluída.
+// 20260904130000_support_multi_item_filament_purchases.sql,
+// 20260904140000_add_purchase_channel_to_filament_purchases.sql). Sem
+// leitura própria nesta rodada — nenhuma tela de histórico de compras ainda;
+// a listagem de destino (Filamentos/Acessórios/Embalagens) é atualizada via
+// o refetch de cada área depois de uma compra concluída.
 
 import { callEdgeFunction } from './edgeFunctionClient'
 import type { InventoryPurchase, InventoryPurchaseCategory } from '@/types/domain'
@@ -39,6 +40,13 @@ export async function registerInventoryPurchase(
   return callEdgeFunction<InventoryPurchase>('inventory-purchases', '', 'POST', input)
 }
 
+// Local/canal onde a compra foi feita (2026-09-04, "Local da compra" — janela
+// compacta) — obrigatório, fechado aos 4 valores oficiais (validado de novo
+// no backend, register_filament_purchase, migration
+// 20260904140000_add_purchase_channel_to_filament_purchases.sql). Gravado no
+// cabeçalho (inventory_purchases.purchase_channel), nunca em notes.
+export type PurchaseChannel = 'MERCADO_LIVRE' | 'ALIEXPRESS' | 'SHOPEE' | 'PRESENCIAL'
+
 // Compra de filamento com UM OU MAIS itens na mesma compra (2026-09-04,
 // janela "Compra de filamentos" reestruturada) — cada item escolhe um
 // filament_type_id já cadastrado em Estoque -> Filamentos (nunca cria nem
@@ -62,6 +70,11 @@ export interface RegisterFilamentPurchaseInput {
   notes?: string | null
   idempotency_key?: string
   items: RegisterFilamentPurchaseItemInput[]
+  // Obrigatório (2026-09-04) — a interface sempre envia um dos 4 valores;
+  // opcional aqui só para não travar um chamador direto de API que informe
+  // occurred_at/notes sem ainda ter migrado para a janela nova (o backend
+  // rejeita null/ausente de qualquer forma).
+  purchase_channel: PurchaseChannel
 }
 
 export interface FilamentPurchaseResultItem {
@@ -87,6 +100,7 @@ export interface FilamentPurchaseResult {
   purchase_id: string
   occurred_at: string
   notes: string | null
+  purchase_channel: PurchaseChannel | null
   freight_value: number
   subtotal_value: number
   total_value: number
