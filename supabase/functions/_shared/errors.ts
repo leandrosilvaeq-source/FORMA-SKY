@@ -305,6 +305,21 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
     "FILAMENT_TYPE_INACTIVE_MATCH:",
     (message) => new BusinessRuleError(message.replace(/^FILAMENT_TYPE_INACTIVE_MATCH:\s*/, "")),
   ],
+  // register_filament_purchase (migration 20260904130000, compra de
+  // filamento com múltiplos itens) — mesmo critério das entradas acima:
+  // mensagens de defesa em profundidade (a Edge Function `inventory-purchases`,
+  // rota /filament, já valida tudo isso antes de chamar a RPC) mapeadas para
+  // 400. Um único padrão ("register_filament_purchase: item ") cobre todas
+  // as 5 mensagens de validação por item (filament_type_id/manufacturer/
+  // nominal_weight_grams/quantity/unit_value) — todas começam com o mesmo
+  // prefixo. "filament_types.id % não encontrado ou inativo" (tipo
+  // inexistente/inativo dentro de um item) reaproveita a mensagem já
+  // existente de set_product_filaments/register_inventory_purchase — casa
+  // com o padrão genérico "não encontrado" já catalogado acima, sem precisar
+  // de entrada própria.
+  ["register_filament_purchase: p_freight_value não pode ser negativo", (message) => new ValidationError(message)],
+  ["register_filament_purchase: informe ao menos um item", (message) => new ValidationError(message)],
+  ["register_filament_purchase: item ", (message) => new ValidationError(message)],
   // Ajustes de Produtos/Clientes/Pedidos (2026-08-29) — migrations
   // 20260829140000/141000/142000/143000.
   //

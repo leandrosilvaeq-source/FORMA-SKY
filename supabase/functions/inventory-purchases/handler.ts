@@ -2,31 +2,44 @@
 // efeito colateral de módulo (nenhum Deno.serve aqui), mesmo padrão de
 // stock-movements/handler.ts e filament-spools/handler.ts.
 //
-// Rota:
-//   POST /inventory-purchases -> RPC register_inventory_purchase
+// Rotas:
+//   POST /inventory-purchases          -> RPC register_inventory_purchase
+//     (ACCESSORY/PACKAGING; FILAMENT de item único, preservado para
+//     compatibilidade — a interface não usa mais este caminho para
+//     Filamento, ver rota abaixo)
+//   POST /inventory-purchases/filament -> RPC register_filament_purchase
+//     (2026-09-04 — compra de filamento com UM OU MAIS itens/tipos/marcas
+//     na mesma compra, migration
+//     20260904130000_support_multi_item_filament_purchases.sql; único
+//     caminho usado pela janela "Compra de filamentos" a partir desta
+//     rodada)
 //
-// register_inventory_purchase é security definer com EXECUTE concedido só a
-// service_role (supabase/migrations/20260828121000_create_register_inventory_purchase_function.sql)
-// — só alcançável a partir desta Edge Function, nunca diretamente do
-// frontend. Nenhuma escrita direta em inventory_purchases, filament_types,
-// filament_spools, filament_movements, stock_movements ou nos saldos
-// materializados (accessories/packaging.current_stock,
+// As duas RPCs são security definer com EXECUTE concedido só a service_role
+// (supabase/migrations/20260828121000_create_register_inventory_purchase_function.sql,
+// 20260904130000_support_multi_item_filament_purchases.sql) — só
+// alcançáveis a partir desta Edge Function, nunca diretamente do frontend.
+// Nenhuma escrita direta em inventory_purchases,
+// inventory_purchase_filament_items, filament_types, filament_spools,
+// filament_movements, stock_movements ou nos saldos materializados
+// (accessories/packaging.current_stock,
 // filament_spools.current_net_weight_grams) acontece nesta Edge Function —
-// a RPC é a única forma de escrita, numa única transação.
+// a RPC é sempre a única forma de escrita, numa única transação.
 //
 // Validação estrutural (payload) vive aqui: category dentro do enum
 // conhecido, quantity como inteiro positivo, item_value/freight_value como
 // número não-negativo, e os campos específicos de cada categoria (item_id
-// para ACCESSORY/PACKAGING; para FILAMENT, OU filament_type_id — caminho
-// novo, 2026-09-04, tipo já cadastrado escolhido na interface — OU
-// material/manufacturer/line/commercial_color — caminho legado de find-or-
-// create por nome, preservado para compatibilidade, nunca os dois juntos —
-// além de peso nominal/pesos brutos, sempre exigidos) — tudo que não
-// depende de ler o banco. Regras que dependem do banco (item realmente
-// existe e está ativo, tipo de filamento existe/está ativo, tipo inativo
-// correspondente, idempotency_key já usada) continuam exclusivas da RPC,
-// mesmo critério já usado em accessories/handler.ts,
-// stock-movements/handler.ts e filament-spools/handler.ts.
+// para ACCESSORY/PACKAGING; para FILAMENT de item único, OU filament_type_id
+// — caminho por tipo já cadastrado — OU material/manufacturer/line/
+// commercial_color — caminho legado de find-or-create por nome, preservado
+// para compatibilidade, nunca os dois juntos — além de peso nominal/pesos
+// brutos, sempre exigidos) na rota base; para a rota /filament, freight_value
+// + uma lista não vazia de itens (filament_type_id/manufacturer/
+// nominal_weight_grams/quantity/unit_value cada) — tudo que não depende de
+// ler o banco. Regras que dependem do banco (item realmente existe e está
+// ativo, tipo de filamento existe/está ativo, tipo inativo correspondente,
+// idempotency_key já usada) continuam exclusivas da RPC, mesmo critério já
+// usado em accessories/handler.ts, stock-movements/handler.ts e
+// filament-spools/handler.ts.
 
 import { handlePreflight } from "../_shared/cors.ts";
 import { jsonResponse, errorResponse } from "../_shared/http.ts";
@@ -83,6 +96,15 @@ export async function handleRequest(req: Request): Promise<Response> {
     if (route.length === 0) {
       if (req.method === "POST") return await handleRegisterInventoryPurchase(req);
       throw new AppError("validation", 405, `Método ${req.method} não permitido em /inventory-purchases.`);
+    }
+
+    if (route.length === 1 && route[0] === "filament") {
+      if (req.method === "POST") return await handleRegisterFilamentPurchase(req);
+      throw new AppError(
+        "validation",
+        405,
+        `Método ${req.method} não permitido em /inventory-purchases/filament.`,
+      );
     }
 
     throw new NotFoundError("Rota não encontrada.");
@@ -296,6 +318,100 @@ async function handleRegisterInventoryPurchase(req: Request): Promise<Response> 
 
   const admin = getAdminClient();
   const { data, error } = await admin.rpc("register_inventory_purchase", {
+    ...params,
+    p_changed_by: operator.userId,
+  });
+
+  if (error) throw mapPgError(error);
+
+  return jsonResponse(req, data, 201);
+}
+
+// ---------------------------------------------------------------------------
+// POST /inventory-purchases/filament -> register_filament_purchase
+//   (p_freight_value, p_changed_by, p_items, p_occurred_at, p_notes,
+//   p_idempotency_key) — compra de filamento com UM OU MAIS itens
+//   (2026-09-04). Cada item exige filament_type_id (tipo já cadastrado e
+//   ATIVO — nunca cria nem localiza por nome), manufacturer (marca da
+//   compra, distinta do fabricante interno do tipo), nominal_weight_grams,
+//   quantity e unit_value. Sem peso bruto individual por rolo nesta rota
+//   (requisito explícito da janela nova) — cada rolo nasce sem
+//   empty_spool_weight_grams/initial_gross_weight_grams, exatamente como um
+//   rolo criado manualmente.
+// ---------------------------------------------------------------------------
+
+const FILAMENT_PURCHASE_KEYS = ["freight_value", "occurred_at", "notes", "idempotency_key", "items"] as const;
+
+const FILAMENT_PURCHASE_ITEM_KEYS = [
+  "filament_type_id",
+  "manufacturer",
+  "nominal_weight_grams",
+  "quantity",
+  "unit_value",
+] as const;
+
+export interface FilamentPurchaseItemParams {
+  filament_type_id: string;
+  manufacturer: string;
+  nominal_weight_grams: number;
+  quantity: number;
+  unit_value: number;
+}
+
+export function validateFilamentPurchaseItem(
+  value: unknown,
+  index: number,
+): FilamentPurchaseItemParams {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ValidationError(`Campo inválido: items[${index}] deve ser um objeto.`);
+  }
+  const item = value as Record<string, unknown>;
+  rejectUnknownKeys(item, FILAMENT_PURCHASE_ITEM_KEYS, `items[${index}]`);
+
+  return {
+    filament_type_id: requireUuid(item.filament_type_id, `items[${index}].filament_type_id`),
+    manufacturer: requireTrimmedString(item.manufacturer, `items[${index}].manufacturer`),
+    nominal_weight_grams: requireNumber(item.nominal_weight_grams, `items[${index}].nominal_weight_grams`, {
+      min: 0.01,
+    }),
+    quantity: requirePositiveIntegerQuantity(item.quantity),
+    unit_value: requireNumber(item.unit_value, `items[${index}].unit_value`, { min: 0 }),
+  };
+}
+
+export function validateRegisterFilamentPurchasePayload(body: Record<string, unknown>): Record<string, unknown> {
+  rejectUnknownKeys(body, FILAMENT_PURCHASE_KEYS, "corpo da requisição");
+
+  const freightValue = optionalNumber(body.freight_value, "freight_value", { min: 0 }) ?? 0;
+  const occurredAt = optionalTimestamp(body.occurred_at, "occurred_at");
+  const notes = optionalNonEmptyString(body.notes, "notes");
+  const idempotencyKey = optionalNonEmptyString(body.idempotency_key, "idempotency_key");
+
+  if (!Array.isArray(body.items) || body.items.length === 0) {
+    throw new ValidationError("Campo inválido: items deve ser uma lista com ao menos um item de compra.");
+  }
+
+  const items = body.items.map((raw, index) => validateFilamentPurchaseItem(raw, index));
+
+  return {
+    p_freight_value: freightValue,
+    p_occurred_at: occurredAt,
+    p_notes: notes,
+    p_idempotency_key: idempotencyKey,
+    p_items: items,
+  };
+}
+
+async function handleRegisterFilamentPurchase(req: Request): Promise<Response> {
+  const operator = await resolveOperator(req);
+
+  const rawBody = await req.text();
+  rejectIdentityFields(rawBody);
+  const body = parseJsonBody(rawBody);
+  const params = validateRegisterFilamentPurchasePayload(body);
+
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("register_filament_purchase", {
     ...params,
     p_changed_by: operator.userId,
   });

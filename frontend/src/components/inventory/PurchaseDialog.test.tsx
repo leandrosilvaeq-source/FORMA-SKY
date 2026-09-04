@@ -10,12 +10,14 @@ const {
   usePackagingMock,
   useFilamentTypesMock,
   registerInventoryPurchaseMock,
+  registerFilamentPurchaseMock,
   toastMock,
 } = vi.hoisted(() => ({
   useAccessoriesMock: vi.fn(),
   usePackagingMock: vi.fn(),
   useFilamentTypesMock: vi.fn(),
   registerInventoryPurchaseMock: vi.fn(),
+  registerFilamentPurchaseMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
 }))
 
@@ -24,6 +26,7 @@ vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
 vi.mock('@/hooks/useFilamentTypes', () => ({ useFilamentTypes: useFilamentTypesMock }))
 vi.mock('@/lib/api/inventoryPurchases', () => ({
   registerInventoryPurchase: registerInventoryPurchaseMock,
+  registerFilamentPurchase: registerFilamentPurchaseMock,
 }))
 vi.mock('sonner', () => ({ toast: toastMock }))
 
@@ -147,6 +150,20 @@ function purchaseFixture(overrides: Partial<Record<string, unknown>> = {}) {
   }
 }
 
+function filamentPurchaseResultFixture(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    purchase_id: 'fp1',
+    occurred_at: '2026-09-04T00:00:00Z',
+    notes: null,
+    freight_value: 30,
+    subtotal_value: 300,
+    total_value: 330,
+    created_at: '2026-09-04T00:00:00Z',
+    items: [],
+    ...overrides,
+  }
+}
+
 async function openDialog(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('button', { name: 'Compras' }))
   return screen.getByRole('dialog', { name: 'Registrar compra' })
@@ -165,20 +182,27 @@ describe('PurchaseDialog', () => {
     toastMock.success.mockReset()
     toastMock.error.mockReset()
     registerInventoryPurchaseMock.mockReset()
+    registerFilamentPurchaseMock.mockReset()
     mockAccessories([accessoryFixture()])
     mockPackaging([packagingFixture()])
     mockFilamentTypes([filamentTypeFixture()])
   })
 
-  // Seleciona um tipo de filamento no seletor "Tipo de filamento" (mesmo
-  // padrão de digitar-e-clicar já usado para Acessório/Embalagem).
+  // Seleciona um tipo de filamento no seletor do item N (1-based) — cada
+  // linha de item tem seu próprio combobox "Tipo de filamento — item N",
+  // rótulo/id únicos para nunca colidir entre linhas (mesmo padrão de
+  // digitar-e-clicar já usado para Acessório/Embalagem).
   async function selectFilamentType(
     user: ReturnType<typeof userEvent.setup>,
     dialog: HTMLElement,
+    itemIndex: number,
     query: string,
     optionName: string | RegExp,
   ) {
-    await user.type(within(dialog).getByRole('combobox', { name: 'Tipo de filamento' }), query)
+    await user.type(
+      within(dialog).getByRole('combobox', { name: `Tipo de filamento — item ${itemIndex}` }),
+      query,
+    )
     await user.click(await within(dialog).findByRole('option', { name: optionName }))
   }
 
@@ -293,53 +317,75 @@ describe('PurchaseDialog', () => {
   })
 
   // ---------------------------------------------------------------------------
-  // FILAMENTO
+  // FILAMENTO — Compra de filamentos com múltiplos itens (2026-09-04)
   // ---------------------------------------------------------------------------
 
-  it('Filamento: Cor e Acabamento não aparecem mais; o seletor "Tipo de filamento" aparece no lugar', async () => {
+  it('Filamento: o título do diálogo muda para "Compra de filamentos"', async () => {
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
     await selectCategory(user, dialog, 'Filamento')
 
-    expect(within(dialog).queryByRole('radiogroup', { name: 'Material' })).not.toBeInTheDocument()
-    expect(within(dialog).queryByRole('radiogroup', { name: 'Acabamento' })).not.toBeInTheDocument()
-    expect(within(dialog).queryByLabelText('Marca')).not.toBeInTheDocument()
-    expect(within(dialog).queryByLabelText('Cor')).not.toBeInTheDocument()
-    expect(within(dialog).getByRole('combobox', { name: 'Tipo de filamento' })).toBeInTheDocument()
-  })
-
-  it('Filamento: as opções do seletor usam o formato "Material - Linha - Cor" e mostram só tipos ATIVOS', async () => {
-    mockFilamentTypes([
-      filamentTypeFixture({
-        filament_type_id: 't1',
-        material: 'PLA',
-        line: 'Matte',
-        commercial_color: 'Preto',
-      }),
-      filamentTypeFixture({
-        filament_type_id: 't2',
-        material: 'PETG',
-        line: 'Sólida',
-        commercial_color: 'Azul',
-        is_active: false,
-      }),
-    ])
-    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
-    const user = userEvent.setup()
-    const dialog = await openDialog(user)
-    await selectCategory(user, dialog, 'Filamento')
-
-    await user.type(within(dialog).getByRole('combobox', { name: 'Tipo de filamento' }), 'a')
     expect(
-      await within(dialog).findByRole('option', { name: 'PLA - Matte - Preto' }),
+      within(dialog).getByRole('heading', { name: 'Compra de filamentos' }),
     ).toBeInTheDocument()
-    expect(
-      within(dialog).queryByRole('option', { name: /PETG - Sólida - Azul/ }),
-    ).not.toBeInTheDocument()
   })
 
-  it('Filamento: a busca do seletor localiza por Material, Linha e Cor', async () => {
+  it('Filamento: a janela abre com exatamente 1 item vazio', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    expect(within(dialog).getByText('Item 1')).toBeInTheDocument()
+    expect(within(dialog).queryByText('Item 2')).not.toBeInTheDocument()
+    expect(
+      within(dialog).getByRole('combobox', { name: 'Tipo de filamento — item 1' }),
+    ).toBeInTheDocument()
+  })
+
+  it('Filamento: "Adicionar filamento" cria outro item', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    await user.click(within(dialog).getByRole('button', { name: /^adicionar filamento$/i }))
+    expect(within(dialog).getByText('Item 2')).toBeInTheDocument()
+    expect(
+      within(dialog).getByRole('combobox', { name: 'Tipo de filamento — item 2' }),
+    ).toBeInTheDocument()
+  })
+
+  it('Filamento: "Remover item" remove a linha correspondente', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await user.click(within(dialog).getByRole('button', { name: /^adicionar filamento$/i }))
+    expect(within(dialog).getByText('Item 2')).toBeInTheDocument()
+
+    const removeButtons = within(dialog).getAllByRole('button', { name: /^remover item$/i })
+    await user.click(removeButtons[1])
+
+    expect(within(dialog).getByText('Item 1')).toBeInTheDocument()
+    expect(within(dialog).queryByText('Item 2')).not.toBeInTheDocument()
+  })
+
+  it('Filamento: não permite registrar a compra sem nenhum item (remove o único item e tenta enviar)', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    await user.click(within(dialog).getByRole('button', { name: /^remover item$/i }))
+    await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
+
+    expect(await within(dialog).findByText(/adicione ao menos um item/i)).toBeInTheDocument()
+    expect(registerFilamentPurchaseMock).not.toHaveBeenCalled()
+  })
+
+  it('Filamento: cada item aceita um tipo de filamento diferente', async () => {
     mockFilamentTypes([
       filamentTypeFixture({
         filament_type_id: 't1',
@@ -349,39 +395,150 @@ describe('PurchaseDialog', () => {
       }),
       filamentTypeFixture({
         filament_type_id: 't2',
-        material: 'PETG',
+        material: 'PLA',
         line: 'Silk',
-        commercial_color: 'Azul',
+        commercial_color: 'Dourado',
       }),
     ])
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
     await selectCategory(user, dialog, 'Filamento')
-    const combobox = within(dialog).getByRole('combobox', { name: 'Tipo de filamento' })
+    await user.click(within(dialog).getByRole('button', { name: /^adicionar filamento$/i }))
 
-    await user.type(combobox, 'PETG')
-    expect(
-      await within(dialog).findByRole('option', { name: 'PETG - Silk - Azul' }),
-    ).toBeInTheDocument()
-    expect(
-      within(dialog).queryByRole('option', { name: /PLA - Matte - Preto/ }),
-    ).not.toBeInTheDocument()
+    await selectFilamentType(user, dialog, 1, 'Matte', 'PLA - Matte - Preto')
+    await selectFilamentType(user, dialog, 2, 'Silk', 'PLA - Silk - Dourado')
 
-    await user.clear(combobox)
-    await user.type(combobox, 'matte')
     expect(
-      await within(dialog).findByRole('option', { name: 'PLA - Matte - Preto' }),
-    ).toBeInTheDocument()
-
-    await user.clear(combobox)
-    await user.type(combobox, 'azul')
+      within(dialog).getByRole('combobox', { name: 'Tipo de filamento — item 1' }),
+    ).toHaveValue('PLA - Matte - Preto')
     expect(
-      await within(dialog).findByRole('option', { name: 'PETG - Silk - Azul' }),
-    ).toBeInTheDocument()
+      within(dialog).getByRole('combobox', { name: 'Tipo de filamento — item 2' }),
+    ).toHaveValue('PLA - Silk - Dourado')
   })
 
-  it('Filamento: sem nenhum tipo ativo, orienta cadastrar um tipo antes de comprar', async () => {
+  it('Filamento: cada item aceita uma marca diferente', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await user.click(within(dialog).getByRole('button', { name: /^adicionar filamento$/i }))
+
+    const manufacturerInputs = within(dialog).getAllByLabelText('Marca')
+    await user.type(manufacturerInputs[0], 'Bambu Lab')
+    await user.type(manufacturerInputs[1], 'Voolt')
+
+    expect(within(dialog).getAllByLabelText('Marca')[0]).toHaveValue('Bambu Lab')
+    expect(within(dialog).getAllByLabelText('Marca')[1]).toHaveValue('Voolt')
+  })
+
+  it('Filamento: Peso Líquido exibe "1.000 g" com ponto de milhar, nunca "1000g" sem formatação', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    const group = within(dialog).getByRole('radiogroup', { name: 'Peso líquido — item 1' })
+    expect(within(group).getByRole('radio', { name: '250 g' })).toBeInTheDocument()
+    expect(within(group).getByRole('radio', { name: '500 g' })).toBeInTheDocument()
+    expect(within(group).getByRole('radio', { name: '1.000 g' })).toBeInTheDocument()
+    expect(within(group).queryByRole('radio', { name: '1000g' })).not.toBeInTheDocument()
+    expect(within(group).queryByRole('radio', { name: '1000 g' })).not.toBeInTheDocument()
+  })
+
+  it('Filamento: nunca mostra um campo de "Código da cor" nem de "Peso bruto"', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await selectFilamentType(user, dialog, 1, 'PLA', 'PLA - Sólida - Preto')
+    await user.click(within(dialog).getByRole('radio', { name: '1.000 g' }))
+
+    expect(within(dialog).queryByLabelText(/código da cor/i)).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText(/código do filamento/i)).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText(/peso bruto/i)).not.toBeInTheDocument()
+  })
+
+  it('Filamento: quantidade do item precisa ser inteira e positiva (bloqueia zero)', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await selectFilamentType(user, dialog, 1, 'PLA', 'PLA - Sólida - Preto')
+    await user.click(within(dialog).getByRole('radio', { name: '1.000 g' }))
+    await user.type(within(dialog).getAllByLabelText('Marca')[0], 'Bambu Lab')
+    await user.type(within(dialog).getByLabelText('Valor unitário'), '9500')
+    await user.type(within(dialog).getByLabelText('Quantidade'), '0')
+
+    await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
+
+    expect(await within(dialog).findByText(/deve ser maior ou igual a 1/i)).toBeInTheDocument()
+    expect(registerFilamentPurchaseMock).not.toHaveBeenCalled()
+  })
+
+  it('Filamento: subtotal soma quantidade × valor unitário de todos os itens', async () => {
+    mockFilamentTypes([
+      filamentTypeFixture({
+        filament_type_id: 't1',
+        material: 'PLA',
+        line: 'Matte',
+        commercial_color: 'Preto',
+      }),
+      filamentTypeFixture({
+        filament_type_id: 't2',
+        material: 'PLA',
+        line: 'Silk',
+        commercial_color: 'Dourado',
+      }),
+    ])
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await user.click(within(dialog).getByRole('button', { name: /^adicionar filamento$/i }))
+
+    // Item 1: quantidade 2, valor unitário R$ 95,00 -> 190,00
+    await user.type(within(dialog).getAllByLabelText('Quantidade')[0], '2')
+    await user.type(within(dialog).getAllByLabelText('Valor unitário')[0], '9500')
+    // Item 2: quantidade 1, valor unitário R$ 110,00 -> 110,00
+    await user.type(within(dialog).getAllByLabelText('Quantidade')[1], '1')
+    await user.type(within(dialog).getAllByLabelText('Valor unitário')[1], '11000')
+    // Frete não-zero só para distinguir Subtotal (300) de Total (320) na
+    // asserção abaixo — a soma em si (quantidade × valor unitário de cada
+    // item) já está completa antes desta linha.
+    await user.type(within(dialog).getByLabelText('Frete total da compra'), '2000')
+
+    // Subtotal = 190 + 110 = 300,00 (frete NUNCA entra nesta soma)
+    expect(within(dialog).getByText(normalizedBRL(30000))).toBeInTheDocument()
+  })
+
+  it('Filamento: frete é registrado uma única vez (campo único em Dados gerais da compra, não por item)', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await user.click(within(dialog).getByRole('button', { name: /^adicionar filamento$/i }))
+
+    expect(within(dialog).getAllByLabelText('Frete total da compra')).toHaveLength(1)
+  })
+
+  it('Filamento: total = subtotal + frete', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await selectFilamentType(user, dialog, 1, 'PLA', 'PLA - Sólida - Preto')
+    await user.type(within(dialog).getByLabelText('Quantidade'), '2')
+    await user.type(within(dialog).getByLabelText('Valor unitário'), '9500')
+    await user.type(within(dialog).getByLabelText('Frete total da compra'), '3000')
+
+    // Subtotal = 2×95 = 190,00; Frete = 30,00; Total = 220,00
+    expect(within(dialog).getByText(normalizedBRL(19000))).toBeInTheDocument()
+    expect(within(dialog).getByText(normalizedBRL(3000))).toBeInTheDocument()
+    expect(within(dialog).getByText(normalizedBRL(22000))).toBeInTheDocument()
+  })
+
+  it('Filamento: sem nenhum tipo ativo, orienta cadastrar um tipo antes de comprar, e não mostra a lista de itens', async () => {
     mockFilamentTypes([])
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()
@@ -392,142 +549,73 @@ describe('PurchaseDialog', () => {
       within(dialog).getByText('Cadastre um tipo de filamento antes de registrar a compra.'),
     ).toBeInTheDocument()
     expect(
-      within(dialog).queryByRole('combobox', { name: 'Tipo de filamento' }),
+      within(dialog).queryByRole('combobox', { name: /Tipo de filamento/ }),
+    ).not.toBeInTheDocument()
+    expect(
+      within(dialog).queryByRole('button', { name: /^adicionar filamento$/i }),
     ).not.toBeInTheDocument()
   })
 
-  it('Filamento: peso líquido tem 250g/500g/1000g', async () => {
-    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
-    const user = userEvent.setup()
-    const dialog = await openDialog(user)
-    await selectCategory(user, dialog, 'Filamento')
-
-    const group = within(dialog).getByRole('radiogroup', { name: 'Peso líquido' })
-    expect(within(group).getByRole('radio', { name: '250g' })).toBeInTheDocument()
-    expect(within(group).getByRole('radio', { name: '500g' })).toBeInTheDocument()
-    expect(within(group).getByRole('radio', { name: '1000g' })).toBeInTheDocument()
-  })
-
-  it('Filamento: nunca mostra um campo de "Código da cor"', async () => {
-    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
-    const user = userEvent.setup()
-    const dialog = await openDialog(user)
-    await selectCategory(user, dialog, 'Filamento')
-
-    expect(within(dialog).queryByLabelText(/código da cor/i)).not.toBeInTheDocument()
-    expect(within(dialog).queryByLabelText(/código do filamento/i)).not.toBeInTheDocument()
-  })
-
-  it('Filamento: quantidade bloqueia zero, negativo, fração e texto', async () => {
-    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
-    const user = userEvent.setup()
-    const dialog = await openDialog(user)
-    await selectCategory(user, dialog, 'Filamento')
-    await selectFilamentType(user, dialog, 'PLA', 'PLA - Sólida - Preto')
-    await user.click(within(dialog).getByRole('radio', { name: '1000g' }))
-
-    await user.type(within(dialog).getByLabelText('Quantidade'), '0')
-    await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
-    expect(await within(dialog).findByText(/deve ser maior ou igual a 1/i)).toBeInTheDocument()
-    expect(registerInventoryPurchaseMock).not.toHaveBeenCalled()
-  })
-
-  it('Filamento: os campos de "Peso bruto do rolo N" aparecem dinamicamente conforme a quantidade', async () => {
-    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
-    const user = userEvent.setup()
-    const dialog = await openDialog(user)
-    await selectCategory(user, dialog, 'Filamento')
-    await user.click(within(dialog).getByRole('radio', { name: '1000g' }))
-
-    await user.type(within(dialog).getByLabelText('Quantidade'), '1')
-    expect(within(dialog).getByLabelText('Peso bruto do rolo 1')).toBeInTheDocument()
-    expect(within(dialog).queryByLabelText('Peso bruto do rolo 2')).not.toBeInTheDocument()
-
-    await user.clear(within(dialog).getByLabelText('Quantidade'))
-    await user.type(within(dialog).getByLabelText('Quantidade'), '3')
-    expect(within(dialog).getByLabelText('Peso bruto do rolo 1')).toBeInTheDocument()
-    expect(within(dialog).getByLabelText('Peso bruto do rolo 2')).toBeInTheDocument()
-    expect(within(dialog).getByLabelText('Peso bruto do rolo 3')).toBeInTheDocument()
-  })
-
-  it('Filamento: peso bruto menor ou igual ao líquido nominal é bloqueado', async () => {
-    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
-    const user = userEvent.setup()
-    const dialog = await openDialog(user)
-    await selectCategory(user, dialog, 'Filamento')
-    await selectFilamentType(user, dialog, 'PLA', 'PLA - Sólida - Preto')
-    await user.click(within(dialog).getByRole('radio', { name: '1000g' }))
-    await user.type(within(dialog).getByLabelText('Quantidade'), '1')
-    await user.type(within(dialog).getByLabelText('Peso bruto do rolo 1'), '1000')
-    await user.type(within(dialog).getByLabelText('Valor dos itens'), '100')
-
-    await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
-
-    expect(
-      await within(dialog).findByText(/deve ser maior que o peso líquido nominal/i),
-    ).toBeInTheDocument()
-    expect(registerInventoryPurchaseMock).not.toHaveBeenCalled()
-  })
-
-  it('Filamento: máscara de Valor/Frete em R$ e cálculo do resumo (total, custo médio por rolo, custo por kg)', async () => {
-    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
-    const user = userEvent.setup()
-    const dialog = await openDialog(user)
-    await selectCategory(user, dialog, 'Filamento')
-    await selectFilamentType(user, dialog, 'PLA', 'PLA - Sólida - Preto')
-    await user.click(within(dialog).getByRole('radio', { name: '1000g' }))
-    await user.type(within(dialog).getByLabelText('Quantidade'), '2')
-
-    const itemValueInput = within(dialog).getByLabelText('Valor dos itens')
-    expect(itemValueInput).toHaveValue(formatCentsToBRL(0))
-    await user.type(itemValueInput, '20000')
-    expect(itemValueInput).toHaveValue(formatCentsToBRL(20000))
-
-    // "Valor dos itens" e "Total da compra" mostram o mesmo valor aqui (frete
-    // zero) — duas ocorrências esperadas, não uma.
-    expect(within(dialog).getAllByText(normalizedBRL(20000)).length).toBe(2)
-    // custo médio por rolo = 200 / 2 = 100; custo por kg = 200 / (2kg) = 100
-    expect(within(dialog).getAllByText(normalizedBRL(10000)).length).toBe(2)
-  })
-
-  it('Filamento: envia filament_type_id (nunca material/manufacturer/line/commercial_color) + peso nominal/pesos brutos/quantidade/valores', async () => {
+  it('Filamento: exemplo do pedido — 2 itens (tipos/marcas diferentes) geram UM cabeçalho com 2 itens no payload', async () => {
     mockFilamentTypes([
       filamentTypeFixture({
-        filament_type_id: 't-petg',
-        material: 'PETG',
-        line: 'Sólida',
+        filament_type_id: 't-matte',
+        material: 'PLA',
+        line: 'Matte',
         commercial_color: 'Preto',
       }),
+      filamentTypeFixture({
+        filament_type_id: 't-silk',
+        material: 'PLA',
+        line: 'Silk',
+        commercial_color: 'Dourado',
+      }),
     ])
-    registerInventoryPurchaseMock.mockResolvedValue(purchaseFixture({ category: 'FILAMENT' }))
+    registerFilamentPurchaseMock.mockResolvedValue(filamentPurchaseResultFixture())
     const onPurchaseCompleted = vi.fn()
     render(<PurchaseDialog onPurchaseCompleted={onPurchaseCompleted} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
     await selectCategory(user, dialog, 'Filamento')
-    await selectFilamentType(user, dialog, 'PETG', 'PETG - Sólida - Preto')
-    await user.click(within(dialog).getByRole('radio', { name: '1000g' }))
-    await user.type(within(dialog).getByLabelText('Quantidade'), '2')
-    await user.type(within(dialog).getByLabelText('Peso bruto do rolo 1'), '1150')
-    await user.type(within(dialog).getByLabelText('Peso bruto do rolo 2'), '1140')
-    await user.type(within(dialog).getByLabelText('Valor dos itens'), '20000')
-    await user.type(within(dialog).getByLabelText('Frete'), '2000')
+    await user.type(within(dialog).getByLabelText('Frete total da compra'), '3000')
+
+    await selectFilamentType(user, dialog, 1, 'Matte', 'PLA - Matte - Preto')
+    const firstWeightGroup = within(dialog).getAllByRole('radiogroup', { name: /Peso líquido/ })[0]
+    await user.click(within(firstWeightGroup).getByRole('radio', { name: '1.000 g' }))
+    await user.type(within(dialog).getAllByLabelText('Quantidade')[0], '2')
+    await user.type(within(dialog).getAllByLabelText('Marca')[0], 'Bambu Lab')
+    await user.type(within(dialog).getAllByLabelText('Valor unitário')[0], '9500')
+
+    await user.click(within(dialog).getByRole('button', { name: /^adicionar filamento$/i }))
+    await selectFilamentType(user, dialog, 2, 'Silk', 'PLA - Silk - Dourado')
+    const weightGroups = within(dialog).getAllByRole('radiogroup', { name: /Peso líquido/ })
+    await user.click(within(weightGroups[1]).getByRole('radio', { name: '1.000 g' }))
+    await user.type(within(dialog).getAllByLabelText('Quantidade')[1], '1')
+    await user.type(within(dialog).getAllByLabelText('Marca')[1], 'Voolt')
+    await user.type(within(dialog).getAllByLabelText('Valor unitário')[1], '11000')
 
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
 
-    await waitFor(() => expect(registerInventoryPurchaseMock).toHaveBeenCalledTimes(1))
-    const payload = registerInventoryPurchaseMock.mock.calls[0][0]
-    expect(payload).toMatchObject({
-      category: 'FILAMENT',
-      quantity: 2,
-      item_value: 200,
-      freight_value: 20,
-      filament_type_id: 't-petg',
+    await waitFor(() => expect(registerFilamentPurchaseMock).toHaveBeenCalledTimes(1))
+    const payload = registerFilamentPurchaseMock.mock.calls[0][0]
+    expect(payload.freight_value).toBe(30)
+    expect(payload.items).toHaveLength(2)
+    expect(payload.items).toContainEqual({
+      filament_type_id: 't-matte',
+      manufacturer: 'Bambu Lab',
       nominal_weight_grams: 1000,
-      gross_weights_grams: [1150, 1140],
+      quantity: 2,
+      unit_value: 95,
     })
-    // A compra nunca cria nem localiza tipo por nome — nenhum dos 4 campos
-    // legados de identidade vai no payload quando filament_type_id é usado.
+    expect(payload.items).toContainEqual({
+      filament_type_id: 't-silk',
+      manufacturer: 'Voolt',
+      nominal_weight_grams: 1000,
+      quantity: 1,
+      unit_value: 110,
+    })
+    // Nunca cria/localiza tipo por nome — nenhum campo legado de identidade.
+    expect(payload).not.toHaveProperty('category')
     expect(payload).not.toHaveProperty('material')
     expect(payload).not.toHaveProperty('manufacturer')
     expect(payload).not.toHaveProperty('line')
@@ -536,14 +624,16 @@ describe('PurchaseDialog', () => {
     expect(onPurchaseCompleted).toHaveBeenCalledWith('FILAMENT')
   })
 
-  it('Filamento: fornecedor não é um campo desta janela — nada aqui pode alterar o fabricante do tipo escolhido', async () => {
+  it('Filamento: fornecedor/marca da compra nunca é enviado como campo do tipo — nada altera o cadastro do tipo escolhido', async () => {
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
     await selectCategory(user, dialog, 'Filamento')
 
-    expect(within(dialog).queryByLabelText(/fornecedor/i)).not.toBeInTheDocument()
-    expect(within(dialog).queryByLabelText(/marca/i)).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText(/^fornecedor$/i)).not.toBeInTheDocument()
+    // "Marca" existe (é o campo do item, enviado como manufacturer do ITEM,
+    // nunca do tipo) — a ausência aqui é só de um campo de fabricante do tipo.
+    expect(within(dialog).getAllByLabelText('Marca').length).toBeGreaterThan(0)
   })
 
   // ---------------------------------------------------------------------------

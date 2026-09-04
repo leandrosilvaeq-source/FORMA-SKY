@@ -12,9 +12,12 @@
 //     requireFilamentMaterial/requireGrossWeightsGrams/optionalNonEmptyString/
 //     optionalTimestamp/rejectUnknownKeys/requireUuid/
 //     validateRegisterInventoryPurchasePayload);
+//   - 2026-09-04 (compra de filamento com múltiplos itens):
+//     validateFilamentPurchaseItem/validateRegisterFilamentPurchasePayload
+//     (rota POST /inventory-purchases/filament, register_filament_purchase);
 //   - handleRequest: preflight CORS, 401 sem Authorization, 404 rota
 //     desconhecida, 405 método não permitido, resposta de erro sem
-//     detalhes internos.
+//     detalhes internos — nas duas rotas (base e /filament).
 //
 // Por que "tipo inativo correspondente", "item inexistente/inativo",
 // "reaproveitar tipo existente", "criar N rolos com saldo/movimento COMPRA"
@@ -48,6 +51,8 @@ import {
   requirePurchaseCategory,
   requireTrimmedString,
   requireUuid,
+  validateFilamentPurchaseItem,
+  validateRegisterFilamentPurchasePayload,
   validateRegisterInventoryPurchasePayload,
 } from "./handler.ts";
 
@@ -465,6 +470,124 @@ Deno.test("validateRegisterInventoryPurchasePayload preserva idempotency_key e n
   assertEquals(result.p_idempotency_key, "11111111-1111-1111-1111-111111111111");
 });
 
+// ---------------------------------------------------------------------------
+// FILAMENT — compra com múltiplos itens (2026-09-04): validateFilamentPurchaseItem
+// / validateRegisterFilamentPurchasePayload (rota POST /inventory-purchases/filament,
+// register_filament_purchase, migration 20260904130000).
+// ---------------------------------------------------------------------------
+
+const VALID_ITEM = {
+  filament_type_id: VALID_UUID,
+  manufacturer: "Bambu Lab",
+  nominal_weight_grams: 1000,
+  quantity: 2,
+  unit_value: 95,
+};
+
+Deno.test("validateFilamentPurchaseItem aceita um item mínimo válido e trima a marca", () => {
+  const result = validateFilamentPurchaseItem({ ...VALID_ITEM, manufacturer: "  Bambu Lab  " }, 0);
+  assertEquals(result, VALID_ITEM);
+});
+
+Deno.test("validateFilamentPurchaseItem rejeita filament_type_id ausente/inválido", () => {
+  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, filament_type_id: undefined }, 0));
+  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, filament_type_id: "nao-e-um-uuid" }, 0));
+});
+
+Deno.test("validateFilamentPurchaseItem rejeita marca vazia/só espaços", () => {
+  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, manufacturer: "   " }, 0));
+  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, manufacturer: undefined }, 0));
+});
+
+Deno.test("validateFilamentPurchaseItem rejeita peso líquido zero/negativo/ausente", () => {
+  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, nominal_weight_grams: 0 }, 0));
+  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, nominal_weight_grams: -1 }, 0));
+  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, nominal_weight_grams: undefined }, 0));
+});
+
+Deno.test("validateFilamentPurchaseItem rejeita quantidade zero/negativa/fracionária", () => {
+  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, quantity: 0 }, 0));
+  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, quantity: -1 }, 0));
+  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, quantity: 1.5 }, 0));
+});
+
+Deno.test("validateFilamentPurchaseItem rejeita valor unitário negativo, aceita zero", () => {
+  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, unit_value: -1 }, 0));
+  assertEquals(validateFilamentPurchaseItem({ ...VALID_ITEM, unit_value: 0 }, 0).unit_value, 0);
+});
+
+Deno.test("validateFilamentPurchaseItem rejeita campo desconhecido dentro do item", () => {
+  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, line: "Sólida" }, 0));
+});
+
+Deno.test("validateFilamentPurchaseItem rejeita valor que não é objeto", () => {
+  assertThrows(() => validateFilamentPurchaseItem("string", 0));
+  assertThrows(() => validateFilamentPurchaseItem([VALID_ITEM], 0));
+  assertThrows(() => validateFilamentPurchaseItem(null, 0));
+});
+
+Deno.test("validateRegisterFilamentPurchasePayload aceita um payload mínimo válido com 1 item, freight_value=0 quando omitido", () => {
+  const result = validateRegisterFilamentPurchasePayload({ items: [VALID_ITEM] });
+  assertEquals(result, {
+    p_freight_value: 0,
+    p_occurred_at: null,
+    p_notes: null,
+    p_idempotency_key: null,
+    p_items: [VALID_ITEM],
+  });
+});
+
+Deno.test("validateRegisterFilamentPurchasePayload aceita vários itens (tipos/marcas diferentes) e preserva a ordem", () => {
+  const secondItem = {
+    filament_type_id: "11111111-1111-1111-1111-111111111111",
+    manufacturer: "Voolt",
+    nominal_weight_grams: 1000,
+    quantity: 1,
+    unit_value: 110,
+  };
+  const result = validateRegisterFilamentPurchasePayload({
+    freight_value: 30,
+    items: [VALID_ITEM, secondItem],
+  });
+  assertEquals(result.p_freight_value, 30);
+  assertEquals(result.p_items, [VALID_ITEM, secondItem]);
+});
+
+Deno.test("validateRegisterFilamentPurchasePayload rejeita freight_value negativo", () => {
+  assertThrows(() => validateRegisterFilamentPurchasePayload({ freight_value: -1, items: [VALID_ITEM] }));
+});
+
+Deno.test("validateRegisterFilamentPurchasePayload rejeita items ausente/vazio/não-array", () => {
+  assertThrows(() => validateRegisterFilamentPurchasePayload({}));
+  assertThrows(() => validateRegisterFilamentPurchasePayload({ items: [] }));
+  assertThrows(() => validateRegisterFilamentPurchasePayload({ items: "not-an-array" }));
+});
+
+Deno.test("validateRegisterFilamentPurchasePayload rejeita um item inválido dentro da lista (propaga o erro do item)", () => {
+  assertThrows(() =>
+    validateRegisterFilamentPurchasePayload({ items: [VALID_ITEM, { ...VALID_ITEM, quantity: 0 }] }),
+  );
+});
+
+Deno.test("validateRegisterFilamentPurchasePayload rejeita campo desconhecido no corpo (ex.: os campos de item único da rota base)", () => {
+  assertThrows(() =>
+    validateRegisterFilamentPurchasePayload({ items: [VALID_ITEM], category: "FILAMENT" }),
+  );
+  assertThrows(() =>
+    validateRegisterFilamentPurchasePayload({ items: [VALID_ITEM], quantity: 1 }),
+  );
+});
+
+Deno.test("validateRegisterFilamentPurchasePayload preserva idempotency_key e notes trimados", () => {
+  const result = validateRegisterFilamentPurchasePayload({
+    items: [VALID_ITEM],
+    notes: "  compra com 2 marcas  ",
+    idempotency_key: "11111111-1111-1111-1111-111111111111",
+  });
+  assertEquals(result.p_notes, "compra com 2 marcas");
+  assertEquals(result.p_idempotency_key, "11111111-1111-1111-1111-111111111111");
+});
+
 Deno.test("rejectUnknownKeys aceita só chaves permitidas", () => {
   rejectUnknownKeys({ a: 1 }, ["a", "b"], "teste");
 });
@@ -517,6 +640,23 @@ Deno.test("handleRequest devolve 405 para PATCH/DELETE em /inventory-purchases (
 
 Deno.test("handleRequest devolve 404 para rota não reconhecida (sem exigir autenticação)", async () => {
   const res = await handleRequest(makeRequest("GET", "/algum-id"));
+  assertEquals(res.status, 404);
+});
+
+// ---------------------------------------------------------------------------
+// handleRequest — POST /inventory-purchases/filament (register_filament_purchase)
+// ---------------------------------------------------------------------------
+
+Deno.test("handleRequest rejeita POST em /inventory-purchases/filament sem Authorization com 401 (sem tocar rede)", async () => {
+  const res = await handleRequest(makeRequest("POST", "/filament", { items: [VALID_ITEM] }));
+  assertEquals(res.status, 401);
+});
+
+Deno.test("handleRequest devolve 405 para método não permitido em /inventory-purchases/filament (sem exigir autenticação)", () =>
+  handleRequest(makeRequest("GET", "/filament")).then((res) => assertEquals(res.status, 405)));
+
+Deno.test("handleRequest devolve 404 para sub-rota de /inventory-purchases/filament (sem exigir autenticação)", async () => {
+  const res = await handleRequest(makeRequest("GET", "/filament/algum-id"));
   assertEquals(res.status, 404);
 });
 

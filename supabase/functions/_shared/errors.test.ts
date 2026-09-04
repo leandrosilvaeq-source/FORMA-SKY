@@ -401,3 +401,75 @@ Deno.test("mapPgError não confunde a mensagem de filament_type_id com 'informe 
   assertEquals(filamentTypeIdMsg.message.includes("informe p_filament_type_id"), true);
   assertEquals(grossWeightsMsg.message.includes("informe exatamente"), true);
 });
+
+// -----------------------------------------------------------------------------
+// register_filament_purchase (migration 20260904130000, compra de filamento
+// com múltiplos itens) — freight_value negativo, lista de itens vazia, e as
+// 5 mensagens de validação por item (um único padrão de substring cobre
+// todas: "register_filament_purchase: item ").
+// -----------------------------------------------------------------------------
+
+Deno.test("mapPgError mapeia 'p_freight_value não pode ser negativo' (register_filament_purchase) para ValidationError (400)", () => {
+  const err = mapPgError({
+    code: "P0001",
+    message: "register_filament_purchase: p_freight_value não pode ser negativo (recebido -1)",
+  });
+  if (!(err instanceof ValidationError)) {
+    throw new Error(`esperado ValidationError, obtido ${err.constructor.name}`);
+  }
+  assertEquals(err.status, 400);
+});
+
+Deno.test("mapPgError mapeia 'informe ao menos um item' para ValidationError (400)", () => {
+  const err = mapPgError({
+    code: "P0001",
+    message: "register_filament_purchase: informe ao menos um item em p_items (lista JSON não vazia)",
+  });
+  if (!(err instanceof ValidationError)) {
+    throw new Error(`esperado ValidationError, obtido ${err.constructor.name}`);
+  }
+  assertEquals(err.status, 400);
+});
+
+Deno.test("mapPgError mapeia as 5 mensagens de validação por item para ValidationError (400) com um único padrão", () => {
+  const messages = [
+    "register_filament_purchase: item 1 — filament_type_id é obrigatório",
+    "register_filament_purchase: item 2 — manufacturer (marca) não pode ser vazio",
+    "register_filament_purchase: item 1 — nominal_weight_grams deve ser um número positivo (recebido 0)",
+    "register_filament_purchase: item 3 — quantity deve ser um inteiro positivo (recebido 0)",
+    "register_filament_purchase: item 1 — unit_value não pode ser negativo (recebido -1)",
+  ];
+  for (const message of messages) {
+    const err = mapPgError({ code: "P0001", message });
+    if (!(err instanceof ValidationError)) {
+      throw new Error(`esperado ValidationError para "${message}", obtido ${err.constructor.name}`);
+    }
+    assertEquals(err.status, 400);
+  }
+});
+
+Deno.test("mapPgError mantém 'filament_types.id % não encontrado ou inativo' (dentro de um item) como NotFoundError (404) — reaproveita o padrão genérico 'não encontrado'", () => {
+  const err = mapPgError({
+    code: "P0001",
+    message: `filament_types.id ${"11111111-1111-1111-1111-111111111111"} não encontrado ou inativo`,
+  });
+  if (!(err instanceof NotFoundError)) {
+    throw new Error(`esperado NotFoundError, obtido ${err.constructor.name}`);
+  }
+  assertEquals(err.status, 404);
+});
+
+Deno.test("mapPgError não confunde as mensagens de register_filament_purchase com as de register_inventory_purchase — regressão cruzada", () => {
+  const single = mapPgError({
+    code: "P0001",
+    message: "register_inventory_purchase: informe exatamente 2 peso(s) bruto(s) (um por rolo) — recebido 1",
+  });
+  const multi = mapPgError({
+    code: "P0001",
+    message: "register_filament_purchase: item 1 — quantity deve ser um inteiro positivo (recebido 0)",
+  });
+  assertEquals(single instanceof ValidationError, true);
+  assertEquals(multi instanceof ValidationError, true);
+  assertEquals(single.message.includes("register_inventory_purchase"), true);
+  assertEquals(multi.message.includes("register_filament_purchase"), true);
+});
