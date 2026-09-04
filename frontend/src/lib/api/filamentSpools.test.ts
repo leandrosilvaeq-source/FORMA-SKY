@@ -67,9 +67,57 @@ describe('filamentSpools api', () => {
     expect(fromMock).toHaveBeenCalledWith('filament_movements')
     expect(callEdgeFunctionMock).not.toHaveBeenCalled()
     expect(result).toEqual([
-      { id: 's1', code: 'RL-26-001', has_movement_history: true },
-      { id: 's2', code: 'RL-26-002', has_movement_history: false },
+      { id: 's1', code: 'RL-26-001', has_movement_history: true, purchase_item_manufacturer: null },
+      {
+        id: 's2',
+        code: 'RL-26-002',
+        has_movement_history: false,
+        purchase_item_manufacturer: null,
+      },
     ])
+  })
+
+  it('listFilamentSpools: Marca (purchase_item_manufacturer) vem do JOIN embutido, numa ÚNICA consulta extra em filament_spools (nunca uma consulta por rolo — N+1)', async () => {
+    mockTables(
+      {
+        data: [
+          {
+            id: 's1',
+            code: 'RL-26-001',
+            purchase_item_id: 'pi1',
+            inventory_purchase_filament_items: { manufacturer: 'Bambu Lab' },
+          },
+          {
+            id: 's2',
+            code: 'RL-26-002',
+            purchase_item_id: 'pi2',
+            inventory_purchase_filament_items: { manufacturer: '  Voolt  ' },
+          },
+          {
+            id: 's3',
+            code: 'RL-26-003',
+            purchase_item_id: null,
+            inventory_purchase_filament_items: null,
+          },
+        ],
+        error: null,
+      },
+      { data: [], error: null },
+    )
+
+    const result = await listFilamentSpools(['t1', 't2', 't3'])
+
+    // Exatamente 2 chamadas no total (filament_spools + filament_movements),
+    // independente de quantos rolos existam — o JOIN viaja dentro da MESMA
+    // consulta de filament_spools, nunca uma consulta adicional por linha.
+    expect(fromMock).toHaveBeenCalledTimes(2)
+    expect(result.find((s) => s.id === 's1')?.purchase_item_manufacturer).toBe('Bambu Lab')
+    // Espaços de borda do valor bruto são aparados.
+    expect(result.find((s) => s.id === 's2')?.purchase_item_manufacturer).toBe('Voolt')
+    // Sem purchase_item_id (rolo do fluxo antigo) -> null, nunca undefined.
+    expect(result.find((s) => s.id === 's3')?.purchase_item_manufacturer).toBeNull()
+    // O objeto embutido nunca vaza para o resultado final.
+    expect(result[0]).not.toHaveProperty('inventory_purchase_filament_items')
   })
 
   it('listFilamentSpools: rolo sem nenhuma movimentação tem has_movement_history=false, nunca undefined', async () => {

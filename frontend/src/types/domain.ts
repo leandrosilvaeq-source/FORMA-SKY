@@ -467,6 +467,22 @@ export interface FilamentSpool {
   // inalterado por esse incremento).
   initial_gross_weight_grams: number | null
   purchase_id: string | null
+  // supabase/migrations/20260904130000_support_multi_item_filament_purchases.sql
+  // — vincula o rolo ao ITEM específico da compra que o originou (nullable;
+  // null para todo rolo criado manualmente ou pelo caminho legado de item
+  // único de register_inventory_purchase).
+  purchase_item_id: string | null
+  // Campo DERIVADO (2026-09-04, "Marca" em Ver rolos), não uma coluna de
+  // filament_spools — vem do JOIN embutido (PostgREST resource embedding)
+  // inventory_purchase_filament_items.manufacturer via purchase_item_id,
+  // calculado por listFilamentSpools() numa única consulta em lote (nunca
+  // uma consulta por linha — o embed viaja dentro do mesmo SELECT de
+  // filament_spools). null quando o rolo não tem purchase_item_id (fluxo
+  // antigo) — o chamador usa o fabricante histórico do TIPO
+  // (filament_types.manufacturer, já carregado, sem consulta extra) como
+  // alternativa, e "—" quando nenhum dos dois é um valor real (vazio ou
+  // "Não informado").
+  purchase_item_manufacturer: string | null
   // Campo DERIVADO, não uma coluna de filament_spools — calculado por
   // listFilamentSpools() a partir de uma segunda consulta de leitura
   // (filament_movements.spool_id para o tipo). Único indicador confiável de

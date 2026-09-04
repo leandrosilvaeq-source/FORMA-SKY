@@ -156,11 +156,15 @@ const CATEGORY_ITEMS: Array<{
 const NOMINAL_WEIGHT_OPTIONS = [250, 500, 1000] as const
 
 // Local da compra — os 4 valores oficiais, na ordem pedida.
+// Site/Outro acrescentados em 2026-09-04 (ajustes finais de Filamentos) —
+// sem campo de texto livre adicional quando "Outro" é escolhido.
 const PURCHASE_CHANNEL_OPTIONS: Array<{ value: PurchaseChannel; label: string }> = [
   { value: 'MERCADO_LIVRE', label: 'Mercado Livre' },
   { value: 'ALIEXPRESS', label: 'AliExpress' },
   { value: 'SHOPEE', label: 'Shopee' },
   { value: 'PRESENCIAL', label: 'Presencial' },
+  { value: 'SITE', label: 'Site' },
+  { value: 'OUTRO', label: 'Outro' },
 ]
 
 interface CurrencyFieldState {

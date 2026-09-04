@@ -179,6 +179,29 @@ export function groupFilamentTypes(
   )
 }
 
+// Cores distintas já cadastradas em QUALQUER tipo de filamento (2026-09-04,
+// sugestões do campo Cor em "Novo tipo de filamento") — reaproveita
+// EXATAMENTE a mesma dedupe/canonicalização já usada para consolidar a
+// listagem (normalizeFilamentToken + pickCanonicalLabel), nunca uma segunda
+// regra: "Preto"/"preto"/" Preto " colapsam numa única sugestão, com a
+// grafia mais frequente (empate por ordem alfabética pt-BR). Considera
+// tipos ativos E arquivados — um nome de cor já usado historicamente
+// continua uma sugestão útil para padronizar grafia. Não faz nenhuma
+// consulta própria: opera só sobre os tipos já carregados pelo chamador
+// (useFilamentTypes), nunca dispara uma requisição por tecla digitada.
+export function distinctFilamentColors(types: FilamentTypeSummary[]): string[] {
+  const byToken = new Map<string, string[]>()
+  for (const type of types) {
+    const token = normalizeFilamentToken(type.commercial_color)
+    const existing = byToken.get(token)
+    if (existing) existing.push(type.commercial_color)
+    else byToken.set(token, [type.commercial_color])
+  }
+  return [...byToken.values()]
+    .map((values) => pickCanonicalLabel(values))
+    .sort((a, b) => PT_BR_COLLATOR.compare(a, b))
+}
+
 // Busca local sobre um grupo consolidado — Material, Linha, Cor (rótulos
 // consolidados) e QUALQUER fabricante do grupo. Mesmo sem a coluna
 // Fabricante, digitar o nome de um fabricante localiza o grupo. Código de

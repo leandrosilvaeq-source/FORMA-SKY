@@ -241,7 +241,7 @@ describe('PurchaseDialog', () => {
   async function selectPurchaseChannel(
     user: ReturnType<typeof userEvent.setup>,
     dialog: HTMLElement,
-    label: 'Mercado Livre' | 'AliExpress' | 'Shopee' | 'Presencial',
+    label: 'Mercado Livre' | 'AliExpress' | 'Shopee' | 'Presencial' | 'Site' | 'Outro',
   ) {
     await user.click(within(dialog).getByRole('radio', { name: label }))
   }
@@ -438,7 +438,7 @@ describe('PurchaseDialog', () => {
     expect(registerFilamentPurchaseMock.mock.calls[0][0].occurred_at).toBe('2026-09-04')
   })
 
-  it('5. os 4 locais de compra aparecem (Mercado Livre, AliExpress, Shopee, Presencial)', async () => {
+  it('5. os 6 locais de compra aparecem (Mercado Livre, AliExpress, Shopee, Presencial, Site, Outro)', async () => {
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
@@ -449,7 +449,30 @@ describe('PurchaseDialog', () => {
       within(group)
         .getAllByRole('radio')
         .map((radio) => radio.textContent),
-    ).toEqual(['Mercado Livre', 'AliExpress', 'Shopee', 'Presencial'])
+    ).toEqual(['Mercado Livre', 'AliExpress', 'Shopee', 'Presencial', 'Site', 'Outro'])
+  })
+
+  it('Site e Outro são enviados no payload com os valores internos SITE/OUTRO', async () => {
+    mockFilamentTypes([filamentTypeFixture({ filament_type_id: 't1' })])
+    registerFilamentPurchaseMock.mockResolvedValue(filamentPurchaseResultFixture())
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await selectPurchaseChannel(user, dialog, 'Site')
+    await fillFilamentItem(user, dialog, 1, {
+      query: 'PLA',
+      optionName: 'PLA - Sólida - Preto',
+      weightLabel: '1.000 g',
+      quantity: '1',
+      manufacturer: 'Bambu Lab',
+      unitValueRaw: '9500',
+    })
+
+    await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
+
+    await waitFor(() => expect(registerFilamentPurchaseMock).toHaveBeenCalledTimes(1))
+    expect(registerFilamentPurchaseMock.mock.calls[0][0].purchase_channel).toBe('SITE')
   })
 
   it('6. somente um local pode ser selecionado por vez', async () => {

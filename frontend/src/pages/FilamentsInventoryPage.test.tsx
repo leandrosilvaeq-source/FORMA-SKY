@@ -65,6 +65,8 @@ function spoolFixture(overrides: Partial<FilamentSpool> = {}): FilamentSpool {
     updated_at: '',
     initial_gross_weight_grams: null,
     purchase_id: null,
+    purchase_item_id: null,
+    purchase_item_manufacturer: null,
     has_movement_history: false,
     ...overrides,
   }
@@ -270,6 +272,7 @@ describe('FilamentsInventoryPage — listagem consolidada por Material + Linha +
       'Cor',
       'Disponível',
       'Rolos disponíveis',
+      'Estoque mínimo',
       'Situação',
       '',
     ])
@@ -406,6 +409,78 @@ describe('FilamentsInventoryPage — listagem consolidada por Material + Linha +
     expect(
       within(getGroupRow('PLA', 'Sólida', 'Preto')).getByText('Estoque baixo'),
     ).toBeInTheDocument()
+  })
+
+  it('Situação Normal usa badge verde (mesmo padrão de sucesso do sistema), com o texto "Normal"', () => {
+    // Fixture padrão: disponível 500 > mínimo 200 -> normal.
+    mockTypes([typeFixture()])
+    renderPage()
+    const badge = within(getGroupRow('PLA', 'Sólida', 'Preto')).getByText('Normal')
+    expect(badge).toBeInTheDocument()
+    expect(badge.className).toContain('emerald')
+    expect(
+      within(getGroupRow('PLA', 'Sólida', 'Preto')).queryByText('Estoque normal'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('demais situações (Estoque baixo/Sem estoque) preservam rótulo e cor atuais — só Normal mudou', () => {
+    mockTypes([
+      typeFixture({
+        filament_type_id: 'a',
+        commercial_color: 'Preto',
+        minimum_stock_grams: 500,
+        total_available_grams: 300,
+      }),
+      typeFixture({
+        filament_type_id: 'b',
+        commercial_color: 'Azul',
+        minimum_stock_grams: null,
+        total_available_grams: 0,
+      }),
+    ])
+    renderPage()
+    const lowBadge = within(getGroupRow('PLA', 'Sólida', 'Preto')).getByText('Estoque baixo')
+    expect(lowBadge.className).toContain('amber')
+    const emptyBadge = within(getGroupRow('PLA', 'Sólida', 'Azul')).getByText('Sem estoque')
+    expect(emptyBadge.className).toContain('destructive')
+  })
+
+  it('coluna "Estoque mínimo" aparece e formata com ponto de milhar ("1.000 g")', () => {
+    mockTypes([typeFixture({ minimum_stock_grams: 1000 })])
+    renderPage()
+    const headers = within(screen.getByRole('table'))
+      .getAllByRole('columnheader')
+      .map((h) => (h.textContent ?? '').replace(/Redimensionar coluna.*/i, '').trim())
+    expect(headers).toContain('Estoque mínimo')
+    const cells = within(getGroupRow('PLA', 'Sólida', 'Preto')).getAllByRole('cell')
+    expect(cells[5].textContent).toBe('1.000 g')
+  })
+
+  it('coluna "Estoque mínimo" mostra "—" quando o grupo não tem mínimo configurado (nenhum tipo ativo com limite)', () => {
+    mockTypes([typeFixture({ minimum_stock_grams: null })])
+    renderPage()
+    const cells = within(getGroupRow('PLA', 'Sólida', 'Preto')).getAllByRole('cell')
+    expect(cells[5].textContent).toBe('—')
+  })
+
+  it('coluna "Estoque mínimo" considera só tipos ATIVOS do grupo (mesma regra do resumo de "Ver rolos")', () => {
+    mockTypes([
+      typeFixture({
+        filament_type_id: 'a',
+        is_active: true,
+        minimum_stock_grams: null,
+      }),
+      typeFixture({
+        filament_type_id: 'b',
+        is_active: false,
+        minimum_stock_grams: 5000,
+      }),
+    ])
+    renderPage()
+    // O tipo inativo tem mínimo 5000, mas não conta — só o ativo (sem
+    // mínimo) é considerado, então o grupo mostra "—".
+    const cells = within(getGroupRow('PLA', 'Sólida', 'Preto')).getAllByRole('cell')
+    expect(cells[5].textContent).toBe('—')
   })
 
   it('ordena por Material -> Linha -> Cor (rótulo consolidado), nunca por fabricante', () => {
@@ -1436,6 +1511,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     expect(headers).toEqual([
       'Identificador',
       'Fabricante / tipo',
+      'Marca',
       'Peso Líquido',
       'Status',
       'Ajustar peso',
@@ -1444,6 +1520,59 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     const row = within(table).getByText('RL-26-001').closest('tr') as HTMLElement
     const adjustButton = within(row).getByRole('button', { name: 'Ajustar peso do rolo RL-26-001' })
     expect(adjustButton).toHaveTextContent('Ajustar peso')
+  })
+
+  it('coluna "Marca" aparece na tabela de rolos, com o valor derivado do item da compra multi-item (purchase_item_manufacturer)', async () => {
+    mockTypes([typeFixture({ manufacturer: 'National3D' })])
+    mockSpools([spoolFixture({ purchase_item_id: 'pi1', purchase_item_manufacturer: 'Bambu Lab' })])
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const table = getSpoolsTable(dialog)
+    const row = within(table).getByText('RL-26-001').closest('tr') as HTMLElement
+    // A marca do ITEM da compra ("Bambu Lab") aparece — nunca o fabricante
+    // do tipo ("National3D"), mesmo que os dois existam ao mesmo tempo.
+    expect(within(row).getByText('Bambu Lab')).toBeInTheDocument()
+    expect(within(row).queryByText('National3D')).not.toBeInTheDocument()
+  })
+
+  it('rolo antigo (sem purchase_item_id) usa o fabricante histórico do tipo como Marca', async () => {
+    mockTypes([typeFixture({ manufacturer: 'National3D' })])
+    mockSpools([spoolFixture({ purchase_item_id: null, purchase_item_manufacturer: null })])
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const table = getSpoolsTable(dialog)
+    const row = within(table).getByText('RL-26-001').closest('tr') as HTMLElement
+    // A coluna "Marca" (só o fabricante) é distinta de "Fabricante / tipo"
+    // (fabricante + linha + cor combinados) — as duas derivam do MESMO
+    // fabricante histórico do tipo, mas com textos diferentes.
+    expect(within(row).getByText('National3D')).toBeInTheDocument()
+    expect(within(row).getByText('National3D · Sólida · Preto')).toBeInTheDocument()
+  })
+
+  it('rolo sem marca real (fabricante do tipo = "Não informado") mostra "—" na coluna Marca', async () => {
+    mockTypes([typeFixture({ manufacturer: 'Não informado' })])
+    mockSpools([spoolFixture({ purchase_item_id: null, purchase_item_manufacturer: null })])
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const table = getSpoolsTable(dialog)
+    const row = within(table).getByText('RL-26-001').closest('tr') as HTMLElement
+    expect(within(row).getByText('—')).toBeInTheDocument()
+  })
+
+  it('card mobile também mostra "Marca"', async () => {
+    mockTypes([typeFixture({ manufacturer: 'National3D' })])
+    mockSpools([spoolFixture({ purchase_item_id: 'pi1', purchase_item_manufacturer: 'Voolt' })])
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    expect(within(dialog).getByText('Marca: Voolt')).toBeInTheDocument()
   })
 
   it('"Ajustar peso" abre a janela de gerenciamento do rolo certo já com "Ajuste" selecionado', async () => {
@@ -1836,7 +1965,15 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     const lineGroup = screen.getByRole('radiogroup', { name: 'Linha' })
     // Sem campo de texto livre para Linha (só o de Cor, que não muda).
     expect(within(lineGroup).queryByRole('textbox')).not.toBeInTheDocument()
-    for (const option of ['Sólida', 'Silk', 'Matte', 'Velvet', 'Translúcido', 'DuoColor']) {
+    for (const option of [
+      'Sólida',
+      'Silk',
+      'Matte',
+      'Velvet',
+      'Translúcido',
+      'DuoColor',
+      'Tricolor',
+    ]) {
       expect(within(lineGroup).getByRole('radio', { name: option })).toBeInTheDocument()
     }
   })
@@ -1955,7 +2092,15 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
       'aria-checked',
       'true',
     )
-    for (const option of ['Sólida', 'Silk', 'Matte', 'Velvet', 'Translúcido', 'DuoColor']) {
+    for (const option of [
+      'Sólida',
+      'Silk',
+      'Matte',
+      'Velvet',
+      'Translúcido',
+      'DuoColor',
+      'Tricolor',
+    ]) {
       expect(within(lineGroup).getByRole('radio', { name: option })).toHaveAttribute(
         'aria-checked',
         'false',
@@ -2001,6 +2146,100 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1))
     expect(update.mock.calls[0][1]).toMatchObject({ line: 'Matte' })
   })
+
+  it('Tricolor aparece entre as opções de Linha e pode ser selecionada e enviada', async () => {
+    const create = vi.fn().mockResolvedValue(typeFixture())
+    mockTypes([], { create })
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    const lineGroup = screen.getByRole('radiogroup', { name: 'Linha' })
+    expect(within(lineGroup).getByRole('radio', { name: 'Tricolor' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('radio', { name: 'PLA' }))
+    await user.click(within(lineGroup).getByRole('radio', { name: 'Tricolor' }))
+    expect(within(lineGroup).getByRole('radio', { name: 'Tricolor' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    await user.type(screen.getByLabelText('Cor'), 'Vermelho')
+    await user.click(screen.getByRole('button', { name: /^salvar$/i }))
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    // Enviada e preservada com exatamente essa grafia.
+    expect(create.mock.calls[0][0]).toMatchObject({ line: 'Tricolor' })
+  })
+
+  it('Cor sugere valores já cadastrados nos tipos já carregados', async () => {
+    mockTypes([
+      typeFixture({ filament_type_id: 't1', commercial_color: 'Preto' }),
+      typeFixture({ filament_type_id: 't2', commercial_color: 'Dourado' }),
+    ])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.type(screen.getByLabelText('Cor'), 'do')
+
+    expect(await screen.findByRole('option', { name: 'Dourado' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Preto' })).not.toBeInTheDocument()
+  })
+
+  it('sugestões de Cor eliminam duplicações por diferença de maiúsculas/minúsculas e espaços', async () => {
+    mockTypes([
+      typeFixture({ filament_type_id: 't1', commercial_color: 'Preto' }),
+      typeFixture({ filament_type_id: 't2', commercial_color: 'preto' }),
+      typeFixture({ filament_type_id: 't3', commercial_color: ' Preto ' }),
+    ])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.type(screen.getByLabelText('Cor'), 'pre')
+
+    expect(await screen.findAllByRole('option', { name: 'Preto' })).toHaveLength(1)
+  })
+
+  it('busca de sugestão de Cor ignora maiúsculas/minúsculas e acentos', async () => {
+    mockTypes([typeFixture({ filament_type_id: 't1', commercial_color: 'Verde Água' })])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.type(screen.getByLabelText('Cor'), 'AGUA')
+
+    expect(await screen.findByRole('option', { name: 'Verde Água' })).toBeInTheDocument()
+  })
+
+  it('continua permitindo cadastrar uma cor nova, mesmo sem nenhuma sugestão compatível', async () => {
+    const create = vi.fn().mockResolvedValue(typeFixture())
+    mockTypes([typeFixture({ filament_type_id: 't1', commercial_color: 'Preto' })], { create })
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.click(screen.getByRole('radio', { name: 'PLA' }))
+    await user.click(screen.getByRole('radio', { name: 'Sólida' }))
+    await user.type(screen.getByLabelText('Cor'), 'Roxo Fluorescente')
+    expect(screen.queryByRole('option', { name: 'Roxo Fluorescente' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^salvar$/i }))
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    expect(create.mock.calls[0][0]).toMatchObject({ commercial_color: 'Roxo Fluorescente' })
+  })
+
+  it('selecionar uma sugestão de Cor preenche o campo com o valor cadastrado', async () => {
+    mockTypes([typeFixture({ filament_type_id: 't1', commercial_color: 'Dourado' })])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.type(screen.getByLabelText('Cor'), 'dou')
+    await user.click(await screen.findByRole('option', { name: 'Dourado' }))
+
+    expect(screen.getByLabelText('Cor')).toHaveValue('Dourado')
+  })
 })
 
 describe('FilamentsInventoryPage — colunas redimensionáveis e persistidas', () => {
@@ -2016,12 +2255,12 @@ describe('FilamentsInventoryPage — colunas redimensionáveis e persistidas', (
     mockTypes([typeFixture()])
   })
 
-  it('7 colunas viram 7 <col> no colgroup; nenhuma é "manufacturer"/"is_active"', () => {
+  it('8 colunas viram 8 <col> no colgroup; nenhuma é "manufacturer"/"is_active"', () => {
     renderPage()
-    expect(document.querySelectorAll('col')).toHaveLength(7)
+    expect(document.querySelectorAll('col')).toHaveLength(8)
   })
 
-  it('todos os 7 cabeçalhos têm alça de redimensionamento (inclusive "Rolos disponíveis", que carrega o filtro de faixa)', () => {
+  it('todos os 8 cabeçalhos têm alça de redimensionamento (inclusive "Rolos disponíveis", que carrega o filtro de faixa)', () => {
     renderPage()
     for (const label of [
       'Material',
@@ -2029,6 +2268,7 @@ describe('FilamentsInventoryPage — colunas redimensionáveis e persistidas', (
       'Cor',
       'Disponível',
       'Rolos disponíveis',
+      'Estoque mínimo',
       'Situação',
       'Ações',
     ]) {
@@ -2075,7 +2315,7 @@ describe('FilamentsInventoryPage — colunas redimensionáveis e persistidas', (
     })
     render(<FilamentsInventoryPage />, { wrapper: MemoryRouter })
     const cols = document.querySelectorAll('col')
-    expect(cols).toHaveLength(7)
+    expect(cols).toHaveLength(8)
     expect((cols[0] as HTMLElement).style.width).toBe('175px')
     expect((cols[1] as HTMLElement).style.width).toBe('165px')
   })

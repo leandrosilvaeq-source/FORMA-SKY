@@ -91,7 +91,9 @@ export function useFilamentSpools(filamentTypeIds: string | string[]): UseFilame
   // Um rolo recém-criado nunca teve nenhuma movimentação — has_movement_history
   // sempre começa false (afirmação, não suposição: create_filament_spool
   // sempre zera current_net_weight_grams e não grava nenhuma linha em
-  // filament_movements).
+  // filament_movements). Também nunca tem purchase_item_id ("Novo rolo" é
+  // sempre o fluxo manual do drawer, nunca o de compra) — a Marca derivada
+  // começa null, e a interface cai no fabricante histórico do tipo.
   const create = useCallback(
     async (input: CreateSpoolInput) => {
       const targetTypeId = input.filament_type_id ?? singleId
@@ -99,25 +101,34 @@ export function useFilamentSpools(filamentTypeIds: string | string[]): UseFilame
         throw new ApiError('validation', 400, 'Informe o tipo de filamento do novo rolo.')
       }
       const created = await createFilamentSpool({ ...input, filament_type_id: targetTypeId })
-      const withHistory: FilamentSpool = { ...created, has_movement_history: false }
+      const withHistory: FilamentSpool = {
+        ...created,
+        has_movement_history: false,
+        purchase_item_manufacturer: null,
+      }
       setSpools((current) => [withHistory, ...current])
       return withHistory
     },
     [singleId],
   )
 
-  // A resposta de update_filament_spool não inclui has_movement_history
-  // (campo derivado só calculado por listFilamentSpools) — nenhum dos
-  // campos editáveis por esta função (nominal/tara/data/status/notas/
-  // is_active) altera se o rolo tem histórico ou não, então o valor
-  // anterior é sempre preservado aqui, nunca perdido nem recalculado.
+  // A resposta de update_filament_spool não inclui has_movement_history nem
+  // purchase_item_manufacturer (campos derivados só calculados por
+  // listFilamentSpools) — nenhum dos campos editáveis por esta função
+  // (nominal/tara/data/status/notas/is_active) altera se o rolo tem
+  // histórico ou a que item de compra pertence, então os dois valores
+  // anteriores são sempre preservados aqui, nunca perdidos nem recalculados.
   const update = useCallback(async (id: string, input: UpdateFilamentSpoolInput) => {
     const updated = await updateFilamentSpool(id, input)
     let merged: FilamentSpool | undefined
     setSpools((current) =>
       current.map((item) => {
         if (item.id !== id) return item
-        merged = { ...updated, has_movement_history: item.has_movement_history }
+        merged = {
+          ...updated,
+          has_movement_history: item.has_movement_history,
+          purchase_item_manufacturer: item.purchase_item_manufacturer,
+        }
         return merged
       }),
     )

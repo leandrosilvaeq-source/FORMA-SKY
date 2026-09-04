@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   countAvailableSpoolsByType,
+  distinctFilamentColors,
   groupFilamentTypes,
   isFilamentSpoolAvailable,
   matchesFilamentGroupSearch,
@@ -294,5 +295,45 @@ describe('matchesFilamentGroupSearch', () => {
 
   it('não casa termo ausente', () => {
     expect(matchesFilamentGroupSearch(group, 'petg')).toBe(false)
+  })
+})
+
+describe('distinctFilamentColors — sugestões de Cor (2026-09-04)', () => {
+  it('elimina duplicações por diferença de maiúsculas/minúsculas e espaços de borda', () => {
+    const colors = distinctFilamentColors([
+      typeFixture({ commercial_color: 'Preto' }),
+      typeFixture({ commercial_color: 'preto' }),
+      typeFixture({ commercial_color: ' Preto ' }),
+    ])
+    expect(colors).toEqual(['Preto'])
+  })
+
+  it('preserva a grafia mais frequente; empate resolve por ordem alfabética pt-BR', () => {
+    const colors = distinctFilamentColors([
+      typeFixture({ commercial_color: 'preto' }),
+      typeFixture({ commercial_color: 'Preto' }),
+      typeFixture({ commercial_color: 'Preto' }),
+    ])
+    expect(colors).toEqual(['Preto'])
+  })
+
+  it('cores realmente distintas nunca colidem, devolvidas em ordem alfabética pt-BR', () => {
+    const colors = distinctFilamentColors([
+      typeFixture({ commercial_color: 'Dourado' }),
+      typeFixture({ commercial_color: 'Azul' }),
+      typeFixture({ commercial_color: 'Branco' }),
+    ])
+    expect(colors).toEqual(['Azul', 'Branco', 'Dourado'])
+  })
+
+  it('considera tipos ativos e arquivados (uma cor histórica continua uma sugestão válida)', () => {
+    const colors = distinctFilamentColors([
+      typeFixture({ commercial_color: 'Verde', is_active: false }),
+    ])
+    expect(colors).toEqual(['Verde'])
+  })
+
+  it('lista vazia devolve lista vazia', () => {
+    expect(distinctFilamentColors([])).toEqual([])
   })
 })

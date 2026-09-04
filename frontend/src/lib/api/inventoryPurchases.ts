@@ -41,11 +41,14 @@ export async function registerInventoryPurchase(
 }
 
 // Local/canal onde a compra foi feita (2026-09-04, "Local da compra" — janela
-// compacta) — obrigatório, fechado aos 4 valores oficiais (validado de novo
-// no backend, register_filament_purchase, migration
-// 20260904140000_add_purchase_channel_to_filament_purchases.sql). Gravado no
-// cabeçalho (inventory_purchases.purchase_channel), nunca em notes.
-export type PurchaseChannel = 'MERCADO_LIVRE' | 'ALIEXPRESS' | 'SHOPEE' | 'PRESENCIAL'
+// compacta) — obrigatório, fechado aos 6 valores oficiais (validado de novo
+// no backend, register_filament_purchase, migrations
+// 20260904140000_add_purchase_channel_to_filament_purchases.sql e
+// 20260904150000_add_site_outro_purchase_channels.sql, que acrescentou
+// SITE/OUTRO). Gravado no cabeçalho (inventory_purchases.purchase_channel),
+// nunca em notes. Sem campo de texto livre adicional para "Outro".
+export type PurchaseChannel =
+  'MERCADO_LIVRE' | 'ALIEXPRESS' | 'SHOPEE' | 'PRESENCIAL' | 'SITE' | 'OUTRO'
 
 // Compra de filamento com UM OU MAIS itens na mesma compra (2026-09-04,
 // janela "Compra de filamentos" reestruturada) — cada item escolhe um
@@ -70,10 +73,8 @@ export interface RegisterFilamentPurchaseInput {
   notes?: string | null
   idempotency_key?: string
   items: RegisterFilamentPurchaseItemInput[]
-  // Obrigatório (2026-09-04) — a interface sempre envia um dos 4 valores;
-  // opcional aqui só para não travar um chamador direto de API que informe
-  // occurred_at/notes sem ainda ter migrado para a janela nova (o backend
-  // rejeita null/ausente de qualquer forma).
+  // Obrigatório (2026-09-04) — a interface sempre envia um dos 6 valores
+  // oficiais.
   purchase_channel: PurchaseChannel
 }
 

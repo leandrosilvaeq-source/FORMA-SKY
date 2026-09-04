@@ -11,11 +11,16 @@ import { countAvailableSpoolsByType } from '@/lib/inventory/filamentGroups'
 import type { FilamentSpool, FilamentSpoolStatus } from '@/types/domain'
 
 // Resposta crua das duas rotas de escrita (Edge Function -> RPC): nunca
-// inclui `has_movement_history` (campo derivado, calculado só por
-// listFilamentSpools abaixo) — os hooks (useFilamentSpools) são
-// responsáveis por preencher esse campo ao mesclar no estado local (false
-// para um rolo recém-criado; preservado do valor anterior numa edição).
-export type FilamentSpoolWriteResponse = Omit<FilamentSpool, 'has_movement_history'>
+// inclui `has_movement_history` nem `purchase_item_manufacturer` (campos
+// DERIVADOS, calculados só por listFilamentSpools abaixo, a partir de
+// consultas de leitura que a Edge Function de escrita não faz) — os hooks
+// (useFilamentSpools) são responsáveis por preencher os dois ao mesclar no
+// estado local (false/null para um rolo recém-criado; preservados do valor
+// anterior numa edição).
+export type FilamentSpoolWriteResponse = Omit<
+  FilamentSpool,
+  'has_movement_history' | 'purchase_item_manufacturer'
+>
 
 // Rolos de um tipo específico — mais recentes primeiro (mesma ordem que a
 // interface de drill-down por tipo espera exibir).
@@ -37,6 +42,14 @@ export type FilamentSpoolWriteResponse = Omit<FilamentSpool, 'has_movement_histo
 // os tipos — nunca N chamadas (sem N+1). Os dois SELECT já são concedidos a
 // authenticated (RLS is_active_user()), então nenhum contrato novo é
 // necessário.
+// Linha crua devolvida por filament_spools quando o SELECT embute o
+// relacionamento por FK (PostgREST resource embedding) até
+// inventory_purchase_filament_items via purchase_item_id — `null` quando o
+// rolo não tem purchase_item_id (fluxo antigo) ou o item não existe mais.
+type RawSpoolRow = FilamentSpoolWriteResponse & {
+  inventory_purchase_filament_items: { manufacturer: string } | null
+}
+
 export async function listFilamentSpools(
   filamentTypeIds: string | string[],
 ): Promise<FilamentSpool[]> {
@@ -45,7 +58,12 @@ export async function listFilamentSpools(
   const [spoolsResult, movementsResult] = await Promise.all([
     supabase
       .from('filament_spools')
-      .select('*')
+      // Marca (2026-09-04, "Ver rolos"): embute inventory_purchase_filament_items
+      // via a FK filament_spools.purchase_item_id (PostgREST resource
+      // embedding) DENTRO desta mesma consulta — nunca uma consulta por
+      // linha/rolo. Continua sendo exatamente 2 consultas no total (a
+      // segunda, abaixo, é a de filament_movements, já existente).
+      .select('*, inventory_purchase_filament_items(manufacturer)')
       .in('filament_type_id', ids)
       .order('created_at', { ascending: false }),
     supabase.from('filament_movements').select('spool_id').in('filament_type_id', ids),
@@ -57,10 +75,14 @@ export async function listFilamentSpools(
   const spoolIdsWithHistory = new Set(
     (movementsResult.data as Array<{ spool_id: string }>).map((row) => row.spool_id),
   )
-  return (spoolsResult.data as FilamentSpoolWriteResponse[]).map((spool) => ({
-    ...spool,
-    has_movement_history: spoolIdsWithHistory.has(spool.id),
-  }))
+  return (spoolsResult.data as RawSpoolRow[]).map((row) => {
+    const { inventory_purchase_filament_items, ...spool } = row
+    return {
+      ...spool,
+      purchase_item_manufacturer: inventory_purchase_filament_items?.manufacturer?.trim() || null,
+      has_movement_history: spoolIdsWithHistory.has(spool.id),
+    }
+  })
 }
 
 // Contagem de ROLOS DISPONÍVEIS por filament_type_id para a listagem

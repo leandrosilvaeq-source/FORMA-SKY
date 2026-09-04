@@ -5,10 +5,12 @@
 -- register_filament_purchase + inventory_purchase_filament_items. A Seção 8
 -- cobre a migration seguinte da mesma rodada (reorganização compacta da
 -- janela, 20260904140000_add_purchase_channel_to_filament_purchases.sql):
--- purchase_channel obrigatório, fechado aos 4 valores, persistido e
--- comparado pela idempotência — todas as chamadas das Seções 1–5 (já
--- existentes) foram atualizadas para informar p_purchase_channel, já que a
--- RPC passou a exigi-lo.
+-- purchase_channel obrigatório, persistido e comparado pela idempotência —
+-- todas as chamadas das Seções 1–5 (já existentes) foram atualizadas para
+-- informar p_purchase_channel, já que a RPC passou a exigi-lo. O loop 8.3
+-- também cobre a migration seguinte (ajustes finais de Filamentos,
+-- 20260904150000_add_site_outro_purchase_channels.sql): SITE e OUTRO
+-- acrescentados ao enum oficial (agora 6 valores).
 -- =============================================================================
 --
 -- ESTE ARQUIVO NÃO É UMA MIGRATION. Mesmo padrão de
@@ -671,7 +673,7 @@ begin
       then 'PASS' else 'FAIL' end, sqlerrm);
   end;
 
-  -- 8.2: purchase_channel com valor fora dos 4 aceitos é rejeitado.
+  -- 8.2: purchase_channel com valor fora do enum oficial é rejeitado.
   select count(*) into v_purchase_count_before from public.inventory_purchases;
   begin
     perform public.register_filament_purchase(
@@ -681,17 +683,19 @@ begin
       )),
       p_purchase_channel => 'AMAZON'
     );
-    insert into zz_test_results(section, test_name, status, details) values ('8', '8.2 purchase_channel inválido (fora dos 4 valores) rejeitado', 'FAIL', 'não levantou exceção');
+    insert into zz_test_results(section, test_name, status, details) values ('8', '8.2 purchase_channel inválido (fora do enum oficial) rejeitado', 'FAIL', 'não levantou exceção');
   exception when others then
-    insert into zz_test_results(section, test_name, status, details) values ('8', '8.2 purchase_channel inválido (fora dos 4 valores) rejeitado',
+    insert into zz_test_results(section, test_name, status, details) values ('8', '8.2 purchase_channel inválido (fora do enum oficial) rejeitado',
       case when sqlerrm like '%purchase_channel é obrigatório%'
         and (select count(*) from public.inventory_purchases) = v_purchase_count_before
       then 'PASS' else 'FAIL' end, sqlerrm);
   end;
 
-  -- 8.3: os 4 valores oficiais são aceitos e persistidos corretamente, cada
-  -- um numa compra própria (idempotency_key distinta por valor).
-  foreach v_channel in array array['MERCADO_LIVRE', 'ALIEXPRESS', 'SHOPEE', 'PRESENCIAL']
+  -- 8.3: os 6 valores oficiais (MERCADO_LIVRE/ALIEXPRESS/SHOPEE/PRESENCIAL —
+  -- migration 20260904140000 — e SITE/OUTRO — migration 20260904150000) são
+  -- aceitos e persistidos corretamente, cada um numa compra própria
+  -- (idempotency_key distinta por valor).
+  foreach v_channel in array array['MERCADO_LIVRE', 'ALIEXPRESS', 'SHOPEE', 'PRESENCIAL', 'SITE', 'OUTRO']
   loop
     begin
       v_result := public.register_filament_purchase(

@@ -14,7 +14,7 @@ import {
   TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
   TABLE_COMPACT_TEXT_CLASSNAME,
 } from '@/components/dataTable/tableTypography'
-import { StockLevelBadge, getStockLevel } from '@/components/inventory/StockMovementPanel'
+import { getStockLevel, type StockLevel } from '@/components/inventory/StockMovementPanel'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -40,6 +40,7 @@ import { ApiError } from '@/lib/api/errors'
 import { isRemovalPlanChangedError, type FilamentTypeRemovalPlan } from '@/lib/api/filamentTypes'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
 import {
+  distinctFilamentColors,
   groupFilamentTypes,
   matchesFilamentGroupSearch,
   type FilamentGroup,
@@ -75,13 +76,18 @@ const FILAMENTS_TABLE_ID = 'inventory-filaments'
 // ambíguo num grupo com vários tipos) — normalizeColumnWidths descarta as
 // larguras persistidas dessas duas colunas removidas e preserva as demais,
 // sem limpar nenhum outro item do localStorage. 'actions' agora só tem
-// "Ver rolos", por isso é bem mais estreita que antes.
+// "Ver rolos", por isso é bem mais estreita que antes. 'minimumStock'
+// (2026-09-04) — esta listagem consolidada nunca teve um card mobile
+// dedicado (só a <table> com overflow-x-auto, responsiva por rolagem
+// horizontal); a coluna nova aparece nela em qualquer largura de tela,
+// exatamente como as demais.
 const FILAMENTS_COLUMN_SPECS: ColumnWidthSpec[] = [
   { id: 'material', defaultWidth: 110, minWidth: 80, maxWidth: 220 },
   { id: 'line', defaultWidth: 150, minWidth: 90, maxWidth: 320 },
   { id: 'color', defaultWidth: 150, minWidth: 90, maxWidth: 320 },
   { id: 'available', defaultWidth: 140, minWidth: 100, maxWidth: 260 },
   { id: 'spools', defaultWidth: 170, minWidth: 130, maxWidth: 280 },
+  { id: 'minimumStock', defaultWidth: 130, minWidth: 100, maxWidth: 220 },
   { id: 'situation', defaultWidth: 140, minWidth: 100, maxWidth: 250 },
   { id: 'actions', defaultWidth: 140, minWidth: 110, maxWidth: 240 },
 ]
@@ -93,6 +99,44 @@ function toErrorMessage(err: unknown): string {
 
 function formatGrams(value: number): string {
   return `${value.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}g`
+}
+
+// Estoque mínimo (2026-09-04) — padrão brasileiro COM espaço antes de "g"
+// ("500 g"/"1.000 g"/"2.000 g", pedido explícito desta coluna nova) —
+// distinto de formatGrams acima (sem espaço, "500g"), usado pela coluna
+// Disponível já existente, que esta rodada não altera.
+function formatMinimumStockGrams(value: number): string {
+  return `${value.toLocaleString('pt-BR')} g`
+}
+
+// Badge de Situação ESPECÍFICO desta listagem (2026-09-04) — NUNCA o
+// StockLevelBadge compartilhado (StockMovementPanel.tsx), que continua
+// exatamente como está para Acessórios/Embalagens (cinza, "Estoque
+// normal"). getStockLevel (cálculo) é reaproveitado sem nenhuma alteração —
+// só "normal" ganha um texto ("Normal") e cor verdes própria aqui; "low"/
+// "empty" preservam o mesmo rótulo e cor de sempre. Verde = mesmo padrão de
+// sucesso já usado em OrderStatusControl/OrderPaymentStatusControl
+// ('border-emerald-300 bg-emerald-50 text-emerald-800'), nunca uma cor
+// inventada nesta rodada.
+const FILAMENT_STOCK_LEVEL_LABELS: Record<StockLevel, string> = {
+  empty: 'Sem estoque',
+  low: 'Estoque baixo',
+  normal: 'Normal',
+}
+const FILAMENT_STOCK_LEVEL_CLASSNAMES: Record<StockLevel, string> = {
+  empty: 'border-destructive/40 bg-destructive/10 text-destructive',
+  low: 'border-amber-300 bg-amber-50 text-amber-800',
+  normal: 'border-emerald-300 bg-emerald-50 text-emerald-800',
+}
+
+function FilamentStockLevelBadge({ level }: { level: StockLevel }) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${FILAMENT_STOCK_LEVEL_CLASSNAMES[level]}`}
+    >
+      {FILAMENT_STOCK_LEVEL_LABELS[level]}
+    </span>
+  )
 }
 
 // Botão de filtro multisseleção (Material / Linha / Cor) — mesmo padrão
@@ -260,6 +304,10 @@ export function FilamentsInventoryPage() {
     [types, availableCountByTypeId],
   )
   const filterOptions = useMemo(() => filamentFilterOptions(types), [types])
+  // Sugestões de Cor (2026-09-04) para "Novo tipo de filamento"/"Editar tipo
+  // de filamento" — todos os tipos já carregados (ativos e arquivados),
+  // dedupe/canonicalização já feita por distinctFilamentColors.
+  const existingColors = useMemo(() => distinctFilamentColors(types), [types])
   const spoolRangeDisabled = countsError !== null
 
   const openGroup = useMemo(
@@ -755,6 +803,19 @@ export function FilamentsInventoryPage() {
                   </TableHead>
 
                   <ResizableTableHead
+                    columnId="minimumStock"
+                    columnLabel="Estoque mínimo"
+                    className="text-right"
+                    resize={{
+                      width: columnWidths.getWidth('minimumStock'),
+                      onResize: columnWidths.setColumnWidth,
+                      onCommit: columnWidths.commitWidths,
+                      onKeyboardResize: columnWidths.adjustByKeyboard,
+                    }}
+                  >
+                    Estoque mínimo
+                  </ResizableTableHead>
+                  <ResizableTableHead
                     columnId="situation"
                     columnLabel="Situação"
                     resize={{
@@ -799,9 +860,14 @@ export function FilamentsInventoryPage() {
                       <TableCell className="text-right tabular-nums">
                         {group.availableSpoolCount === null ? '—' : group.availableSpoolCount}
                       </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {group.minimumStockGrams !== null
+                          ? formatMinimumStockGrams(group.minimumStockGrams)
+                          : '—'}
+                      </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <StockLevelBadge level={stockLevel} />
+                          <FilamentStockLevelBadge level={stockLevel} />
                           {!group.hasActiveType && (
                             <span className="border-input text-muted-foreground inline-flex items-center rounded-md border px-1.5 py-0.5 text-xs font-medium">
                               Arquivado
@@ -848,6 +914,7 @@ export function FilamentsInventoryPage() {
             submitError={createError}
             onSubmit={(values) => void handleCreateSubmit(values)}
             onCancel={() => setIsCreateDialogOpen(false)}
+            existingColors={existingColors}
           />
         </DialogContent>
       </Dialog>
@@ -875,6 +942,7 @@ export function FilamentsInventoryPage() {
               submitError={editError}
               onSubmit={(values) => void handleEditSubmit(values)}
               onCancel={() => setIsEditDialogOpen(false)}
+              existingColors={existingColors}
             />
           )}
         </DialogContent>

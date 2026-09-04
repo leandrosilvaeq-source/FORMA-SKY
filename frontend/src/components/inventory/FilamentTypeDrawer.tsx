@@ -4,6 +4,7 @@ import { EllipsisIcon, SlidersHorizontalIcon } from 'lucide-react'
 import { FilamentSpoolForm, type FilamentSpoolFormValues } from './FilamentSpoolForm'
 import { FilamentSpoolPanel } from './FilamentSpoolPanel'
 import { StockLevelBadge, getStockLevel } from './StockMovementPanel'
+import { UNSPECIFIED_MANUFACTURER } from './FilamentTypeForm'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import {
@@ -130,6 +131,25 @@ export function FilamentTypeDrawer({
   function spoolManufacturerLabel(spool: FilamentSpool): string {
     const type = typeById.get(spool.filament_type_id)
     return type ? `${type.manufacturer} · ${type.line} · ${type.commercial_color}` : '—'
+  }
+
+  // Marca (2026-09-04) — DISTINTA de "Fabricante / tipo" acima: aquela é
+  // sempre o fabricante do TIPO (mesmo valor para todo rolo do tipo); esta é
+  // a marca REAL desta compra específica, que pode variar rolo a rolo dentro
+  // do mesmo tipo. Fonte, nesta ordem: (1) purchase_item_manufacturer — rolo
+  // nascido da compra multi-item (2026-09-04), derivado de
+  // inventory_purchase_filament_items via purchase_item_id, já calculado em
+  // lote por listFilamentSpools (nunca uma consulta por rolo aqui); (2) na
+  // ausência dele (rolo antigo, sem purchase_item_id), o fabricante
+  // histórico do TIPO — já carregado em typeById, sem nenhuma consulta
+  // extra; (3) "—" quando nenhum dos dois é um valor real (vazio ou o
+  // marcador interno "Não informado"). Nunca grava nada — leitura pura.
+  function spoolMarcaLabel(spool: FilamentSpool): string {
+    const purchaseManufacturer = spool.purchase_item_manufacturer?.trim()
+    if (purchaseManufacturer) return purchaseManufacturer
+    const historical = typeById.get(spool.filament_type_id)?.manufacturer?.trim()
+    if (historical && historical !== UNSPECIFIED_MANUFACTURER) return historical
+    return '—'
   }
 
   const [showArchived, setShowArchived] = useState(false)
@@ -496,20 +516,21 @@ export function FilamentTypeDrawer({
               <Table className="table-fixed text-sm">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="h-auto w-[13%] py-2 whitespace-normal">
+                    <TableHead className="h-auto w-[11%] py-2 whitespace-normal">
                       Identificador
                     </TableHead>
-                    <TableHead className="h-auto w-[19%] py-2 whitespace-normal">
+                    <TableHead className="h-auto w-[17%] py-2 whitespace-normal">
                       Fabricante / tipo
                     </TableHead>
-                    <TableHead className="h-auto w-[15%] py-2 whitespace-normal">
+                    <TableHead className="h-auto w-[12%] py-2 whitespace-normal">Marca</TableHead>
+                    <TableHead className="h-auto w-[13%] py-2 whitespace-normal">
                       Peso Líquido
                     </TableHead>
-                    <TableHead className="h-auto w-[11%] py-2 whitespace-normal">Status</TableHead>
-                    <TableHead className="h-auto w-[18%] py-2 whitespace-normal">
+                    <TableHead className="h-auto w-[10%] py-2 whitespace-normal">Status</TableHead>
+                    <TableHead className="h-auto w-[16%] py-2 whitespace-normal">
                       Ajustar peso
                     </TableHead>
-                    <TableHead className="h-auto w-[24%] py-2 text-right whitespace-normal">
+                    <TableHead className="h-auto w-[21%] py-2 text-right whitespace-normal">
                       Ações
                     </TableHead>
                   </TableRow>
@@ -525,6 +546,9 @@ export function FilamentTypeDrawer({
                       </TableCell>
                       <TableCell className="truncate" title={spoolManufacturerLabel(spool)}>
                         {spoolManufacturerLabel(spool)}
+                      </TableCell>
+                      <TableCell className="truncate" title={spoolMarcaLabel(spool)}>
+                        {spoolMarcaLabel(spool)}
                       </TableCell>
                       <TableCell className="tabular-nums">
                         {formatGrams(spool.current_net_weight_grams)}
@@ -560,6 +584,7 @@ export function FilamentTypeDrawer({
                     </div>
                     <div className="text-muted-foreground grid grid-cols-1 gap-1 text-xs">
                       <span>Fabricante / tipo: {spoolManufacturerLabel(spool)}</span>
+                      <span>Marca: {spoolMarcaLabel(spool)}</span>
                       <span>Peso Líquido: {formatGrams(spool.current_net_weight_grams)}</span>
                       <span>Status: {spool.status}</span>
                       <span>

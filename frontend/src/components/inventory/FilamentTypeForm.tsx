@@ -1,10 +1,12 @@
 import { useState, type FormEvent } from 'react'
+import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { Button } from '@/components/ui/button'
 import { DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { parseNumberField } from '@/lib/forms/numberField'
+import { normalizeForSearch } from '@/lib/forms/textSearch'
 import { cn } from '@/lib/utils'
 import type { FilamentMaterial } from '@/types/domain'
 
@@ -17,7 +19,10 @@ const MATERIAL_OPTIONS: FilamentMaterial[] = ['PLA', 'PETG', 'TPU']
 // ainda assim nunca um enum travado no BANCO (filament_types.line continua
 // texto livre, sem CHECK): um registro histórico com uma linha fora desta
 // lista nunca é apagado/convertido em silêncio (ver historicalLine abaixo).
-const LINE_OPTIONS = ['Sólida', 'Silk', 'Matte', 'Velvet', 'Translúcido', 'DuoColor']
+// "Tricolor" acrescentada em 2026-09-04 (ajustes finais de Filamentos) —
+// enviada e preservada com exatamente essa grafia, mesmo tratamento das
+// demais opções.
+const LINE_OPTIONS = ['Sólida', 'Silk', 'Matte', 'Velvet', 'Translúcido', 'DuoColor', 'Tricolor']
 
 // Fabricante saiu da janela "Novo tipo de filamento" (decisão revisada do
 // usuário, 2026-09-01): no modo CREATE o formulário não exibe nem exige o
@@ -66,6 +71,12 @@ interface FilamentTypeFormProps {
   submitError: string | null
   onSubmit: (values: FilamentTypeFormValues) => void
   onCancel: () => void
+  // Cores já cadastradas em outros tipos (2026-09-04, sugestões do campo
+  // Cor) — já deduplicadas/canonicalizadas pelo chamador
+  // (distinctFilamentColors, mesma regra de dedupe da listagem consolidada).
+  // Opcional: um chamador que ainda não carregou tipo nenhum passa a lista
+  // vazia (nenhuma sugestão, campo continua um texto livre normal).
+  existingColors?: string[]
 }
 
 export function FilamentTypeForm({
@@ -76,6 +87,7 @@ export function FilamentTypeForm({
   submitError,
   onSubmit,
   onCancel,
+  existingColors = [],
 }: FilamentTypeFormProps) {
   const [material, setMaterial] = useState<FilamentMaterial | null>(initialValues?.material ?? null)
   const [manufacturer, setManufacturer] = useState(initialValues?.manufacturer ?? '')
@@ -91,6 +103,18 @@ export function FilamentTypeForm({
   const historicalLine =
     initialValues?.line && !LINE_OPTIONS.includes(initialValues.line) ? initialValues.line : null
   const lineOptions = historicalLine ? [...LINE_OPTIONS, historicalLine] : LINE_OPTIONS
+
+  // Sugestões de Cor (2026-09-04) — filtradas pelo texto já digitado, caixa/
+  // acento-insensível (mesma normalizeForSearch usada em todo o projeto).
+  // SearchAutocomplete não filtra sozinho (só decide COMO exibir/navegar a
+  // lista já filtrada) — o filtro é feito aqui, sem nenhuma requisição nova
+  // (existingColors já veio pronto do chamador).
+  const normalizedColorTerm = normalizeForSearch(commercialColor)
+  const colorSuggestions = (
+    normalizedColorTerm
+      ? existingColors.filter((color) => normalizeForSearch(color).includes(normalizedColorTerm))
+      : existingColors
+  ).map((color) => ({ id: color, label: color }))
   const [minimumStockGrams, setMinimumStockGrams] = useState(
     initialValues?.minimum_stock_grams != null ? String(initialValues.minimum_stock_grams) : '',
   )
@@ -218,16 +242,23 @@ export function FilamentTypeForm({
 
       <div className="flex flex-col gap-2">
         <Label htmlFor={`${idPrefix}-commercial-color`}>Cor</Label>
-        <Input
-          id={`${idPrefix}-commercial-color`}
+        <SearchAutocomplete
           value={commercialColor}
-          onChange={(event) => {
-            setCommercialColor(event.target.value)
+          onValueChange={(value) => {
+            setCommercialColor(value)
             setFieldErrors((current) => ({ ...current, commercial_color: '' }))
           }}
-          disabled={isSubmitting}
-          aria-invalid={fieldErrors.commercial_color ? true : undefined}
-          className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
+          suggestions={colorSuggestions}
+          onSelect={(label) => {
+            setCommercialColor(label)
+            setFieldErrors((current) => ({ ...current, commercial_color: '' }))
+          }}
+          ariaLabel="Cor"
+          placeholder="Ex.: Preto"
+          clearLabel="Limpar cor"
+          listboxId={`${idPrefix}-commercial-color-listbox`}
+          listboxAriaLabel="Cores já cadastradas"
+          noResultsText="Nenhuma cor cadastrada com esse nome — continue digitando para cadastrar uma cor nova."
         />
         {fieldErrors.commercial_color && (
           <p className="text-destructive text-sm">{fieldErrors.commercial_color}</p>

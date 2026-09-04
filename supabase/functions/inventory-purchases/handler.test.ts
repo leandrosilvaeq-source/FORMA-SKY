@@ -624,11 +624,13 @@ Deno.test("validateRegisterFilamentPurchasePayload preserva idempotency_key e no
 // migration 20260904140000_add_purchase_channel_to_filament_purchases.sql)
 // ---------------------------------------------------------------------------
 
-Deno.test("requirePurchaseChannel aceita os 4 valores oficiais", () => {
+Deno.test("requirePurchaseChannel aceita os 6 valores oficiais (SITE/OUTRO acrescentados em 2026-09-04)", () => {
   assertEquals(requirePurchaseChannel("MERCADO_LIVRE"), "MERCADO_LIVRE");
   assertEquals(requirePurchaseChannel("ALIEXPRESS"), "ALIEXPRESS");
   assertEquals(requirePurchaseChannel("SHOPEE"), "SHOPEE");
   assertEquals(requirePurchaseChannel("PRESENCIAL"), "PRESENCIAL");
+  assertEquals(requirePurchaseChannel("SITE"), "SITE");
+  assertEquals(requirePurchaseChannel("OUTRO"), "OUTRO");
 });
 
 Deno.test("requirePurchaseChannel rejeita valor ausente/desconhecido", () => {

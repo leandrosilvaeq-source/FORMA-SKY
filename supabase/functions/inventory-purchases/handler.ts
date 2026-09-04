@@ -345,7 +345,17 @@ async function handleRegisterInventoryPurchase(req: Request): Promise<Response> 
 //   é o local/canal da compra — obrigatório, fechado aos 4 valores oficiais.
 // ---------------------------------------------------------------------------
 
-const PURCHASE_CHANNELS = ["MERCADO_LIVRE", "ALIEXPRESS", "SHOPEE", "PRESENCIAL"] as const;
+// SITE/OUTRO acrescentados em 2026-09-04 (migration
+// 20260904150000_add_site_outro_purchase_channels.sql) — sem campo de texto
+// livre adicional para "Outro" nesta rodada.
+const PURCHASE_CHANNELS = [
+  "MERCADO_LIVRE",
+  "ALIEXPRESS",
+  "SHOPEE",
+  "PRESENCIAL",
+  "SITE",
+  "OUTRO",
+] as const;
 
 const FILAMENT_PURCHASE_KEYS = [
   "freight_value",

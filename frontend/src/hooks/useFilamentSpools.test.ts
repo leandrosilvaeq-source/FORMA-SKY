@@ -38,18 +38,24 @@ const spool = {
   created_at: '',
   updated_at: '',
   has_movement_history: false,
+  purchase_item_manufacturer: null,
 }
 
 const otherSpool = { ...spool, id: 's2', code: 'RL-26-002' }
 
 // A resposta crua de createFilamentSpool/updateFilamentSpool (Edge
-// Function -> RPC) nunca inclui has_movement_history — só listFilamentSpools
-// o calcula. Os mocks abaixo devolvem exatamente essa forma (sem o campo),
+// Function -> RPC) nunca inclui has_movement_history NEM
+// purchase_item_manufacturer — só listFilamentSpools os calcula (o segundo,
+// a partir do JOIN embutido que só a leitura direta via supabase-js faz).
+// Os mocks abaixo devolvem exatamente essa forma (sem os dois campos),
 // mesma forma real (FilamentSpoolWriteResponse), para provar que o HOOK (não
-// a API) é quem preenche o campo ao mesclar no estado local.
-function rawWriteResponse<T extends { has_movement_history?: boolean }>(fixture: T) {
+// a API) é quem os preenche ao mesclar no estado local.
+function rawWriteResponse<
+  T extends { has_movement_history?: boolean; purchase_item_manufacturer?: string | null },
+>(fixture: T) {
   const clone: Partial<T> = { ...fixture }
   delete clone.has_movement_history
+  delete clone.purchase_item_manufacturer
   return clone
 }
 
@@ -134,6 +140,23 @@ describe('useFilamentSpools', () => {
     })
 
     expect(result.current.spools).toEqual([{ ...spoolWithHistory, status: 'DESCARTADO' }])
+  })
+
+  it('update() PRESERVES purchase_item_manufacturer from the prior local value (the write response never carries it, Marca não muda por edição de cadastro)', async () => {
+    const spoolWithBrand = { ...spool, purchase_item_manufacturer: 'Bambu Lab' }
+    listFilamentSpoolsMock.mockResolvedValue([spoolWithBrand])
+    updateFilamentSpoolMock.mockResolvedValue(
+      rawWriteResponse({ ...spoolWithBrand, status: 'ABERTO' as const }),
+    )
+
+    const { result } = renderHook(() => useFilamentSpools('t1'))
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    await act(async () => {
+      await result.current.update('s1', { status: 'ABERTO' })
+    })
+
+    expect(result.current.spools[0].purchase_item_manufacturer).toBe('Bambu Lab')
   })
 
   it('update() propagates an ApiError without changing the list (ex.: descarte é terminal)', async () => {
