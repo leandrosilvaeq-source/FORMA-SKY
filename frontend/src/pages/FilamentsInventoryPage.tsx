@@ -29,6 +29,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { TableHead } from '@/components/ui/table'
 import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table'
 import { useAuth } from '@/context/AuthContext'
@@ -205,6 +206,11 @@ export function FilamentsInventoryPage() {
   const [filters, setFilters] = useState<FilamentGroupFilterState>(EMPTY_FILAMENT_GROUP_FILTERS)
   const [minSpoolsInput, setMinSpoolsInput] = useState('')
   const [maxSpoolsInput, setMaxSpoolsInput] = useState('')
+  // Desligado por padrão: a listagem operacional só mostra grupos com ao
+  // menos um tipo ATIVO. Ligando, grupos totalmente arquivados também
+  // aparecem (com selo "Arquivado"), ainda com "Ver rolos" acessível para
+  // consultar o histórico preservado. Não altera nenhum resumo/contagem.
+  const [showArchivedTypes, setShowArchivedTypes] = useState(false)
 
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
@@ -265,10 +271,15 @@ export function FilamentsInventoryPage() {
 
   const visibleGroups = useMemo(() => {
     const term = normalizeForSearch(searchTerm)
-    return filterFilamentGroups(groups, filters).filter((group) =>
-      matchesFilamentGroupSearch(group, term),
-    )
-  }, [groups, filters, searchTerm])
+    return filterFilamentGroups(groups, filters)
+      .filter((group) => group.hasActiveType || showArchivedTypes)
+      .filter((group) => matchesFilamentGroupSearch(group, term))
+  }, [groups, filters, searchTerm, showArchivedTypes])
+
+  const archivedTypeGroupCount = useMemo(
+    () => groups.filter((group) => !group.hasActiveType).length,
+    [groups],
+  )
 
   const activeFilterCount = filamentGroupFilterCount(filters)
 
@@ -371,6 +382,16 @@ export function FilamentsInventoryPage() {
     }
   }
 
+  // Heurística da interface para escolher a variante da confirmação: um tipo
+  // com rolos (total_spool_count > 0) sempre cairá no arquivamento no
+  // backend. Um tipo sem rolos PODE ainda ter outras referências (compras,
+  // composição legada, seleção em pedido finalizado) que o front não
+  // carrega — nesse caso a confirmação mostra a variante "permanente" mas o
+  // backend arquiva mesmo assim e o toast reflete o resultado real
+  // (ARCHIVED). O backend é sempre autoritativo; a interface nunca força
+  // uma exclusão física.
+  const deletingTypeHasInventory = (deletingType?.total_spool_count ?? 0) > 0
+
   function openDeleteDialog(type: FilamentTypeSummary) {
     setDeletingType(type)
     setDeleteError(null)
@@ -382,8 +403,16 @@ export function FilamentsInventoryPage() {
     setIsDeleting(true)
     setDeleteError(null)
     try {
-      await deleteType(deletingType.filament_type_id)
-      toast.success('Tipo de filamento excluído.')
+      const outcome = await deleteType(deletingType.filament_type_id)
+      if (outcome.result === 'PHYSICALLY_DELETED') {
+        toast.success('Tipo de filamento excluído.')
+      } else {
+        toast.success('Tipo removido do estoque. Histórico preservado.')
+        // O tipo e todos os seus rolos foram inativados na mesma transação
+        // no backend — recarrega tipos e contagens para refletir os
+        // agregados corretos (e o grupo sai da listagem operacional).
+        refetchAll()
+      }
       setIsDeleteDialogOpen(false)
     } catch (err) {
       setDeleteError(toErrorMessage(err))
@@ -461,6 +490,26 @@ export function FilamentsInventoryPage() {
               Limpar filtros ({activeFilterCount})
             </Button>
           )}
+
+          {/* "Mostrar tipos arquivados" — desligado por padrão; próximo dos
+              filtros; funciona em desktop e mobile. NÃO é o "Mostrar
+              arquivados" dos rolos (aquele fica dentro da janela "Ver
+              rolos" e controla rolos, não tipos). */}
+          <div className="ml-auto flex items-center gap-1.5 text-sm">
+            <label className="flex w-fit items-center gap-2">
+              <Switch
+                checked={showArchivedTypes}
+                onCheckedChange={(checked) => setShowArchivedTypes(checked === true)}
+                className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
+              />
+              Mostrar tipos arquivados
+            </label>
+            {archivedTypeGroupCount > 0 && (
+              <span className="text-muted-foreground" aria-hidden="true">
+                ({archivedTypeGroupCount})
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -708,7 +757,14 @@ export function FilamentsInventoryPage() {
                         {group.availableSpoolCount === null ? '—' : group.availableSpoolCount}
                       </TableCell>
                       <TableCell>
-                        <StockLevelBadge level={stockLevel} />
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <StockLevelBadge level={stockLevel} />
+                          {!group.hasActiveType && (
+                            <span className="border-input text-muted-foreground inline-flex items-center rounded-md border px-1.5 py-0.5 text-xs font-medium">
+                              Arquivado
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-nowrap items-center gap-1.5">
@@ -828,10 +884,22 @@ export function FilamentsInventoryPage() {
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Excluir tipo de filamento</DialogTitle>
+            {/* Variante A (sem rolos): exclusão física permanente. Variante
+                B (com rolos): arquivamento do tipo e dos rolos, histórico
+                preservado — sem a palavra "permanente". O backend é
+                autoritativo: se o tipo tiver outras referências (compras,
+                composição, pedido finalizado) ele arquiva de qualquer
+                forma e o toast reflete o que de fato aconteceu. Pedido
+                ATIVO => o backend bloqueia e a mensagem real aparece
+                abaixo. */}
+            <DialogTitle>
+              {deletingTypeHasInventory ? 'Remover tipo do estoque' : 'Excluir tipo de filamento'}
+            </DialogTitle>
             <DialogDescription>
               {deletingType &&
-                `Tem certeza que deseja excluir "${deletingType.manufacturer} — ${deletingType.commercial_color}"? Esta ação é permanente. Só é possível quando não há rolo nem composição de produto vinculados.`}
+                (deletingTypeHasInventory
+                  ? `"${deletingType.manufacturer} — ${deletingType.commercial_color}" possui rolos. O tipo e todos os seus rolos serão retirados do estoque ativo, mas históricos e movimentações serão preservados.`
+                  : `Tem certeza que deseja excluir "${deletingType.manufacturer} — ${deletingType.commercial_color}"? Esta exclusão é permanente e não poderá ser desfeita.`)}
             </DialogDescription>
           </DialogHeader>
           {deleteError && (
@@ -849,14 +917,25 @@ export function FilamentsInventoryPage() {
             >
               Cancelar
             </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={() => void handleConfirmDelete()}
-              disabled={isDeleting}
-            >
-              {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
-            </Button>
+            {deletingTypeHasInventory ? (
+              <Button
+                type="button"
+                onClick={() => void handleConfirmDelete()}
+                disabled={isDeleting}
+                className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark"
+              >
+                {isDeleting ? 'Removendo...' : 'Remover do estoque'}
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => void handleConfirmDelete()}
+                disabled={isDeleting}
+              >
+                {isDeleting ? 'Excluindo...' : 'Excluir definitivamente'}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

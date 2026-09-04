@@ -231,6 +231,17 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
     "FILAMENT_TYPE_HAS_COMPOSITION:",
     (message) => new BusinessRuleError(message.replace(/^FILAMENT_TYPE_HAS_COMPOSITION:\s*/, "")),
   ],
+  // remove_filament_type (migration 20260903120000): bloqueio quando o tipo
+  // está selecionado em pedido cujo status NÃO é terminal (DELIVERED/
+  // CANCELLED). Marcador estável próprio — 409 com o prefixo removido da
+  // mensagem exibida. FILAMENT_TYPE_HAS_SPOOLS:/FILAMENT_TYPE_HAS_COMPOSITION:
+  // deixaram de ser levantados (a nova regra arquiva em vez de recusar),
+  // mas os padrões acima continuam aqui por segurança para bancos ainda não
+  // migrados.
+  [
+    "FILAMENT_TYPE_IN_ACTIVE_ORDER:",
+    (message) => new BusinessRuleError(message.replace(/^FILAMENT_TYPE_IN_ACTIVE_ORDER:\s*/, "")),
+  ],
   [
     "FILAMENT_SPOOL_HAS_MOVEMENTS:",
     (message) => new BusinessRuleError(message.replace(/^FILAMENT_SPOOL_HAS_MOVEMENTS:\s*/, "")),

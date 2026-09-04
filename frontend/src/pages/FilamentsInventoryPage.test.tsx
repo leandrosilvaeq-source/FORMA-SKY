@@ -88,7 +88,9 @@ function mockTypes(
     refetch: overrides.refetch ?? vi.fn(),
     create: overrides.create ?? vi.fn().mockResolvedValue(typeFixture()),
     update: overrides.update ?? vi.fn().mockResolvedValue(typeFixture()),
-    delete: overrides.delete ?? vi.fn().mockResolvedValue(undefined),
+    delete:
+      overrides.delete ??
+      vi.fn().mockResolvedValue({ success: true, result: 'ARCHIVED', archived_spool_count: 0 }),
   })
 }
 
@@ -844,7 +846,9 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
   })
 
   it('grupo com mais de um tipo histórico: cada conjunto de botões age só no seu filament_type_id', async () => {
-    const deleteType = vi.fn().mockResolvedValue(undefined)
+    const deleteType = vi
+      .fn()
+      .mockResolvedValue({ success: true, result: 'ARCHIVED', archived_spool_count: 1 })
     mockTypes(
       [
         typeFixture({ filament_type_id: 'a', manufacturer: 'Voolt3D' }),
@@ -864,8 +868,9 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     expect(within(voolt).getByText('Voolt3D')).toBeInTheDocument()
     expect(within(national).getByText('National3D')).toBeInTheDocument()
 
+    // typeFixture tem total_spool_count > 0 -> variante "Remover do estoque".
     await user.click(within(national).getByRole('button', { name: 'Excluir tipo' }))
-    await user.click(await screen.findByRole('button', { name: /^excluir definitivamente$/i }))
+    await user.click(await screen.findByRole('button', { name: /^remover do estoque$/i }))
 
     await waitFor(() => expect(deleteType).toHaveBeenCalledWith('b'))
     expect(deleteType).toHaveBeenCalledTimes(1)
@@ -938,12 +943,16 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/Azul'])
   })
 
-  it('exclusão de um tipo bloqueada por rolo vinculado mostra o erro real do backend dentro do diálogo', async () => {
+  it('remoção de um tipo bloqueada por pedido ativo mostra o erro real do backend dentro do diálogo', async () => {
     const { ApiError } = await import('@/lib/api/errors')
     const deleteType = vi
       .fn()
       .mockRejectedValue(
-        new ApiError('business_rule', 409, 'Este tipo de filamento possui rolo(s) cadastrado(s).'),
+        new ApiError(
+          'business_rule',
+          409,
+          'Este tipo de filamento está sendo utilizado por pedido(s) ativo(s) e não pode ser removido. Pedido(s): FS-26-010.',
+        ),
       )
     mockTypes([typeFixture()], { delete: deleteType })
     renderPage()
@@ -954,10 +963,12 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
       name: /Ações do tipo Voolt3D — Preto/i,
     })
     await user.click(within(typeActions).getByRole('button', { name: 'Excluir tipo' }))
-    await user.click(await screen.findByRole('button', { name: /^excluir definitivamente$/i }))
+    await user.click(await screen.findByRole('button', { name: /^remover do estoque$/i }))
 
     expect(
-      await screen.findByText('Este tipo de filamento possui rolo(s) cadastrado(s).'),
+      await screen.findByText(
+        'Este tipo de filamento está sendo utilizado por pedido(s) ativo(s) e não pode ser removido. Pedido(s): FS-26-010.',
+      ),
     ).toBeInTheDocument()
   })
 
@@ -1824,5 +1835,198 @@ describe('FilamentsInventoryPage — colunas redimensionáveis e persistidas', (
   it('a tabela continua num contêiner overflow-x-auto', () => {
     renderPage()
     expect(screen.getByRole('table').closest('.overflow-x-auto')).toBeInTheDocument()
+  })
+})
+
+describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+    refetchCountsMock.mockReset()
+    mockSpools([])
+    mockMovements()
+    mockSpoolCounts()
+  })
+
+  it('tipo SEM rolos: confirmação de exclusão PERMANENTE (botão "Excluir definitivamente"), sem "Desative o tipo"', async () => {
+    const deleteType = vi
+      .fn()
+      .mockResolvedValue({ success: true, result: 'PHYSICALLY_DELETED', archived_spool_count: 0 })
+    mockTypes(
+      [typeFixture({ filament_type_id: 'a', manufacturer: 'Voolt3D', total_spool_count: 0 })],
+      {
+        delete: deleteType,
+      },
+    )
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo Voolt3D — Preto/i,
+    })
+    await user.click(within(typeActions).getByRole('button', { name: 'Excluir tipo' }))
+
+    const confirm = await screen.findByRole('dialog', { name: 'Excluir tipo de filamento' })
+    expect(within(confirm).getByText(/permanente e não poderá ser desfeita/i)).toBeInTheDocument()
+    expect(within(confirm).queryByText(/Desative o tipo/i)).not.toBeInTheDocument()
+    await user.click(within(confirm).getByRole('button', { name: /^excluir definitivamente$/i }))
+
+    await waitFor(() => expect(deleteType).toHaveBeenCalledWith('a'))
+    expect(toastMock.success).toHaveBeenCalledWith('Tipo de filamento excluído.')
+  })
+
+  it('tipo COM rolos: confirmação de ARQUIVAMENTO ("Remover tipo do estoque"), fala em preservar histórico, sem "permanente", botão "Remover do estoque"', async () => {
+    const refetch = vi.fn()
+    const deleteType = vi
+      .fn()
+      .mockResolvedValue({ success: true, result: 'ARCHIVED', archived_spool_count: 2 })
+    mockTypes(
+      [typeFixture({ filament_type_id: 'a', manufacturer: 'Voolt3D', total_spool_count: 2 })],
+      { delete: deleteType, refetch },
+    )
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo Voolt3D — Preto/i,
+    })
+    await user.click(within(typeActions).getByRole('button', { name: 'Excluir tipo' }))
+
+    const confirm = await screen.findByRole('dialog', { name: 'Remover tipo do estoque' })
+    expect(
+      within(confirm).getByText(
+        /retirados do estoque ativo, mas históricos e movimentações serão preservados/i,
+      ),
+    ).toBeInTheDocument()
+    expect(within(confirm).queryByText(/permanente/i)).not.toBeInTheDocument()
+    expect(within(confirm).queryByText(/Desative o tipo/i)).not.toBeInTheDocument()
+
+    await user.click(within(confirm).getByRole('button', { name: /^remover do estoque$/i }))
+
+    await waitFor(() => expect(deleteType).toHaveBeenCalledWith('a'))
+    expect(toastMock.success).toHaveBeenCalledWith(
+      'Tipo removido do estoque. Histórico preservado.',
+    )
+    // Recarrega tipos + contagem para refletir tipo/rolos arquivados no backend.
+    expect(refetch).toHaveBeenCalled()
+    expect(refetchCountsMock).toHaveBeenCalled()
+  })
+
+  it('após ARCHIVED, a listagem se atualiza — o grupo só-arquivado some da listagem padrão', async () => {
+    const activeTypes = [
+      typeFixture({ filament_type_id: 'a', manufacturer: 'Voolt3D', total_spool_count: 1 }),
+    ]
+    const archivedTypes = [
+      typeFixture({
+        filament_type_id: 'a',
+        manufacturer: 'Voolt3D',
+        is_active: false,
+        total_spool_count: 1,
+      }),
+    ]
+    const deleteType = vi.fn().mockImplementation(async () => {
+      useFilamentTypesMock.mockReturnValue({
+        types: archivedTypes,
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+        create: vi.fn(),
+        update: vi.fn(),
+        delete: deleteType,
+      })
+      return { success: true, result: 'ARCHIVED', archived_spool_count: 1 }
+    })
+    useFilamentTypesMock.mockReturnValue({
+      types: activeTypes,
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: deleteType,
+    })
+    renderPage()
+    const user = userEvent.setup()
+
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/Preto'])
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo Voolt3D — Preto/i,
+    })
+    await user.click(within(typeActions).getByRole('button', { name: 'Excluir tipo' }))
+    await user.click(await screen.findByRole('button', { name: /^remover do estoque$/i }))
+
+    // O grupo só-arquivado some da listagem operacional padrão.
+    await waitFor(() =>
+      expect(
+        screen.getByText('Nenhum resultado para a busca e os filtros atuais.'),
+      ).toBeInTheDocument(),
+    )
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  })
+
+  it('tipo arquivado fica oculto por padrão; "Mostrar tipos arquivados" o revela com selo "Arquivado" e "Ver rolos" acessível', async () => {
+    mockTypes([
+      typeFixture({
+        filament_type_id: 'a',
+        manufacturer: 'Voolt3D',
+        commercial_color: 'Preto',
+        is_active: false,
+        total_spool_count: 1,
+        usable_spool_count: 0,
+        total_available_grams: 0,
+      }),
+    ])
+    renderPage()
+    const user = userEvent.setup()
+
+    // Oculto por padrão.
+    expect(
+      screen.getByText('Nenhum resultado para a busca e os filtros atuais.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('switch', { name: 'Mostrar tipos arquivados' }))
+
+    const row = getGroupRow('PLA', 'Sólida', 'Preto')
+    expect(within(row).getByText('Arquivado')).toBeInTheDocument()
+    // Não conta como disponibilidade: 0g e 0 rolos.
+    const cells = within(row).getAllByRole('cell')
+    expect(cells[3].textContent).toBe('0g')
+    // "Ver rolos" continua acessível para consultar o histórico preservado.
+    expect(within(row).getByRole('button', { name: /^ver rolos/i })).toBeInTheDocument()
+  })
+
+  it('"Excluir tipo" fica desabilitado num tipo já arquivado — não repete a remoção', async () => {
+    mockTypes([
+      typeFixture({
+        filament_type_id: 'a',
+        manufacturer: 'Voolt3D',
+        commercial_color: 'Preto',
+        is_active: false,
+        total_spool_count: 1,
+      }),
+    ])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('switch', { name: 'Mostrar tipos arquivados' }))
+    const row = getGroupRow('PLA', 'Sólida', 'Preto')
+    const dialog = await openDrawer(user, row)
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo Voolt3D — Preto/i,
+    })
+    expect(within(typeActions).getByRole('button', { name: 'Excluir tipo' })).toBeDisabled()
+  })
+
+  it('o controle "Mostrar tipos arquivados" começa desligado e é um switch próximo dos filtros (não confundir com "Mostrar arquivados" dos rolos)', () => {
+    mockTypes([typeFixture()])
+    renderPage()
+    const toggle = screen.getByRole('switch', { name: 'Mostrar tipos arquivados' })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    // O "Mostrar arquivados" (rolos) NÃO aparece na página — só dentro da janela "Ver rolos".
+    expect(screen.queryByRole('switch', { name: 'Mostrar arquivados' })).not.toBeInTheDocument()
   })
 })

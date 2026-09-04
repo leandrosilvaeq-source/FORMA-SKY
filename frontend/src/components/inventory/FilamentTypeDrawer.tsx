@@ -422,7 +422,12 @@ export function FilamentTypeDrawer({
           >
             {type.is_active ? 'Desativar tipo' : 'Ativar tipo'}
           </Button>
-          <Button variant="destructive" size="sm" onClick={() => onDeleteType(type)}>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={!type.is_active}
+            onClick={() => onDeleteType(type)}
+          >
             Excluir tipo
           </Button>
         </div>

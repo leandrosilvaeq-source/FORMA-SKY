@@ -4,8 +4,8 @@
 // (supabase/migrations/20260827100000_create_filament_types_table.sql,
 // 20260827110000_create_filament_movements_table.sql) — mesmo padrão de
 // accessories.ts/packaging.ts. Escrita (criar/editar/ativar-desativar/
-// excluir): Edge Function `filament-types` (ainda NÃO publicada — só roda
-// localmente nesta rodada).
+// remover): Edge Function `filament-types` (publicada e operacional para
+// POST/PATCH/DELETE).
 
 import { mapSupabaseError } from './errors'
 import { supabase } from '@/lib/supabase'
@@ -64,13 +64,27 @@ export async function createFilamentType(input: CreateFilamentTypeInput): Promis
 }
 
 // PATCH /filament-types/:id -> update_filament_type.
-export async function updateFilamentType(id: string, input: UpdateFilamentTypeInput): Promise<FilamentType> {
+export async function updateFilamentType(
+  id: string,
+  input: UpdateFilamentTypeInput,
+): Promise<FilamentType> {
   return callEdgeFunction<FilamentType>('filament-types', `/${id}`, 'PATCH', input)
 }
 
-// DELETE /filament-types/:id -> delete_filament_type (exclusão protegida —
-// bloqueia com erro de negócio quando há rolo ou composição de produto
-// vinculados; nunca cascateia).
-export async function deleteFilamentType(id: string): Promise<{ success: true }> {
-  return callEdgeFunction<{ success: true }>('filament-types', `/${id}`, 'DELETE')
+// DELETE /filament-types/:id -> remove_filament_type (remoção segura
+// transacional): sem nenhuma referência -> exclusão física definitiva
+// (result 'PHYSICALLY_DELETED'); com qualquer referência (rolos,
+// movimentações, compras, composição legada, seleção em pedido
+// finalizado/cancelado) -> arquiva o tipo e TODOS os seus rolos na mesma
+// transação (result 'ARCHIVED', com a contagem de rolos arquivados);
+// pedido ATIVO usando o tipo -> bloqueio (ApiError business_rule, mensagem
+// real do backend). Nunca cascateia, nunca apaga histórico/movimentações.
+export interface RemoveFilamentTypeResult {
+  success: true
+  result: 'PHYSICALLY_DELETED' | 'ARCHIVED'
+  archived_spool_count: number
+}
+
+export async function deleteFilamentType(id: string): Promise<RemoveFilamentTypeResult> {
+  return callEdgeFunction<RemoveFilamentTypeResult>('filament-types', `/${id}`, 'DELETE')
 }

@@ -235,3 +235,54 @@ Deno.test("handleRequest devolve 404 para rota com mais de um segmento", async (
   const res = await handleRequest(makeRequest("GET", "/algum-id/extra"));
   assertEquals(res.status, 404);
 });
+
+// ---------------------------------------------------------------------------
+// normalizeRemoveFilamentTypeResult — normalização do jsonb de
+// remove_filament_type devolvido pela RPC (migration 20260903120000).
+// ---------------------------------------------------------------------------
+
+import { normalizeRemoveFilamentTypeResult } from "./handler.ts";
+
+Deno.test("normalizeRemoveFilamentTypeResult repassa PHYSICALLY_DELETED com contagem 0", () => {
+  assertEquals(
+    normalizeRemoveFilamentTypeResult({ result: "PHYSICALLY_DELETED", archived_spool_count: 0 }),
+    { result: "PHYSICALLY_DELETED", archived_spool_count: 0 },
+  );
+});
+
+Deno.test("normalizeRemoveFilamentTypeResult repassa ARCHIVED com a contagem de rolos arquivados", () => {
+  assertEquals(
+    normalizeRemoveFilamentTypeResult({ result: "ARCHIVED", archived_spool_count: 3 }),
+    { result: "ARCHIVED", archived_spool_count: 3 },
+  );
+});
+
+Deno.test("normalizeRemoveFilamentTypeResult trata shape inesperado como ARCHIVED / 0 (defesa em profundidade)", () => {
+  assertEquals(normalizeRemoveFilamentTypeResult(null), { result: "ARCHIVED", archived_spool_count: 0 });
+  assertEquals(normalizeRemoveFilamentTypeResult("nope"), { result: "ARCHIVED", archived_spool_count: 0 });
+  assertEquals(normalizeRemoveFilamentTypeResult({}), { result: "ARCHIVED", archived_spool_count: 0 });
+  assertEquals(
+    normalizeRemoveFilamentTypeResult({ result: "SOMETHING_ELSE", archived_spool_count: "x" }),
+    { result: "ARCHIVED", archived_spool_count: 0 },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// handleRequest — rota DELETE (offline: só o caminho que não exige banco).
+// As regras que dependem do banco (PHYSICALLY_DELETED / ARCHIVED / bloqueio
+// por pedido ativo / mensagem real) são cobertas por
+// supabase/tests/remove_filament_type_test.sql.
+// ---------------------------------------------------------------------------
+
+Deno.test("handleRequest rejeita DELETE /filament-types/:id sem Authorization com 401 (auth antes do banco)", async () => {
+  const res = await handleRequest(
+    makeRequest("DELETE", "/123e4567-e89b-42d3-a456-426614174000"),
+  );
+  assertEquals(res.status, 401);
+});
+
+Deno.test("handleRequest aceita DELETE como método válido em /filament-types/:id (não cai no 405)", async () => {
+  const res = await handleRequest(makeRequest("DELETE", "/123e4567-e89b-42d3-a456-426614174000"));
+  // Sem sessão -> 401; o que importa é NÃO ser 405 (método não permitido).
+  assertEquals(res.status === 405, false);
+});

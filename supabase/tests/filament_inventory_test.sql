@@ -564,14 +564,21 @@ begin
   select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
   select value::uuid into v_type_id from zz_fixtures where key = 'type_id';
   begin
-    -- type_id tem rolos vinculados — exclusão física deve ser bloqueada.
+    -- ATUALIZADO (migration 20260903120000): delete_filament_type agora
+    -- DELEGA a remove_filament_type — um tipo com rolos vinculados NÃO é
+    -- mais recusado com FILAMENT_TYPE_HAS_SPOOLS:, ele é ARQUIVADO (o tipo
+    -- e todos os seus rolos) na mesma transação. Regra completa em
+    -- supabase/tests/remove_filament_type_test.sql.
     perform public.delete_filament_type(v_type_id, v_user_id);
     insert into zz_test_results(section, test_name, status, details)
-      values ('5', '5.2 tipo com rolo(s) vinculado(s) não pode ser excluído fisicamente', 'FAIL', 'não levantou exceção');
+      values ('5', '5.2 tipo com rolo(s) vinculado(s): arquivado (não recusado)',
+        case when (select not is_active from public.filament_types where id = v_type_id)
+             then 'PASS' else 'FAIL' end,
+        'delete_filament_type delega a remove_filament_type -> ARCHIVED');
   exception when others then
     insert into zz_test_results(section, test_name, status, details)
-      values ('5', '5.2 tipo com rolo(s) vinculado(s) não pode ser excluído',
-        case when sqlerrm like 'FILAMENT_TYPE_HAS_SPOOLS:%' then 'PASS' else 'FAIL' end, sqlerrm);
+      values ('5', '5.2 tipo com rolo(s) vinculado(s): arquivado (não recusado)', 'FAIL',
+        'esperava arquivamento, veio exceção: ' || sqlerrm);
   end;
 end $$;
 
@@ -977,13 +984,20 @@ begin
     perform public.set_product_filaments(
       v_product_id, jsonb_build_array(jsonb_build_object('id', v_type_id, 'theoretical_weight_grams', 35.5)), v_user_id
     );
+    -- ATUALIZADO (migration 20260903120000): um tipo com composição legada
+    -- de produto (ou rolos) não é mais recusado — é ARQUIVADO pela nova
+    -- regra unificada (remove_filament_type, para a qual delete_filament_type
+    -- delega). A composição/rolos são preservados, só inativados.
     perform public.delete_filament_type(v_type_id, v_user_id);
     insert into zz_test_results(section, test_name, status, details)
-      values ('8', '8.5 tipo vinculado à composição de um produto não pode ser excluído', 'FAIL', 'não levantou exceção');
+      values ('8', '8.5 tipo vinculado à composição de um produto: arquivado (não recusado)',
+        case when (select not is_active from public.filament_types where id = v_type_id)
+             then 'PASS' else 'FAIL' end,
+        'delete_filament_type delega a remove_filament_type -> ARCHIVED');
   exception when others then
     insert into zz_test_results(section, test_name, status, details)
-      values ('8', '8.5 tipo vinculado à composição de um produto não pode ser excluído',
-        case when sqlerrm like 'FILAMENT_TYPE_HAS_COMPOSITION:%' or sqlerrm like 'FILAMENT_TYPE_HAS_SPOOLS:%' then 'PASS' else 'FAIL' end, sqlerrm);
+      values ('8', '8.5 tipo vinculado à composição de um produto: arquivado (não recusado)', 'FAIL',
+        'esperava arquivamento, veio exceção: ' || sqlerrm);
   end;
 end $$;
 

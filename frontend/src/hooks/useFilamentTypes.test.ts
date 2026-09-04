@@ -2,14 +2,17 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/errors'
 
-const { listFilamentTypeSummariesMock, createFilamentTypeMock, updateFilamentTypeMock, deleteFilamentTypeMock } = vi.hoisted(
-  () => ({
-    listFilamentTypeSummariesMock: vi.fn(),
-    createFilamentTypeMock: vi.fn(),
-    updateFilamentTypeMock: vi.fn(),
-    deleteFilamentTypeMock: vi.fn(),
-  }),
-)
+const {
+  listFilamentTypeSummariesMock,
+  createFilamentTypeMock,
+  updateFilamentTypeMock,
+  deleteFilamentTypeMock,
+} = vi.hoisted(() => ({
+  listFilamentTypeSummariesMock: vi.fn(),
+  createFilamentTypeMock: vi.fn(),
+  updateFilamentTypeMock: vi.fn(),
+  deleteFilamentTypeMock: vi.fn(),
+}))
 
 vi.mock('@/lib/api/filamentTypes', () => ({
   listFilamentTypeSummaries: listFilamentTypeSummariesMock,
@@ -85,10 +88,19 @@ describe('useFilamentTypes', () => {
 
     let created
     await act(async () => {
-      created = await result.current.create({ material: 'PLA', manufacturer: 'Voolt3D', line: 'Sólida', commercial_color: 'Preto' })
+      created = await result.current.create({
+        material: 'PLA',
+        manufacturer: 'Voolt3D',
+        line: 'Sólida',
+        commercial_color: 'Preto',
+      })
     })
 
-    expect(created).toMatchObject({ filament_type_id: 't1', total_available_grams: 0, usable_spool_count: 0 })
+    expect(created).toMatchObject({
+      filament_type_id: 't1',
+      total_available_grams: 0,
+      usable_spool_count: 0,
+    })
     expect(result.current.types.map((t) => t.filament_type_id)).toContain('t1')
     expect(listFilamentTypeSummariesMock).toHaveBeenCalledTimes(1)
   })
@@ -131,28 +143,62 @@ describe('useFilamentTypes', () => {
     const { result } = renderHook(() => useFilamentTypes())
     await waitFor(() => expect(result.current.isLoading).toBe(false))
 
-    await expect(act(async () => result.current.update('t1', { material: 'ABS' as never }))).rejects.toBeInstanceOf(ApiError)
+    await expect(
+      act(async () => result.current.update('t1', { material: 'ABS' as never })),
+    ).rejects.toBeInstanceOf(ApiError)
     expect(result.current.types).toEqual([summary])
   })
 
-  it('delete() removes only the matching type from the local array', async () => {
+  it('delete() -> PHYSICALLY_DELETED remove só o tipo correspondente do array local', async () => {
     listFilamentTypeSummariesMock.mockResolvedValue([summary, otherSummary])
-    deleteFilamentTypeMock.mockResolvedValue({ success: true })
+    deleteFilamentTypeMock.mockResolvedValue({
+      success: true,
+      result: 'PHYSICALLY_DELETED',
+      archived_spool_count: 0,
+    })
 
     const { result } = renderHook(() => useFilamentTypes())
     await waitFor(() => expect(result.current.isLoading).toBe(false))
 
+    let outcome: Awaited<ReturnType<typeof result.current.delete>> | undefined
     await act(async () => {
-      await result.current.delete('t1')
+      outcome = await result.current.delete('t1')
     })
 
     expect(result.current.types).toEqual([otherSummary])
+    expect(outcome).toMatchObject({ result: 'PHYSICALLY_DELETED' })
   })
 
-  it('delete() blocked (spool linked) keeps the type in the local array', async () => {
+  it('delete() -> ARCHIVED mantém o tipo no array, mas marcado como inativo, e devolve o resultado', async () => {
+    listFilamentTypeSummariesMock.mockResolvedValue([summary, otherSummary])
+    deleteFilamentTypeMock.mockResolvedValue({
+      success: true,
+      result: 'ARCHIVED',
+      archived_spool_count: 3,
+    })
+
+    const { result } = renderHook(() => useFilamentTypes())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    let outcome: Awaited<ReturnType<typeof result.current.delete>> | undefined
+    await act(async () => {
+      outcome = await result.current.delete('t1')
+    })
+
+    expect(result.current.types).toHaveLength(2)
+    expect(result.current.types.find((t) => t.filament_type_id === 't1')?.is_active).toBe(false)
+    expect(result.current.types.find((t) => t.filament_type_id === 't2')?.is_active).toBe(true)
+    expect(outcome).toMatchObject({ result: 'ARCHIVED', archived_spool_count: 3 })
+  })
+
+  it('delete() bloqueado (pedido ativo) mantém o tipo no array local', async () => {
     listFilamentTypeSummariesMock.mockResolvedValue([summary])
     deleteFilamentTypeMock.mockRejectedValue(
-      new ApiError('business_rule', 409, 'Este tipo de filamento possui rolo(s) cadastrado(s).'),
+      new ApiError(
+        'business_rule',
+        409,
+        'Este tipo de filamento está sendo utilizado por pedido(s) ativo(s) e não pode ser removido. Pedido(s): FS-26-010.',
+      ),
     )
 
     const { result } = renderHook(() => useFilamentTypes())

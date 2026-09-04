@@ -102,6 +102,12 @@ export interface FilamentGroup {
   // Fabricantes presentes no grupo — únicos, ordenados. Continua visível em
   // "Ver rolos" e em cada rolo; só sai da listagem principal.
   manufacturers: string[]
+  // true quando ao menos um tipo do grupo está ativo. Um grupo com TODOS os
+  // tipos arquivados (is_active=false) não aparece na listagem operacional
+  // padrão — só com "Mostrar tipos arquivados" ligado, e com selo
+  // "Arquivado". Não confundir com o "Mostrar arquivados" dos ROLOS dentro
+  // da janela "Ver rolos".
+  hasActiveType: boolean
   // Tipos (filament_type_id) que compõem o grupo — usados por "Ver rolos"
   // para carregar os rolos de TODOS eles numa única consulta.
   filamentTypeIds: string[]
@@ -159,6 +165,7 @@ export function groupFilamentTypes(
       manufacturers: [...new Set(groupTypes.map((type) => type.manufacturer))].sort((a, b) =>
         PT_BR_COLLATOR.compare(a, b),
       ),
+      hasActiveType: groupTypes.some((type) => type.is_active),
       filamentTypeIds: groupTypes.map((type) => type.filament_type_id),
       types: groupTypes,
     })

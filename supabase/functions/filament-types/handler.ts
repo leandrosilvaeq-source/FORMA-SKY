@@ -5,7 +5,12 @@
 // Rotas:
 //   POST   /filament-types       -> RPC create_filament_type
 //   PATCH  /filament-types/:id   -> RPC update_filament_type (edição e/ou ativar/desativar)
-//   DELETE /filament-types/:id   -> RPC delete_filament_type (exclusão protegida)
+//   DELETE /filament-types/:id   -> RPC remove_filament_type (remoção segura transacional:
+//                                   exclusão física sem referência; arquivamento atômico
+//                                   do tipo + rolos com qualquer referência; bloqueio por
+//                                   pedido ativo — FILAMENT_TYPE_IN_ACTIVE_ORDER:).
+//                                   Resposta { result: 'PHYSICALLY_DELETED' | 'ARCHIVED',
+//                                   archived_spool_count: number }.
 //
 // As 3 RPCs são security definer com EXECUTE concedido só a service_role
 // (supabase/migrations/20260827100000_create_filament_types_table.sql) —
@@ -227,8 +232,31 @@ async function handleUpdateFilamentType(req: Request, filamentTypeId: string): P
 }
 
 // ---------------------------------------------------------------------------
-// DELETE /filament-types/:id -> delete_filament_type(p_filament_type_id, p_changed_by)
+// DELETE /filament-types/:id -> remove_filament_type(p_filament_type_id, p_changed_by)
+//
+// Remoção segura transacional (migration 20260903120000): sem nenhuma
+// referência -> exclusão física; com qualquer referência -> arquiva o tipo
+// e todos os seus rolos na mesma transação; pedido ATIVO usando o tipo ->
+// bloqueio (FILAMENT_TYPE_IN_ACTIVE_ORDER:, mapeado para 409 com a mensagem
+// real). A RPC devolve jsonb { result, archived_spool_count } — repassado
+// ao frontend para escolher entre "excluído" e "removido do estoque".
 // ---------------------------------------------------------------------------
+// A RPC remove_filament_type devolve jsonb { result: 'PHYSICALLY_DELETED' |
+// 'ARCHIVED', archived_spool_count: number }. Normaliza para a interface
+// sem confiar cegamente no shape (defesa em profundidade): qualquer coisa
+// que não seja explicitamente PHYSICALLY_DELETED é tratada como ARCHIVED, e
+// archived_spool_count só é repassado quando vem como número.
+export function normalizeRemoveFilamentTypeResult(
+  data: unknown,
+): { result: "PHYSICALLY_DELETED" | "ARCHIVED"; archived_spool_count: number } {
+  const obj = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  return {
+    result: obj.result === "PHYSICALLY_DELETED" ? "PHYSICALLY_DELETED" : "ARCHIVED",
+    archived_spool_count:
+      typeof obj.archived_spool_count === "number" ? obj.archived_spool_count : 0,
+  };
+}
+
 async function handleDeleteFilamentType(req: Request, filamentTypeId: string): Promise<Response> {
   const operator = await resolveOperator(req);
 
@@ -237,12 +265,14 @@ async function handleDeleteFilamentType(req: Request, filamentTypeId: string): P
   }
 
   const admin = getAdminClient();
-  const { error } = await admin.rpc("delete_filament_type", {
+  const { data, error } = await admin.rpc("remove_filament_type", {
     p_filament_type_id: filamentTypeId,
     p_changed_by: operator.userId,
   });
 
   if (error) throw mapPgError(error);
 
-  return jsonResponse(req, { success: true }, 200);
+  const normalized = normalizeRemoveFilamentTypeResult(data);
+
+  return jsonResponse(req, { success: true, ...normalized }, 200);
 }

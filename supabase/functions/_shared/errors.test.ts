@@ -296,3 +296,41 @@ Deno.test("mapPgError mantém accessories.id não encontrado e ACCESSORY_IN_USE:
   assertEquals(inUse instanceof BusinessRuleError, true);
   assertEquals(inUse.message.includes("ACCESSORY_IN_USE"), false);
 });
+
+// -----------------------------------------------------------------------------
+// remove_filament_type (migration 20260903120000) — FILAMENT_TYPE_IN_ACTIVE_ORDER:
+// -----------------------------------------------------------------------------
+
+Deno.test("mapPgError mapeia FILAMENT_TYPE_IN_ACTIVE_ORDER: para BusinessRuleError (409) e remove o marcador da mensagem", () => {
+  const err = mapPgError({
+    code: "P0001",
+    message:
+      "FILAMENT_TYPE_IN_ACTIVE_ORDER: Este tipo de filamento está sendo utilizado por pedido(s) ativo(s) e não pode ser removido. Pedido(s): FS-26-010, FS-26-011.",
+  });
+  if (!(err instanceof BusinessRuleError)) {
+    throw new Error(`esperado BusinessRuleError, obtido ${err.constructor.name}`);
+  }
+  assertEquals(err.status, 409);
+  assertEquals(err.message.includes("FILAMENT_TYPE_IN_ACTIVE_ORDER"), false);
+  assertEquals(
+    err.message.startsWith("Este tipo de filamento está sendo utilizado por pedido(s) ativo(s)"),
+    true,
+  );
+  // O número do pedido continua na mensagem exibida (sem UUID).
+  assertEquals(err.message.includes("FS-26-010"), true);
+});
+
+Deno.test("mapPgError mantém FILAMENT_TYPE_HAS_SPOOLS:/HAS_COMPOSITION: mapeados (regressão — bancos ainda não migrados)", () => {
+  const spools = mapPgError({
+    code: "P0001",
+    message: "FILAMENT_TYPE_HAS_SPOOLS: Este tipo de filamento possui rolo(s) cadastrado(s) e não pode ser excluído. Desative o tipo.",
+  });
+  const composition = mapPgError({
+    code: "P0001",
+    message: "FILAMENT_TYPE_HAS_COMPOSITION: Este tipo de filamento está vinculado à composição de um produto e não pode ser excluído. Desative o tipo.",
+  });
+  assertEquals(spools instanceof BusinessRuleError, true);
+  assertEquals(composition instanceof BusinessRuleError, true);
+  assertEquals(spools.message.includes("FILAMENT_TYPE_HAS_SPOOLS"), false);
+  assertEquals(composition.message.includes("FILAMENT_TYPE_HAS_COMPOSITION"), false);
+});
