@@ -27,6 +27,22 @@
 -- linhas, nenhum produto "TESTE%" persistido). A Seção 6 original continha
 -- um bug de asserção (não de banco) — corrigido nesta mesma rodada, ver nota
 -- na própria seção.
+--
+-- CORREÇÃO DE FIXTURE (2026-09-04, achado real na primeira execução remota
+-- deste arquivo depois da migration 20260903120000/20260903130000): a Seção
+-- 5.2 passou a ARQUIVAR de verdade a fixture compartilhada `type_id`
+-- (delete_filament_type agora delega a remove_filament_type — regra
+-- revisada, ver supabase/tests/remove_filament_type_test.sql). As Seções
+-- 5.3, 7 e 8 reaproveitavam esse mesmo `type_id` esperando que continuasse
+-- ativo (para criar rolo novo, pesar, compor produto) e passaram a falhar
+-- em cascata com "não encontrado ou inativo" — um problema de DESENHO DA
+-- FIXTURE, não da aplicação. Corrigido introduzindo dois tipos ativos
+-- dedicados, nunca reaproveitados de `type_id` e nunca reativados:
+-- `active_type_id` (Seção 5.2b — usado por 5.3/7/8.1/8.4, permanece ativo a
+-- vida toda do script) e `composition_type_id` (Seção 8.4b — usado só pela
+-- 8.5, que o arquiva como parte da própria asserção, exatamente como a 5.2
+-- faz com `type_id`). Nenhuma função/migration/regra de negócio foi
+-- alterada; nenhuma asserção existente foi enfraquecida ou virou SKIP.
 
 begin;
 
@@ -582,6 +598,35 @@ begin
   end;
 end $$;
 
+-- CORREÇÃO DE FIXTURE (2026-09-04, rodada de publicação controlada):
+-- `type_id` acabou de ser ARQUIVADO pela 5.2 acima (delete_filament_type ->
+-- remove_filament_type, migration 20260903120000) — reaproveitá-lo para
+-- criar rolo NOVO faria create_filament_spool recusar por tipo inativo
+-- ("não encontrado ou inativo"), uma falha em cascata que não representa
+-- defeito nenhum da aplicação. `type_id` NUNCA é reativado (a asserção da
+-- 5.2 continua provando o arquivamento real) — em vez disso, um tipo ATIVO
+-- independente e dedicado é criado aqui, para as Seções 5.3/7/8, que nunca
+-- é arquivado/desativado por nenhuma seção deste arquivo.
+do $$
+declare
+  v_user_id uuid;
+  v_type_id uuid;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  begin
+    v_type_id := (public.create_filament_type(
+      'PLA', 'TESTE FIT Marca Ativa', 'Sólida', 'TESTE Verde', null, null, true, null, v_user_id
+    )).id;
+    insert into zz_fixtures(key, value) values ('active_type_id', v_type_id::text)
+      on conflict (key) do update set value = excluded.value;
+    insert into zz_test_results(section, test_name, status, details)
+      values ('5', '5.2b setup: tipo ativo independente (active_type_id) para as Seções 5.3/7/8 — nunca arquivado por nenhuma seção', 'PASS', 'type_id=' || v_type_id);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('5', '5.2b setup: tipo ativo independente (active_type_id)', 'FAIL', sqlerrm);
+  end;
+end $$;
+
 do $$
 declare
   v_user_id uuid;
@@ -590,7 +635,7 @@ declare
   v_row public.filament_spools;
 begin
   select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
-  select value::uuid into v_type_id from zz_fixtures where key = 'type_id';
+  select value::uuid into v_type_id from zz_fixtures where key = 'active_type_id';
   begin
     v_spool_id := (public.create_filament_spool(v_type_id, 500, null, null, null, null, true, v_user_id)).id;
     perform public.delete_filament_spool(v_spool_id, v_user_id);
@@ -702,7 +747,9 @@ declare
   v_spool_no_tare_id uuid;
 begin
   select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
-  select value::uuid into v_type_id from zz_fixtures where key = 'type_id';
+  -- CORREÇÃO DE FIXTURE (2026-09-04): `type_id` já está arquivado desde a
+  -- 5.2 — usa o tipo ativo independente criado na 5.2b, nunca arquivado.
+  select value::uuid into v_type_id from zz_fixtures where key = 'active_type_id';
   begin
     v_spool_tare_id := (public.create_filament_spool(v_type_id, 1000, 200, null, null, null, true, v_user_id)).id;
     v_spool_no_tare_id := (public.create_filament_spool(v_type_id, 1000, null, null, null, null, true, v_user_id)).id;
@@ -892,7 +939,9 @@ declare
 begin
   select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
   select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
-  select value::uuid into v_type_id from zz_fixtures where key = 'type_id';
+  -- CORREÇÃO DE FIXTURE (2026-09-04): `type_id` já está arquivado desde a
+  -- 5.2 — usa o tipo ativo independente criado na 5.2b, nunca arquivado.
+  select value::uuid into v_type_id from zz_fixtures where key = 'active_type_id';
   begin
     perform public.set_product_filaments(
       v_product_id,
@@ -958,7 +1007,9 @@ declare
 begin
   select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
   select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
-  select value::uuid into v_type_id from zz_fixtures where key = 'type_id';
+  -- CORREÇÃO DE FIXTURE (2026-09-04): `type_id` já está arquivado desde a
+  -- 5.2 — usa o tipo ativo independente criado na 5.2b, nunca arquivado.
+  select value::uuid into v_type_id from zz_fixtures where key = 'active_type_id';
   begin
     perform public.set_product_filaments(
       v_product_id, jsonb_build_array(jsonb_build_object('id', v_type_id, 'theoretical_weight_grams', 0)), v_user_id
@@ -971,6 +1022,12 @@ begin
   end;
 end $$;
 
+-- CORREÇÃO DE FIXTURE (2026-09-04): a 8.5 abaixo arquiva o SEU PRÓPRIO tipo
+-- como parte da asserção (mesmo padrão da 5.2) — precisa de um tipo
+-- dedicado, nunca reutilizado depois. Criar e compor aqui, num setup
+-- próprio (mesma granularidade de 6.0/7.0/8.0), evita reaproveitar
+-- `active_type_id` (que fica ativo e reutilizável por qualquer seção futura
+-- sem risco de colisão com este arquivamento definitivo).
 do $$
 declare
   v_user_id uuid;
@@ -979,11 +1036,31 @@ declare
 begin
   select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
   select value::uuid into v_product_id from zz_fixtures where key = 'product_id';
-  select value::uuid into v_type_id from zz_fixtures where key = 'type_id';
   begin
+    v_type_id := (public.create_filament_type(
+      'PLA', 'TESTE FIT Marca Composicao', 'Sólida', 'TESTE Vinho', null, null, true, null, v_user_id
+    )).id;
     perform public.set_product_filaments(
       v_product_id, jsonb_build_array(jsonb_build_object('id', v_type_id, 'theoretical_weight_grams', 35.5)), v_user_id
     );
+    insert into zz_fixtures(key, value) values ('composition_type_id', v_type_id::text)
+      on conflict (key) do update set value = excluded.value;
+    insert into zz_test_results(section, test_name, status, details)
+      values ('8', '8.4b setup: tipo dedicado com composição (composition_type_id) para a 8.5', 'PASS', 'type_id=' || v_type_id);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('8', '8.4b setup: tipo dedicado com composição (composition_type_id)', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+do $$
+declare
+  v_user_id uuid;
+  v_type_id uuid;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_type_id from zz_fixtures where key = 'composition_type_id';
+  begin
     -- ATUALIZADO (migration 20260903120000): um tipo com composição legada
     -- de produto (ou rolos) não é mais recusado — é ARQUIVADO pela nova
     -- regra unificada (remove_filament_type, para a qual delete_filament_type
