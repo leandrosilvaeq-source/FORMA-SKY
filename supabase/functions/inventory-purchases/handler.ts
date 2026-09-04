@@ -17,13 +17,16 @@
 // Validação estrutural (payload) vive aqui: category dentro do enum
 // conhecido, quantity como inteiro positivo, item_value/freight_value como
 // número não-negativo, e os campos específicos de cada categoria (item_id
-// para ACCESSORY/PACKAGING; material/marca/acabamento/cor/peso nominal/
-// pesos brutos para FILAMENT) — tudo que não depende de ler o banco. Regras
-// que dependem do banco (item realmente existe e está ativo, tipo de
-// filamento já existe ou precisa ser criado, tipo inativo correspondente,
-// idempotency_key já usada) continuam exclusivas da RPC, mesmo critério já
-// usado em accessories/handler.ts, stock-movements/handler.ts e
-// filament-spools/handler.ts.
+// para ACCESSORY/PACKAGING; para FILAMENT, OU filament_type_id — caminho
+// novo, 2026-09-04, tipo já cadastrado escolhido na interface — OU
+// material/manufacturer/line/commercial_color — caminho legado de find-or-
+// create por nome, preservado para compatibilidade, nunca os dois juntos —
+// além de peso nominal/pesos brutos, sempre exigidos) — tudo que não
+// depende de ler o banco. Regras que dependem do banco (item realmente
+// existe e está ativo, tipo de filamento existe/está ativo, tipo inativo
+// correspondente, idempotency_key já usada) continuam exclusivas da RPC,
+// mesmo critério já usado em accessories/handler.ts,
+// stock-movements/handler.ts e filament-spools/handler.ts.
 
 import { handlePreflight } from "../_shared/cors.ts";
 import { jsonResponse, errorResponse } from "../_shared/http.ts";
@@ -54,7 +57,11 @@ const PURCHASE_KEYS = [
   "idempotency_key",
   // ACCESSORY / PACKAGING
   "item_id",
-  // FILAMENT
+  // FILAMENT — caminho novo (2026-09-04): tipo já cadastrado, escolhido na
+  // interface. Nunca usado junto dos 4 campos legados abaixo.
+  "filament_type_id",
+  // FILAMENT — caminho legado (find-or-create por nome), preservado para
+  // compatibilidade com qualquer chamador que não informe filament_type_id.
   "material",
   "manufacturer",
   "line",
@@ -184,7 +191,8 @@ export function requireGrossWeightsGrams(value: unknown, quantity: number, nomin
 // POST /inventory-purchases -> register_inventory_purchase(p_category,
 //   p_quantity, p_item_value, p_freight_value, p_changed_by, p_occurred_at,
 //   p_notes, p_idempotency_key, p_item_id, p_material, p_manufacturer,
-//   p_line, p_commercial_color, p_nominal_weight_grams, p_gross_weights_grams)
+//   p_line, p_commercial_color, p_nominal_weight_grams, p_gross_weights_grams,
+//   p_filament_type_id)
 // ---------------------------------------------------------------------------
 export function validateRegisterInventoryPurchasePayload(body: Record<string, unknown>): Record<string, unknown> {
   rejectUnknownKeys(body, PURCHASE_KEYS, "corpo da requisição");
@@ -234,12 +242,38 @@ export function validateRegisterInventoryPurchasePayload(body: Record<string, un
     throw new ValidationError("Campo não aplicável à categoria FILAMENT: item_id.");
   }
 
+  // Caminho novo (2026-09-04): a interface escolhe um filament_type_id já
+  // cadastrado — nunca os 4 campos legados de identidade (material/
+  // manufacturer/line/commercial_color) junto dele. nominal_weight_grams e
+  // gross_weights_grams continuam sempre exigidos nos dois caminhos (são
+  // propriedades do ROLO comprado, não da identidade do tipo).
+  const legacyIdentityKeys = ["material", "manufacturer", "line", "commercial_color"] as const;
+  const hasFilamentTypeId = body.filament_type_id !== undefined;
+  const presentLegacyKeys = legacyIdentityKeys.filter((key) => body[key] !== undefined);
+
+  if (hasFilamentTypeId && presentLegacyKeys.length > 0) {
+    throw new ValidationError(
+      `Campo(s) não aplicável(is) quando filament_type_id é informado: ${presentLegacyKeys.join(", ")}.`,
+    );
+  }
+
+  const nominalWeightGrams = requireNumber(body.nominal_weight_grams, "nominal_weight_grams", { min: 0.01 });
+  const grossWeightsGrams = requireGrossWeightsGrams(body.gross_weights_grams, quantity, nominalWeightGrams);
+
+  if (hasFilamentTypeId) {
+    return {
+      ...common,
+      p_filament_type_id: requireUuid(body.filament_type_id, "filament_type_id"),
+      p_nominal_weight_grams: nominalWeightGrams,
+      p_gross_weights_grams: grossWeightsGrams,
+    };
+  }
+
+  // Caminho legado (find-or-create por nome), preservado para compatibilidade.
   const material = requireFilamentMaterial(body.material);
   const manufacturer = requireTrimmedString(body.manufacturer, "manufacturer");
   const line = requireTrimmedString(body.line, "line");
   const commercialColor = requireTrimmedString(body.commercial_color, "commercial_color");
-  const nominalWeightGrams = requireNumber(body.nominal_weight_grams, "nominal_weight_grams", { min: 0.01 });
-  const grossWeightsGrams = requireGrossWeightsGrams(body.gross_weights_grams, quantity, nominalWeightGrams);
 
   return {
     ...common,

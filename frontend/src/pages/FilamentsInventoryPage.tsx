@@ -493,7 +493,7 @@ export function FilamentsInventoryPage() {
             }}
             className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark shrink-0"
           >
-            Novo tipo de filamento
+            Cadastrar novo tipo
           </Button>
         </div>
 

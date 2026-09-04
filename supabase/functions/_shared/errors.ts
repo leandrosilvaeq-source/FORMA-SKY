@@ -292,6 +292,11 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
   ["register_inventory_purchase: p_item_id é obrigatório", (message) => new ValidationError(message)],
   ["register_inventory_purchase: informe exatamente", (message) => new ValidationError(message)],
   ["register_inventory_purchase: peso bruto do rolo", (message) => new ValidationError(message)],
+  // register_inventory_purchase (migration 20260904120000, revisão do fluxo
+  // de Filamentos): filament_type_id e os 4 campos legados de identidade
+  // nunca podem ser informados juntos — mesma defesa em profundidade (a
+  // Edge Function já valida isso antes de chamar a RPC).
+  ["register_inventory_purchase: informe p_filament_type_id", (message) => new ValidationError(message)],
   [
     "INVENTORY_PURCHASE_ITEM_INACTIVE:",
     (message) => new BusinessRuleError(message.replace(/^INVENTORY_PURCHASE_ITEM_INACTIVE:\s*/, "")),

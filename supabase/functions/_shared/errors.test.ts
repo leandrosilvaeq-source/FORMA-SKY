@@ -369,3 +369,35 @@ Deno.test("mapPgError mantém FILAMENT_TYPE_HAS_SPOOLS:/HAS_COMPOSITION: mapeado
   assertEquals(spools.message.includes("FILAMENT_TYPE_HAS_SPOOLS"), false);
   assertEquals(composition.message.includes("FILAMENT_TYPE_HAS_COMPOSITION"), false);
 });
+
+// -----------------------------------------------------------------------------
+// register_inventory_purchase (migration 20260904120000, revisão do fluxo de
+// Filamentos) — filament_type_id + campo legado juntos
+// -----------------------------------------------------------------------------
+
+Deno.test("mapPgError mapeia 'informe p_filament_type_id OU...' para ValidationError (400), não business_rule", () => {
+  const err = mapPgError({
+    code: "P0001",
+    message:
+      "register_inventory_purchase: informe p_filament_type_id OU material/manufacturer/line/commercial_color, nunca os dois",
+  });
+  if (!(err instanceof ValidationError)) {
+    throw new Error(`esperado ValidationError, obtido ${err.constructor.name}`);
+  }
+  assertEquals(err.status, 400);
+});
+
+Deno.test("mapPgError não confunde a mensagem de filament_type_id com 'informe exatamente' (pesos brutos) — regressão cruzada", () => {
+  const filamentTypeIdMsg = mapPgError({
+    code: "P0001",
+    message: "register_inventory_purchase: informe p_filament_type_id OU material/manufacturer/line/commercial_color, nunca os dois",
+  });
+  const grossWeightsMsg = mapPgError({
+    code: "P0001",
+    message: "register_inventory_purchase: informe exatamente 2 peso(s) bruto(s) (um por rolo) — recebido 1",
+  });
+  assertEquals(filamentTypeIdMsg instanceof ValidationError, true);
+  assertEquals(grossWeightsMsg instanceof ValidationError, true);
+  assertEquals(filamentTypeIdMsg.message.includes("informe p_filament_type_id"), true);
+  assertEquals(grossWeightsMsg.message.includes("informe exatamente"), true);
+});

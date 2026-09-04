@@ -11,14 +11,26 @@ import { toast } from 'sonner'
 import { Disc3Icon, PackageIcon, PuzzleIcon, ShoppingCartIcon } from 'lucide-react'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAccessories } from '@/hooks/useAccessories'
 import { usePackaging } from '@/hooks/usePackaging'
-import { registerInventoryPurchase, type RegisterInventoryPurchaseInput } from '@/lib/api/inventoryPurchases'
+import { useFilamentTypes } from '@/hooks/useFilamentTypes'
+import {
+  registerInventoryPurchase,
+  type RegisterInventoryPurchaseInput,
+} from '@/lib/api/inventoryPurchases'
 import { ApiError } from '@/lib/api/errors'
 import { parseNumberField } from '@/lib/forms/numberField'
+import { normalizeForSearch } from '@/lib/forms/textSearch'
 import {
   MAX_CENTS,
   appendDigit,
@@ -29,7 +41,7 @@ import {
   removeLastDigit,
 } from '@/lib/forms/currencyField'
 import { cn } from '@/lib/utils'
-import type { FilamentMaterial, InventoryPurchaseCategory } from '@/types/domain'
+import type { InventoryPurchaseCategory } from '@/types/domain'
 
 // Módulo 3, Incremento 5 (Compras) — pedido do usuário em 2026-08-28, depois
 // do MVP manual de filamentos ter sido aprovado: fluxo centralizado de
@@ -37,10 +49,17 @@ import type { FilamentMaterial, InventoryPurchaseCategory } from '@/types/domain
 // único botão/diálogo compartilhado pelas três áreas (nunca duplicado por
 // página — InventoryPageShell.tsx renderiza este componente uma vez só).
 // Toda compra concluída chama register_inventory_purchase (Edge Function
-// `inventory-purchases`), transacional: para Filamento, localiza/cria o
-// tipo e cria N rolos + movimentos de entrada; para Acessório/Embalagem,
-// registra o movimento de entrada no item já cadastrado. Nenhum saldo é
-// escrito pelo frontend — a RPC é sempre a única escrita.
+// `inventory-purchases`), transacional: para Acessório/Embalagem, registra
+// o movimento de entrada no item já cadastrado. Nenhum saldo é escrito pelo
+// frontend — a RPC é sempre a única escrita.
+//
+// Filamento (revisão de 2026-09-04, fluxo "Cadastrar tipo -> Registrar
+// compra -> Rolos atualizados"): a compra escolhe um filament_type_id JÁ
+// CADASTRADO em Estoque -> Filamentos (FilamentTypeItemPicker abaixo) —
+// nunca mais cria nem localiza um tipo por Material/Marca/Cor/Acabamento
+// digitados aqui. A RPC cria N rolos + movimentos de entrada vinculados ao
+// tipo escolhido, numa única transação atômica (se um rolo falhar, a
+// compra inteira é revertida).
 
 function toErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message
@@ -53,33 +72,28 @@ function formatBRL(value: number): string {
 
 const ACTION_BUTTON_CLASSNAME =
   'focus-visible:ring-brand-accent inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50'
-const ACTION_BUTTON_SELECTED_CLASSNAME = 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
-const ACTION_BUTTON_UNSELECTED_CLASSNAME = 'border-input text-muted-foreground hover:bg-muted hover:text-foreground'
+const ACTION_BUTTON_SELECTED_CLASSNAME =
+  'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
+const ACTION_BUTTON_UNSELECTED_CLASSNAME =
+  'border-input text-muted-foreground hover:bg-muted hover:text-foreground'
 
 type IconComponent = ComponentType<{ className?: string }>
 
 // Ordem exigida: Filamento, Acessório, Embalagem.
-const CATEGORY_ITEMS: Array<{ value: InventoryPurchaseCategory; label: string; Icon: IconComponent }> = [
+const CATEGORY_ITEMS: Array<{
+  value: InventoryPurchaseCategory
+  label: string
+  Icon: IconComponent
+}> = [
   { value: 'FILAMENT', label: 'Filamento', Icon: Disc3Icon },
   { value: 'ACCESSORY', label: 'Acessório', Icon: PuzzleIcon },
   { value: 'PACKAGING', label: 'Embalagem', Icon: PackageIcon },
 ]
 
-// Nunca ABS — mesmo fechamento já usado em FilamentTypeForm.tsx.
-const MATERIAL_OPTIONS: FilamentMaterial[] = ['PLA', 'PETG', 'TPU']
-
 // Peso líquido: só os 3 valores pedidos, como action buttons — valores
 // numéricos internos preservados exatamente (250/500/1000), nunca um campo
 // de texto livre nesta etapa.
 const NOMINAL_WEIGHT_OPTIONS = [250, 500, 1000] as const
-
-// Acabamento — lista própria desta tela (pedido explícito desta rodada),
-// deliberadamente diferente das 5 sugestões livres já usadas em
-// FilamentTypeForm.tsx (Sólida/Silk/Velvet/Translúcido/DuoColor): aqui é
-// mapeado 1:1 para filament_types.line (texto livre no banco, sem CHECK),
-// nunca reaproveitando o rótulo "Tipo" para evitar dois campos com o mesmo
-// nome na tela (material já é escolhido acima).
-const FINISH_OPTIONS = ['Sólido', 'Velvet', 'Silk', 'DuoColor', 'TriColor', 'Transparente'] as const
 
 interface CurrencyFieldState {
   cents: number
@@ -137,8 +151,19 @@ function CurrencyInput({
     }
 
     const passthrough = new Set([
-      'Tab', 'Shift', 'Control', 'Meta', 'Alt', 'Escape', 'Enter',
-      'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End',
+      'Tab',
+      'Shift',
+      'Control',
+      'Meta',
+      'Alt',
+      'Escape',
+      'Enter',
+      'ArrowLeft',
+      'ArrowRight',
+      'ArrowUp',
+      'ArrowDown',
+      'Home',
+      'End',
     ])
     if (passthrough.has(key) || event.ctrlKey || event.metaKey) return
     event.preventDefault()
@@ -169,7 +194,7 @@ function CurrencyInput({
         onPaste={handlePaste}
         disabled={disabled}
         aria-invalid={error ? true : undefined}
-        className="w-40 focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
+        className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-40"
       />
       {error && <p className="text-destructive text-sm">{error}</p>}
     </div>
@@ -211,7 +236,8 @@ function AccessoryItemPicker({
   if (!isLoading && activeItems.length === 0) {
     return (
       <p role="status" className="text-muted-foreground text-sm">
-        Nenhum acessório ativo cadastrado. Cadastre um na aba Acessórios antes de registrar esta compra.
+        Nenhum acessório ativo cadastrado. Cadastre um na aba Acessórios antes de registrar esta
+        compra.
       </p>
     )
   }
@@ -237,6 +263,82 @@ function AccessoryItemPicker({
         />
         {selectedId === null && searchTerm && (
           <p className="text-muted-foreground text-xs">Selecione um acessório da lista.</p>
+        )}
+        {error && <p className="text-destructive text-sm">{error}</p>}
+      </div>
+    </fieldset>
+  )
+}
+
+// Select pesquisável de tipos de filamento ATIVOS já cadastrados em
+// Estoque -> Filamentos (2026-09-04: fluxo "Cadastrar tipo -> Registrar
+// compra -> Rolos atualizados" — a compra escolhe um filament_type_id real,
+// nunca cria nem localiza tipo por Material+Cor+Acabamento). Cada opção é
+// UM filament_type_id (nunca o grupo consolidado da listagem), rotulada
+// "Material - Linha - Cor" (fabricante não entra no rótulo — pedido
+// explícito). Busca própria por Material/Linha/Cor (mesmo texto do rótulo),
+// já que SearchAutocomplete não filtra sozinho — só destaca o trecho
+// buscado nas sugestões já filtradas que o chamador passa.
+function FilamentTypeItemPicker({
+  selectedId,
+  onSelect,
+  disabled,
+  error,
+}: {
+  selectedId: string | null
+  onSelect: (id: string | null, label: string) => void
+  disabled: boolean
+  error?: string
+}) {
+  const { types, isLoading } = useFilamentTypes()
+  const [searchTerm, setSearchTerm] = useState('')
+  const activeTypes = types.filter((type) => type.is_active)
+  const allSuggestions = activeTypes.map((type) => ({
+    id: type.filament_type_id,
+    label: `${type.material} - ${type.line} - ${type.commercial_color}`,
+  }))
+  const normalizedTerm = normalizeForSearch(searchTerm)
+  const suggestions = normalizedTerm
+    ? allSuggestions.filter((suggestion) =>
+        normalizeForSearch(suggestion.label).includes(normalizedTerm),
+      )
+    : allSuggestions
+
+  function handleSelect(label: string) {
+    const match = suggestions.find((suggestion) => suggestion.label === label)
+    setSearchTerm(label)
+    onSelect(match?.id ?? null, label)
+  }
+
+  if (!isLoading && activeTypes.length === 0) {
+    return (
+      <p role="status" className="text-muted-foreground text-sm">
+        Cadastre um tipo de filamento antes de registrar a compra.
+      </p>
+    )
+  }
+
+  return (
+    <fieldset disabled={disabled} className="contents">
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="purchase-filament-type">Tipo de filamento</Label>
+        <SearchAutocomplete
+          value={searchTerm}
+          onValueChange={(value) => {
+            setSearchTerm(value)
+            onSelect(null, value)
+          }}
+          suggestions={suggestions}
+          onSelect={handleSelect}
+          ariaLabel="Tipo de filamento"
+          placeholder="Buscar por material, linha ou cor"
+          clearLabel="Limpar seleção de tipo de filamento"
+          listboxId="purchase-filament-type-listbox"
+          listboxAriaLabel="Sugestões de tipo de filamento"
+          noResultsText="Nenhum tipo de filamento encontrado."
+        />
+        {selectedId === null && searchTerm && (
+          <p className="text-muted-foreground text-xs">Selecione um tipo de filamento da lista.</p>
         )}
         {error && <p className="text-destructive text-sm">{error}</p>}
       </div>
@@ -272,7 +374,8 @@ function PackagingItemPicker({
   if (!isLoading && activeItems.length === 0) {
     return (
       <p role="status" className="text-muted-foreground text-sm">
-        Nenhuma embalagem ativa cadastrada. Cadastre uma na aba Embalagens antes de registrar esta compra.
+        Nenhuma embalagem ativa cadastrada. Cadastre uma na aba Embalagens antes de registrar esta
+        compra.
       </p>
     )
   }
@@ -325,18 +428,17 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
   // Acessório/Embalagem
   const [itemId, setItemId] = useState<string | null>(null)
 
-  // Filamento
-  const [material, setMaterial] = useState<FilamentMaterial | null>(null)
+  // Filamento — a compra escolhe um filament_type_id já cadastrado
+  // (2026-09-04); nunca mais Material/Marca/Cor/Acabamento independentes.
+  const [filamentTypeId, setFilamentTypeId] = useState<string | null>(null)
   const [nominalWeightGrams, setNominalWeightGrams] = useState<number | null>(null)
   const [grossWeights, setGrossWeights] = useState<string[]>([])
-  const [manufacturer, setManufacturer] = useState('')
-  const [commercialColor, setCommercialColor] = useState('')
-  const [finish, setFinish] = useState<string | null>(null)
 
   // Compartilhados
   const [quantity, setQuantity] = useState('')
   const [itemValueField, setItemValueField] = useState<CurrencyFieldState>(emptyCurrencyField())
-  const [freightValueField, setFreightValueField] = useState<CurrencyFieldState>(emptyCurrencyField())
+  const [freightValueField, setFreightValueField] =
+    useState<CurrencyFieldState>(emptyCurrencyField())
 
   // Idempotência (mesmo padrão de StockMovementForm.tsx): a MESMA chave é
   // reenviada enquanto o payload não muda entre tentativas (retry seguro de
@@ -354,12 +456,9 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
   function resetForm() {
     setCategory(null)
     setItemId(null)
-    setMaterial(null)
+    setFilamentTypeId(null)
     setNominalWeightGrams(null)
     setGrossWeights([])
-    setManufacturer('')
-    setCommercialColor('')
-    setFinish(null)
     setQuantity('')
     setItemValueField(emptyCurrencyField())
     setFreightValueField(emptyCurrencyField())
@@ -376,12 +475,9 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
   function handleCategoryChange(next: InventoryPurchaseCategory) {
     setCategory(next)
     setItemId(null)
-    setMaterial(null)
+    setFilamentTypeId(null)
     setNominalWeightGrams(null)
     setGrossWeights([])
-    setManufacturer('')
-    setCommercialColor('')
-    setFinish(null)
     setQuantity('')
     setFieldErrors({})
   }
@@ -416,7 +512,7 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
         onChange={(event) => handleQuantityChange(event.target.value)}
         disabled={isSubmitting}
         aria-invalid={fieldErrors.quantity ? true : undefined}
-        className="w-24 focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
+        className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-24"
       />
       {fieldErrors.quantity && <p className="text-destructive text-sm">{fieldErrors.quantity}</p>}
     </div>
@@ -425,7 +521,8 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
   const itemValueReais = centsToAmount(itemValueField.cents)
   const freightValueReais = centsToAmount(freightValueField.cents)
   const totalReais = itemValueReais + freightValueReais
-  const averageUnitCost = parsedQuantity && parsedQuantity > 0 ? itemValueReais / parsedQuantity : null
+  const averageUnitCost =
+    parsedQuantity && parsedQuantity > 0 ? itemValueReais / parsedQuantity : null
   const costPerKg =
     category === 'FILAMENT' && nominalWeightGrams && parsedQuantity && parsedQuantity > 0
       ? itemValueReais / ((parsedQuantity * nominalWeightGrams) / 1000)
@@ -437,7 +534,11 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
 
     const errors: Record<string, string> = {}
 
-    const quantityResult = parseNumberField(quantity, 'a quantidade', { required: true, min: 1, integer: true })
+    const quantityResult = parseNumberField(quantity, 'a quantidade', {
+      required: true,
+      min: 1,
+      integer: true,
+    })
     if (quantityResult.error) errors.quantity = quantityResult.error
 
     if (!itemValueField.hasEdited) {
@@ -449,7 +550,8 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
 
     if (category === 'ACCESSORY' || category === 'PACKAGING') {
       if (!itemId) {
-        errors.item_id = category === 'ACCESSORY' ? 'Selecione um acessório.' : 'Selecione uma embalagem.'
+        errors.item_id =
+          category === 'ACCESSORY' ? 'Selecione um acessório.' : 'Selecione uma embalagem.'
       }
 
       if (Object.keys(errors).length === 0) {
@@ -463,16 +565,8 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
         fingerprint = JSON.stringify(input)
       }
     } else {
-      if (!material) errors.material = 'Selecione o material.'
+      if (!filamentTypeId) errors.filament_type_id = 'Selecione um tipo de filamento.'
       if (!nominalWeightGrams) errors.nominal_weight_grams = 'Selecione o peso líquido.'
-
-      const trimmedManufacturer = manufacturer.trim()
-      if (!trimmedManufacturer) errors.manufacturer = 'Informe a marca.'
-
-      const trimmedColor = commercialColor.trim()
-      if (!trimmedColor) errors.commercial_color = 'Informe a cor.'
-
-      if (!finish) errors.line = 'Selecione o acabamento.'
 
       const parsedGrossWeights: number[] = []
       if (quantityResult.value !== undefined && nominalWeightGrams) {
@@ -490,16 +584,13 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
         }
       }
 
-      if (Object.keys(errors).length === 0 && material && nominalWeightGrams && finish) {
+      if (Object.keys(errors).length === 0 && filamentTypeId && nominalWeightGrams) {
         input = {
           category: 'FILAMENT',
           quantity: quantityResult.value as number,
           item_value: itemValueReais,
           freight_value: freightValueReais,
-          material,
-          manufacturer: trimmedManufacturer,
-          line: finish,
-          commercial_color: trimmedColor,
+          filament_type_id: filamentTypeId,
           nominal_weight_grams: nominalWeightGrams,
           gross_weights_grams: parsedGrossWeights,
         }
@@ -544,12 +635,12 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
       </Button>
 
       <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Registrar compra</DialogTitle>
             <DialogDescription>
-              Selecione o item e preencha os dados da compra — a entrada correspondente é lançada automaticamente no
-              estoque.
+              Selecione o item e preencha os dados da compra — a entrada correspondente é lançada
+              automaticamente no estoque.
             </DialogDescription>
           </DialogHeader>
 
@@ -567,7 +658,9 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
                     onClick={() => handleCategoryChange(item.value)}
                     className={cn(
                       ACTION_BUTTON_CLASSNAME,
-                      category === item.value ? ACTION_BUTTON_SELECTED_CLASSNAME : ACTION_BUTTON_UNSELECTED_CLASSNAME,
+                      category === item.value
+                        ? ACTION_BUTTON_SELECTED_CLASSNAME
+                        : ACTION_BUTTON_UNSELECTED_CLASSNAME,
                     )}
                   >
                     <item.Icon className="text-brand-primary size-8 shrink-0" aria-hidden="true" />
@@ -579,31 +672,15 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
 
             {category === 'FILAMENT' && (
               <>
-                <div className="flex flex-col gap-2">
-                  <Label>Material</Label>
-                  <div role="radiogroup" aria-label="Material" className="flex flex-wrap gap-2">
-                    {MATERIAL_OPTIONS.map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        role="radio"
-                        aria-checked={material === option}
-                        disabled={isSubmitting}
-                        onClick={() => {
-                          setMaterial(option)
-                          setFieldErrors((current) => ({ ...current, material: '' }))
-                        }}
-                        className={cn(
-                          'focus-visible:ring-brand-accent rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50',
-                          material === option ? ACTION_BUTTON_SELECTED_CLASSNAME : ACTION_BUTTON_UNSELECTED_CLASSNAME,
-                        )}
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
-                  {fieldErrors.material && <p className="text-destructive text-sm">{fieldErrors.material}</p>}
-                </div>
+                <FilamentTypeItemPicker
+                  selectedId={filamentTypeId}
+                  onSelect={(id) => {
+                    setFilamentTypeId(id)
+                    setFieldErrors((current) => ({ ...current, filament_type_id: '' }))
+                  }}
+                  disabled={isSubmitting}
+                  error={fieldErrors.filament_type_id}
+                />
 
                 <div className="flex flex-col gap-2">
                   <Label>Peso líquido</Label>
@@ -621,7 +698,9 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
                         }}
                         className={cn(
                           'focus-visible:ring-brand-accent rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50',
-                          nominalWeightGrams === option ? ACTION_BUTTON_SELECTED_CLASSNAME : ACTION_BUTTON_UNSELECTED_CLASSNAME,
+                          nominalWeightGrams === option
+                            ? ACTION_BUTTON_SELECTED_CLASSNAME
+                            : ACTION_BUTTON_UNSELECTED_CLASSNAME,
                         )}
                       >
                         {option}g
@@ -637,91 +716,34 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
               </>
             )}
 
-            {category === 'FILAMENT' && parsedQuantity !== undefined && parsedQuantity > 0 && nominalWeightGrams && (
-              <div className="flex flex-col gap-3">
-                {Array.from({ length: parsedQuantity }, (_, i) => i).map((i) => (
-                  <div key={i} className="flex flex-col gap-2">
-                    <Label htmlFor={`purchase-gross-weight-${i}`}>Peso bruto do rolo {i + 1}</Label>
-                    <Input
-                      id={`purchase-gross-weight-${i}`}
-                      inputMode="decimal"
-                      value={grossWeights[i] ?? ''}
-                      onChange={(event) => handleGrossWeightChange(i, event.target.value)}
-                      disabled={isSubmitting}
-                      aria-invalid={fieldErrors[`gross_weight_${i}`] ? true : undefined}
-                      className="w-32 focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
-                    />
-                    {fieldErrors[`gross_weight_${i}`] && (
-                      <p className="text-destructive text-sm">{fieldErrors[`gross_weight_${i}`]}</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {category === 'FILAMENT' && (
-              <>
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="purchase-manufacturer">Marca</Label>
-                  <Input
-                    id="purchase-manufacturer"
-                    value={manufacturer}
-                    onChange={(event) => {
-                      setManufacturer(event.target.value)
-                      setFieldErrors((current) => ({ ...current, manufacturer: '' }))
-                    }}
-                    disabled={isSubmitting}
-                    aria-invalid={fieldErrors.manufacturer ? true : undefined}
-                    className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
-                  />
-                  {fieldErrors.manufacturer && <p className="text-destructive text-sm">{fieldErrors.manufacturer}</p>}
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="purchase-commercial-color">Cor</Label>
-                  <Input
-                    id="purchase-commercial-color"
-                    value={commercialColor}
-                    onChange={(event) => {
-                      setCommercialColor(event.target.value)
-                      setFieldErrors((current) => ({ ...current, commercial_color: '' }))
-                    }}
-                    disabled={isSubmitting}
-                    aria-invalid={fieldErrors.commercial_color ? true : undefined}
-                    className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
-                  />
-                  {fieldErrors.commercial_color && (
-                    <p className="text-destructive text-sm">{fieldErrors.commercial_color}</p>
-                  )}
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <Label>Acabamento</Label>
-                  <div role="radiogroup" aria-label="Acabamento" className="flex flex-wrap gap-2">
-                    {FINISH_OPTIONS.map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        role="radio"
-                        aria-checked={finish === option}
+            {category === 'FILAMENT' &&
+              parsedQuantity !== undefined &&
+              parsedQuantity > 0 &&
+              nominalWeightGrams && (
+                <div className="flex flex-col gap-3">
+                  {Array.from({ length: parsedQuantity }, (_, i) => i).map((i) => (
+                    <div key={i} className="flex flex-col gap-2">
+                      <Label htmlFor={`purchase-gross-weight-${i}`}>
+                        Peso bruto do rolo {i + 1}
+                      </Label>
+                      <Input
+                        id={`purchase-gross-weight-${i}`}
+                        inputMode="decimal"
+                        value={grossWeights[i] ?? ''}
+                        onChange={(event) => handleGrossWeightChange(i, event.target.value)}
                         disabled={isSubmitting}
-                        onClick={() => {
-                          setFinish(option)
-                          setFieldErrors((current) => ({ ...current, line: '' }))
-                        }}
-                        className={cn(
-                          'focus-visible:ring-brand-accent rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50',
-                          finish === option ? ACTION_BUTTON_SELECTED_CLASSNAME : ACTION_BUTTON_UNSELECTED_CLASSNAME,
-                        )}
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
-                  {fieldErrors.line && <p className="text-destructive text-sm">{fieldErrors.line}</p>}
+                        aria-invalid={fieldErrors[`gross_weight_${i}`] ? true : undefined}
+                        className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-32"
+                      />
+                      {fieldErrors[`gross_weight_${i}`] && (
+                        <p className="text-destructive text-sm">
+                          {fieldErrors[`gross_weight_${i}`]}
+                        </p>
+                      )}
+                    </div>
+                  ))}
                 </div>
-              </>
-            )}
+              )}
 
             {category === 'ACCESSORY' && (
               <>
@@ -779,15 +801,21 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
                 <div className="border-brand-primary/20 bg-brand-primary-soft/40 grid grid-cols-2 gap-2 rounded-lg border px-3 py-2 sm:grid-cols-4">
                   <div>
                     <p className="text-muted-foreground text-xs">Valor dos itens</p>
-                    <p className="text-brand-primary-dark text-sm font-medium">{formatBRL(itemValueReais)}</p>
+                    <p className="text-brand-primary-dark text-sm font-medium">
+                      {formatBRL(itemValueReais)}
+                    </p>
                   </div>
                   <div>
                     <p className="text-muted-foreground text-xs">Frete</p>
-                    <p className="text-brand-primary-dark text-sm font-medium">{formatBRL(freightValueReais)}</p>
+                    <p className="text-brand-primary-dark text-sm font-medium">
+                      {formatBRL(freightValueReais)}
+                    </p>
                   </div>
                   <div>
                     <p className="text-muted-foreground text-xs">Total da compra</p>
-                    <p className="text-brand-primary-dark text-sm font-medium">{formatBRL(totalReais)}</p>
+                    <p className="text-brand-primary-dark text-sm font-medium">
+                      {formatBRL(totalReais)}
+                    </p>
                   </div>
                   <div>
                     <p className="text-muted-foreground text-xs">

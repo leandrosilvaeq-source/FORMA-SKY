@@ -1790,11 +1790,20 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     expect(screen.getByRole('button', { name: /compras/i })).toBeInTheDocument()
   })
 
+  it('o botão da listagem chama-se "Cadastrar novo tipo" e abre a janela "Novo tipo de filamento"', async () => {
+    mockTypes([])
+    renderPage()
+    const user = userEvent.setup()
+    expect(screen.queryByRole('button', { name: 'Novo tipo de filamento' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    expect(screen.getByRole('dialog', { name: 'Novo tipo de filamento' })).toBeInTheDocument()
+  })
+
   it('"Novo tipo de filamento" nunca exibe um campo "Código da cor"', async () => {
     mockTypes([])
     renderPage()
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: 'Novo tipo de filamento' }))
+    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
     expect(screen.queryByLabelText(/código da cor/i)).not.toBeInTheDocument()
   })
 
@@ -1804,13 +1813,13 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     renderPage()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Novo tipo de filamento' }))
+    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
     expect(screen.queryByLabelText(/fabricante/i)).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/fornecedor/i)).not.toBeInTheDocument()
 
     // Salvar só com Material + Linha + Cor: nada de erro de fabricante.
     await user.click(screen.getByRole('radio', { name: 'PLA' }))
-    await user.type(screen.getByLabelText('Linha'), 'Sólida')
+    await user.click(screen.getByRole('radio', { name: 'Sólida' }))
     await user.type(screen.getByLabelText('Cor'), 'Preto')
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
 
@@ -1818,15 +1827,57 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
   })
 
-  it('a criação envia manufacturer: "Não informado" e os demais campos corretamente', async () => {
+  it('Linha não aceita texto livre: só os action buttons oficiais aparecem, incluindo Matte', async () => {
+    mockTypes([])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    const lineGroup = screen.getByRole('radiogroup', { name: 'Linha' })
+    // Sem campo de texto livre para Linha (só o de Cor, que não muda).
+    expect(within(lineGroup).queryByRole('textbox')).not.toBeInTheDocument()
+    for (const option of ['Sólida', 'Silk', 'Matte', 'Velvet', 'Translúcido', 'DuoColor']) {
+      expect(within(lineGroup).getByRole('radio', { name: option })).toBeInTheDocument()
+    }
+  })
+
+  it('apenas uma opção de Linha fica selecionada por vez', async () => {
+    mockTypes([])
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    const lineGroup = screen.getByRole('radiogroup', { name: 'Linha' })
+    await user.click(within(lineGroup).getByRole('radio', { name: 'Silk' }))
+    expect(within(lineGroup).getByRole('radio', { name: 'Silk' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    expect(within(lineGroup).getByRole('radio', { name: 'Sólida' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+
+    await user.click(within(lineGroup).getByRole('radio', { name: 'Matte' }))
+    expect(within(lineGroup).getByRole('radio', { name: 'Matte' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    expect(within(lineGroup).getByRole('radio', { name: 'Silk' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+  })
+
+  it('a criação envia manufacturer: "Não informado" e Linha (Matte) corretamente', async () => {
     const create = vi.fn().mockResolvedValue(typeFixture())
     mockTypes([], { create })
     renderPage()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Novo tipo de filamento' }))
+    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
     await user.click(screen.getByRole('radio', { name: 'PETG' }))
-    await user.type(screen.getByLabelText('Linha'), 'Matte')
+    await user.click(screen.getByRole('radio', { name: 'Matte' }))
     await user.type(screen.getByLabelText('Cor'), 'Vermelho')
     await user.type(screen.getByLabelText(/peso mínimo de alerta/i), '300')
     await user.type(screen.getByLabelText(/observações/i), 'lote de teste')
@@ -1843,6 +1894,21 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     })
   })
 
+  it('Linha é obrigatória: salvar sem escolher uma opção mostra o erro e não chama create', async () => {
+    const create = vi.fn()
+    mockTypes([], { create })
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.click(screen.getByRole('radio', { name: 'PLA' }))
+    await user.type(screen.getByLabelText('Cor'), 'Preto')
+    await user.click(screen.getByRole('button', { name: /^salvar$/i }))
+
+    expect(screen.getByText('Selecione a linha.')).toBeInTheDocument()
+    expect(create).not.toHaveBeenCalled()
+  })
+
   it('"Editar tipo de filamento" continua com o campo Fabricante para tipos históricos', async () => {
     mockTypes([typeFixture({ filament_type_id: 't1', manufacturer: 'National3D' })])
     renderPage()
@@ -1855,6 +1921,85 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     await user.click(within(typeActions).getByRole('button', { name: 'Editar tipo' }))
 
     expect(screen.getByLabelText('Fabricante')).toHaveValue('National3D')
+  })
+
+  it('valor histórico de Linha (fora das opções oficiais) aparece selecionado na edição e é preservado ao salvar sem tocá-lo', async () => {
+    const update = vi.fn().mockResolvedValue(typeFixture())
+    mockTypes(
+      [
+        typeFixture({
+          filament_type_id: 't1',
+          manufacturer: 'National3D',
+          line: 'Metálica Antiga',
+        }),
+      ],
+      { update },
+    )
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(
+      user,
+      getGroupRow('PLA', 'Metálica Antiga', 'Preto'),
+      'PLA - Metálica Antiga - Preto',
+    )
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo National3D — Preto/i,
+    })
+    await user.click(within(typeActions).getByRole('button', { name: 'Editar tipo' }))
+
+    const lineGroup = screen.getByRole('radiogroup', { name: 'Linha' })
+    // O valor histórico aparece como mais uma opção, já selecionada — as
+    // oficiais continuam todas presentes, nenhuma foi substituída.
+    expect(within(lineGroup).getByRole('radio', { name: 'Metálica Antiga' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    for (const option of ['Sólida', 'Silk', 'Matte', 'Velvet', 'Translúcido', 'DuoColor']) {
+      expect(within(lineGroup).getByRole('radio', { name: option })).toHaveAttribute(
+        'aria-checked',
+        'false',
+      )
+    }
+
+    // Salvar sem tocar em Linha preserva o valor histórico (nunca apagado
+    // ou convertido em silêncio).
+    await user.click(screen.getByRole('button', { name: /salvar altera/i }))
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1))
+    expect(update.mock.calls[0][1]).toMatchObject({ line: 'Metálica Antiga' })
+  })
+
+  it('valor histórico de Linha pode ser substituído por uma opção oficial', async () => {
+    const update = vi.fn().mockResolvedValue(typeFixture())
+    mockTypes(
+      [
+        typeFixture({
+          filament_type_id: 't1',
+          manufacturer: 'National3D',
+          line: 'Metálica Antiga',
+        }),
+      ],
+      { update },
+    )
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(
+      user,
+      getGroupRow('PLA', 'Metálica Antiga', 'Preto'),
+      'PLA - Metálica Antiga - Preto',
+    )
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo National3D — Preto/i,
+    })
+    await user.click(within(typeActions).getByRole('button', { name: 'Editar tipo' }))
+
+    const lineGroup = screen.getByRole('radiogroup', { name: 'Linha' })
+    await user.click(within(lineGroup).getByRole('radio', { name: 'Matte' }))
+    await user.click(screen.getByRole('button', { name: /salvar altera/i }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1))
+    expect(update.mock.calls[0][1]).toMatchObject({ line: 'Matte' })
   })
 })
 

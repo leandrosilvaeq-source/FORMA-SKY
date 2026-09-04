@@ -3,18 +3,28 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ApiError } from '@/lib/api/errors'
 import { formatCentsToBRL } from '@/lib/forms/currencyField'
-import type { Accessory, Packaging } from '@/types/domain'
+import type { Accessory, FilamentTypeSummary, Packaging } from '@/types/domain'
 
-const { useAccessoriesMock, usePackagingMock, registerInventoryPurchaseMock, toastMock } = vi.hoisted(() => ({
+const {
+  useAccessoriesMock,
+  usePackagingMock,
+  useFilamentTypesMock,
+  registerInventoryPurchaseMock,
+  toastMock,
+} = vi.hoisted(() => ({
   useAccessoriesMock: vi.fn(),
   usePackagingMock: vi.fn(),
+  useFilamentTypesMock: vi.fn(),
   registerInventoryPurchaseMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
 }))
 
 vi.mock('@/hooks/useAccessories', () => ({ useAccessories: useAccessoriesMock }))
 vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
-vi.mock('@/lib/api/inventoryPurchases', () => ({ registerInventoryPurchase: registerInventoryPurchaseMock }))
+vi.mock('@/hooks/useFilamentTypes', () => ({ useFilamentTypes: useFilamentTypesMock }))
+vi.mock('@/lib/api/inventoryPurchases', () => ({
+  registerInventoryPurchase: registerInventoryPurchaseMock,
+}))
 vi.mock('sonner', () => ({ toast: toastMock }))
 
 import { PurchaseDialog } from './PurchaseDialog'
@@ -79,6 +89,36 @@ function mockPackaging(list: Packaging[]) {
   })
 }
 
+function filamentTypeFixture(overrides: Partial<FilamentTypeSummary> = {}): FilamentTypeSummary {
+  return {
+    filament_type_id: 't1',
+    material: 'PLA',
+    manufacturer: 'Voolt3D',
+    line: 'Sólida',
+    commercial_color: 'Preto',
+    color_code: null,
+    minimum_stock_grams: null,
+    is_active: true,
+    total_available_grams: 500,
+    usable_spool_count: 1,
+    total_spool_count: 1,
+    ...overrides,
+  }
+}
+
+function mockFilamentTypes(list: FilamentTypeSummary[]) {
+  useFilamentTypesMock.mockReturnValue({
+    types: list,
+    isLoading: false,
+    error: null,
+    refetch: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    getRemovalPlan: vi.fn(),
+    delete: vi.fn(),
+  })
+}
+
 // getByText normaliza o texto do nó (colapsando qualquer espaço, incluindo
 // NBSP, para um espaço comum) antes de comparar, mas usa a STRING de busca
 // tal como recebida — formatCentsToBRL devolve o separador real do Intl
@@ -112,7 +152,11 @@ async function openDialog(user: ReturnType<typeof userEvent.setup>) {
   return screen.getByRole('dialog', { name: 'Registrar compra' })
 }
 
-async function selectCategory(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement, label: 'Filamento' | 'Acessório' | 'Embalagem') {
+async function selectCategory(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+  label: 'Filamento' | 'Acessório' | 'Embalagem',
+) {
   await user.click(within(dialog).getByRole('radio', { name: label }))
 }
 
@@ -123,7 +167,20 @@ describe('PurchaseDialog', () => {
     registerInventoryPurchaseMock.mockReset()
     mockAccessories([accessoryFixture()])
     mockPackaging([packagingFixture()])
+    mockFilamentTypes([filamentTypeFixture()])
   })
+
+  // Seleciona um tipo de filamento no seletor "Tipo de filamento" (mesmo
+  // padrão de digitar-e-clicar já usado para Acessório/Embalagem).
+  async function selectFilamentType(
+    user: ReturnType<typeof userEvent.setup>,
+    dialog: HTMLElement,
+    query: string,
+    optionName: string | RegExp,
+  ) {
+    await user.type(within(dialog).getByRole('combobox', { name: 'Tipo de filamento' }), query)
+    await user.click(await within(dialog).findByRole('option', { name: optionName }))
+  }
 
   // ---------------------------------------------------------------------------
   // GERAIS
@@ -156,13 +213,21 @@ describe('PurchaseDialog', () => {
 
     const group = within(dialog).getByRole('radiogroup', { name: 'Item' })
     const radios = within(group).getAllByRole('radio')
-    expect(radios.map((radio) => radio.textContent)).toEqual(['Filamento', 'Acessório', 'Embalagem'])
+    expect(radios.map((radio) => radio.textContent)).toEqual([
+      'Filamento',
+      'Acessório',
+      'Embalagem',
+    ])
     expect(radios.every((radio) => radio.tagName === 'BUTTON')).toBe(true)
   })
 
   it('bloqueia duplo envio: o botão de envio fica desabilitado enquanto a chamada está em andamento', async () => {
     let resolvePurchase: (value: unknown) => void = () => {}
-    registerInventoryPurchaseMock.mockReturnValue(new Promise((resolve) => { resolvePurchase = resolve }))
+    registerInventoryPurchaseMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePurchase = resolve
+      }),
+    )
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
@@ -175,14 +240,18 @@ describe('PurchaseDialog', () => {
 
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
 
-    await waitFor(() => expect(within(dialog).getByRole('button', { name: /^registrando\.\.\.$/i })).toBeDisabled())
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: /^registrando\.\.\.$/i })).toBeDisabled(),
+    )
     expect(registerInventoryPurchaseMock).toHaveBeenCalledTimes(1)
 
     resolvePurchase(purchaseFixture())
   })
 
   it('erro real do backend mantém o diálogo aberto e preserva os valores preenchidos', async () => {
-    registerInventoryPurchaseMock.mockRejectedValue(new ApiError('validation', 400, 'valor inválido'))
+    registerInventoryPurchaseMock.mockRejectedValue(
+      new ApiError('validation', 400, 'valor inválido'),
+    )
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
@@ -227,17 +296,104 @@ describe('PurchaseDialog', () => {
   // FILAMENTO
   // ---------------------------------------------------------------------------
 
-  it('Filamento: material tem PLA/PETG/TPU e nunca ABS', async () => {
+  it('Filamento: Cor e Acabamento não aparecem mais; o seletor "Tipo de filamento" aparece no lugar', async () => {
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
     await selectCategory(user, dialog, 'Filamento')
 
-    const group = within(dialog).getByRole('radiogroup', { name: 'Material' })
-    expect(within(group).getByRole('radio', { name: 'PLA' })).toBeInTheDocument()
-    expect(within(group).getByRole('radio', { name: 'PETG' })).toBeInTheDocument()
-    expect(within(group).getByRole('radio', { name: 'TPU' })).toBeInTheDocument()
-    expect(within(group).queryByRole('radio', { name: 'ABS' })).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('radiogroup', { name: 'Material' })).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('radiogroup', { name: 'Acabamento' })).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('Marca')).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('Cor')).not.toBeInTheDocument()
+    expect(within(dialog).getByRole('combobox', { name: 'Tipo de filamento' })).toBeInTheDocument()
+  })
+
+  it('Filamento: as opções do seletor usam o formato "Material - Linha - Cor" e mostram só tipos ATIVOS', async () => {
+    mockFilamentTypes([
+      filamentTypeFixture({
+        filament_type_id: 't1',
+        material: 'PLA',
+        line: 'Matte',
+        commercial_color: 'Preto',
+      }),
+      filamentTypeFixture({
+        filament_type_id: 't2',
+        material: 'PETG',
+        line: 'Sólida',
+        commercial_color: 'Azul',
+        is_active: false,
+      }),
+    ])
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    await user.type(within(dialog).getByRole('combobox', { name: 'Tipo de filamento' }), 'a')
+    expect(
+      await within(dialog).findByRole('option', { name: 'PLA - Matte - Preto' }),
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).queryByRole('option', { name: /PETG - Sólida - Azul/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('Filamento: a busca do seletor localiza por Material, Linha e Cor', async () => {
+    mockFilamentTypes([
+      filamentTypeFixture({
+        filament_type_id: 't1',
+        material: 'PLA',
+        line: 'Matte',
+        commercial_color: 'Preto',
+      }),
+      filamentTypeFixture({
+        filament_type_id: 't2',
+        material: 'PETG',
+        line: 'Silk',
+        commercial_color: 'Azul',
+      }),
+    ])
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    const combobox = within(dialog).getByRole('combobox', { name: 'Tipo de filamento' })
+
+    await user.type(combobox, 'PETG')
+    expect(
+      await within(dialog).findByRole('option', { name: 'PETG - Silk - Azul' }),
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).queryByRole('option', { name: /PLA - Matte - Preto/ }),
+    ).not.toBeInTheDocument()
+
+    await user.clear(combobox)
+    await user.type(combobox, 'matte')
+    expect(
+      await within(dialog).findByRole('option', { name: 'PLA - Matte - Preto' }),
+    ).toBeInTheDocument()
+
+    await user.clear(combobox)
+    await user.type(combobox, 'azul')
+    expect(
+      await within(dialog).findByRole('option', { name: 'PETG - Silk - Azul' }),
+    ).toBeInTheDocument()
+  })
+
+  it('Filamento: sem nenhum tipo ativo, orienta cadastrar um tipo antes de comprar', async () => {
+    mockFilamentTypes([])
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    expect(
+      within(dialog).getByText('Cadastre um tipo de filamento antes de registrar a compra.'),
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).queryByRole('combobox', { name: 'Tipo de filamento' }),
+    ).not.toBeInTheDocument()
   })
 
   it('Filamento: peso líquido tem 250g/500g/1000g', async () => {
@@ -267,7 +423,7 @@ describe('PurchaseDialog', () => {
     const user = userEvent.setup()
     const dialog = await openDialog(user)
     await selectCategory(user, dialog, 'Filamento')
-    await user.click(within(dialog).getByRole('radio', { name: 'PLA' }))
+    await selectFilamentType(user, dialog, 'PLA', 'PLA - Sólida - Preto')
     await user.click(within(dialog).getByRole('radio', { name: '1000g' }))
 
     await user.type(within(dialog).getByLabelText('Quantidade'), '0')
@@ -299,32 +455,18 @@ describe('PurchaseDialog', () => {
     const user = userEvent.setup()
     const dialog = await openDialog(user)
     await selectCategory(user, dialog, 'Filamento')
-    await user.click(within(dialog).getByRole('radio', { name: 'PLA' }))
+    await selectFilamentType(user, dialog, 'PLA', 'PLA - Sólida - Preto')
     await user.click(within(dialog).getByRole('radio', { name: '1000g' }))
     await user.type(within(dialog).getByLabelText('Quantidade'), '1')
     await user.type(within(dialog).getByLabelText('Peso bruto do rolo 1'), '1000')
-    await user.type(within(dialog).getByLabelText('Marca'), 'Voolt3D')
-    await user.type(within(dialog).getByLabelText('Cor'), 'Preto')
-    await user.click(within(dialog).getByRole('radio', { name: 'Sólido' }))
     await user.type(within(dialog).getByLabelText('Valor dos itens'), '100')
 
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
 
-    expect(await within(dialog).findByText(/deve ser maior que o peso líquido nominal/i)).toBeInTheDocument()
+    expect(
+      await within(dialog).findByText(/deve ser maior que o peso líquido nominal/i),
+    ).toBeInTheDocument()
     expect(registerInventoryPurchaseMock).not.toHaveBeenCalled()
-  })
-
-  it('Filamento: Acabamento tem Sólido/Velvet/Silk/DuoColor/TriColor/Transparente, nunca rotulado "Tipo"', async () => {
-    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
-    const user = userEvent.setup()
-    const dialog = await openDialog(user)
-    await selectCategory(user, dialog, 'Filamento')
-
-    const group = within(dialog).getByRole('radiogroup', { name: 'Acabamento' })
-    for (const label of ['Sólido', 'Velvet', 'Silk', 'DuoColor', 'TriColor', 'Transparente']) {
-      expect(within(group).getByRole('radio', { name: label })).toBeInTheDocument()
-    }
-    expect(within(dialog).queryByText(/^Tipo$/)).not.toBeInTheDocument()
   })
 
   it('Filamento: máscara de Valor/Frete em R$ e cálculo do resumo (total, custo médio por rolo, custo por kg)', async () => {
@@ -332,7 +474,7 @@ describe('PurchaseDialog', () => {
     const user = userEvent.setup()
     const dialog = await openDialog(user)
     await selectCategory(user, dialog, 'Filamento')
-    await user.click(within(dialog).getByRole('radio', { name: 'PLA' }))
+    await selectFilamentType(user, dialog, 'PLA', 'PLA - Sólida - Preto')
     await user.click(within(dialog).getByRole('radio', { name: '1000g' }))
     await user.type(within(dialog).getByLabelText('Quantidade'), '2')
 
@@ -348,41 +490,60 @@ describe('PurchaseDialog', () => {
     expect(within(dialog).getAllByText(normalizedBRL(10000)).length).toBe(2)
   })
 
-  it('Filamento: envia o payload correto (material/marca/acabamento/cor/peso nominal/pesos brutos/quantidade/valores)', async () => {
+  it('Filamento: envia filament_type_id (nunca material/manufacturer/line/commercial_color) + peso nominal/pesos brutos/quantidade/valores', async () => {
+    mockFilamentTypes([
+      filamentTypeFixture({
+        filament_type_id: 't-petg',
+        material: 'PETG',
+        line: 'Sólida',
+        commercial_color: 'Preto',
+      }),
+    ])
     registerInventoryPurchaseMock.mockResolvedValue(purchaseFixture({ category: 'FILAMENT' }))
     const onPurchaseCompleted = vi.fn()
     render(<PurchaseDialog onPurchaseCompleted={onPurchaseCompleted} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
     await selectCategory(user, dialog, 'Filamento')
-    await user.click(within(dialog).getByRole('radio', { name: 'PETG' }))
+    await selectFilamentType(user, dialog, 'PETG', 'PETG - Sólida - Preto')
     await user.click(within(dialog).getByRole('radio', { name: '1000g' }))
     await user.type(within(dialog).getByLabelText('Quantidade'), '2')
     await user.type(within(dialog).getByLabelText('Peso bruto do rolo 1'), '1150')
     await user.type(within(dialog).getByLabelText('Peso bruto do rolo 2'), '1140')
-    await user.type(within(dialog).getByLabelText('Marca'), '  Voolt3D  ')
-    await user.type(within(dialog).getByLabelText('Cor'), '  Preto  ')
-    await user.click(within(dialog).getByRole('radio', { name: 'Sólido' }))
     await user.type(within(dialog).getByLabelText('Valor dos itens'), '20000')
     await user.type(within(dialog).getByLabelText('Frete'), '2000')
 
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
 
     await waitFor(() => expect(registerInventoryPurchaseMock).toHaveBeenCalledTimes(1))
-    expect(registerInventoryPurchaseMock.mock.calls[0][0]).toMatchObject({
+    const payload = registerInventoryPurchaseMock.mock.calls[0][0]
+    expect(payload).toMatchObject({
       category: 'FILAMENT',
       quantity: 2,
       item_value: 200,
       freight_value: 20,
-      material: 'PETG',
-      manufacturer: 'Voolt3D',
-      line: 'Sólido',
-      commercial_color: 'Preto',
+      filament_type_id: 't-petg',
       nominal_weight_grams: 1000,
       gross_weights_grams: [1150, 1140],
     })
+    // A compra nunca cria nem localiza tipo por nome — nenhum dos 4 campos
+    // legados de identidade vai no payload quando filament_type_id é usado.
+    expect(payload).not.toHaveProperty('material')
+    expect(payload).not.toHaveProperty('manufacturer')
+    expect(payload).not.toHaveProperty('line')
+    expect(payload).not.toHaveProperty('commercial_color')
     expect(toastMock.success).toHaveBeenCalledWith('Compra registrada.')
     expect(onPurchaseCompleted).toHaveBeenCalledWith('FILAMENT')
+  })
+
+  it('Filamento: fornecedor não é um campo desta janela — nada aqui pode alterar o fabricante do tipo escolhido', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    expect(within(dialog).queryByLabelText(/fornecedor/i)).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText(/marca/i)).not.toBeInTheDocument()
   })
 
   // ---------------------------------------------------------------------------
@@ -390,7 +551,10 @@ describe('PurchaseDialog', () => {
   // ---------------------------------------------------------------------------
 
   it('Acessório: só mostra itens ativos, orienta cadastrar quando não há nenhum ativo', async () => {
-    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ativo' }), accessoryFixture({ id: 'a2', name: 'Inativo', is_active: false })])
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Ativo' }),
+      accessoryFixture({ id: 'a2', name: 'Inativo', is_active: false }),
+    ])
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
@@ -453,7 +617,9 @@ describe('PurchaseDialog', () => {
   })
 
   it('Acessório: erro de negócio do backend vira toast, nunca atualiza estoque no frontend (sem chamada extra)', async () => {
-    registerInventoryPurchaseMock.mockRejectedValue(new ApiError('business_rule', 409, 'não encontrado ou inativo'))
+    registerInventoryPurchaseMock.mockRejectedValue(
+      new ApiError('business_rule', 409, 'não encontrado ou inativo'),
+    )
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
@@ -470,7 +636,9 @@ describe('PurchaseDialog', () => {
   })
 
   it('Embalagem: mesmas regras de Acessório — envia payload correto e aciona onPurchaseCompleted("PACKAGING")', async () => {
-    registerInventoryPurchaseMock.mockResolvedValue(purchaseFixture({ category: 'PACKAGING', item_id: 'k1' }))
+    registerInventoryPurchaseMock.mockResolvedValue(
+      purchaseFixture({ category: 'PACKAGING', item_id: 'k1' }),
+    )
     const onPurchaseCompleted = vi.fn()
     render(<PurchaseDialog onPurchaseCompleted={onPurchaseCompleted} />)
     const user = userEvent.setup()

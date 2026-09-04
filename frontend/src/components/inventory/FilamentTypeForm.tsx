@@ -12,10 +12,12 @@ import type { FilamentMaterial } from '@/types/domain'
 // aprovado (supabase/migrations/20260827100000_create_filament_types_table.sql).
 const MATERIAL_OPTIONS: FilamentMaterial[] = ['PLA', 'PETG', 'TPU']
 
-// Sugestões de interface — nunca um enum travado no banco (filament_types.line
-// é texto livre). Clicar numa sugestão só preenche o campo de texto; o
-// usuário pode digitar qualquer outra linha livremente.
-const LINE_SUGGESTIONS = ['Sólida', 'Silk', 'Velvet', 'Translúcido', 'DuoColor']
+// Opções oficiais de Linha (2026-09-04: passou a ser só action buttons, sem
+// campo de texto livre nem opção de digitar uma linha personalizada) —
+// ainda assim nunca um enum travado no BANCO (filament_types.line continua
+// texto livre, sem CHECK): um registro histórico com uma linha fora desta
+// lista nunca é apagado/convertido em silêncio (ver historicalLine abaixo).
+const LINE_OPTIONS = ['Sólida', 'Silk', 'Matte', 'Velvet', 'Translúcido', 'DuoColor']
 
 // Fabricante saiu da janela "Novo tipo de filamento" (decisão revisada do
 // usuário, 2026-09-01): no modo CREATE o formulário não exibe nem exige o
@@ -77,8 +79,18 @@ export function FilamentTypeForm({
 }: FilamentTypeFormProps) {
   const [material, setMaterial] = useState<FilamentMaterial | null>(initialValues?.material ?? null)
   const [manufacturer, setManufacturer] = useState(initialValues?.manufacturer ?? '')
-  const [line, setLine] = useState(initialValues?.line ?? '')
+  const [line, setLine] = useState<string | null>(initialValues?.line ?? null)
   const [commercialColor, setCommercialColor] = useState(initialValues?.commercial_color ?? '')
+
+  // Valor histórico de Linha que não está entre as opções oficiais (registro
+  // criado antes desta mudança, ou digitado livremente quando o campo ainda
+  // era texto livre): nunca alterado automaticamente. Aparece como mais uma
+  // opção selecionável (já selecionada) na abertura do formulário, para o
+  // usuário poder ver o valor real e, se quiser, substituí-lo por uma opção
+  // oficial — nunca é apagado ou convertido em silêncio.
+  const historicalLine =
+    initialValues?.line && !LINE_OPTIONS.includes(initialValues.line) ? initialValues.line : null
+  const lineOptions = historicalLine ? [...LINE_OPTIONS, historicalLine] : LINE_OPTIONS
   const [minimumStockGrams, setMinimumStockGrams] = useState(
     initialValues?.minimum_stock_grams != null ? String(initialValues.minimum_stock_grams) : '',
   )
@@ -99,8 +111,7 @@ export function FilamentTypeForm({
     const trimmedManufacturer = manufacturer.trim()
     if (isEditMode && !trimmedManufacturer) errors.manufacturer = 'Informe o fabricante.'
 
-    const trimmedLine = line.trim()
-    if (!trimmedLine) errors.line = 'Informe a linha.'
+    if (!line) errors.line = 'Selecione a linha.'
 
     const trimmedColor = commercialColor.trim()
     if (!trimmedColor) errors.commercial_color = 'Informe a cor.'
@@ -119,7 +130,7 @@ export function FilamentTypeForm({
     onSubmit({
       material: material as FilamentMaterial,
       manufacturer: isEditMode ? trimmedManufacturer : UNSPECIFIED_MANUFACTURER,
-      line: trimmedLine,
+      line: line as string,
       commercial_color: trimmedColor,
       minimum_stock_grams: minimumStockResult.value ?? null,
       notes: notes.trim() ? notes.trim() : null,
@@ -178,31 +189,27 @@ export function FilamentTypeForm({
       )}
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor={`${idPrefix}-line`}>Linha</Label>
-        <Input
-          id={`${idPrefix}-line`}
-          value={line}
-          onChange={(event) => {
-            setLine(event.target.value)
-            setFieldErrors((current) => ({ ...current, line: '' }))
-          }}
-          disabled={isSubmitting}
-          aria-invalid={fieldErrors.line ? true : undefined}
-          className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
-        />
-        <div className="flex flex-wrap gap-1.5">
-          {LINE_SUGGESTIONS.map((suggestion) => (
+        <Label>Linha</Label>
+        <div role="radiogroup" aria-label="Linha" className="flex flex-wrap gap-2">
+          {lineOptions.map((option) => (
             <button
-              key={suggestion}
+              key={option}
               type="button"
+              role="radio"
+              aria-checked={line === option}
               disabled={isSubmitting}
               onClick={() => {
-                setLine(suggestion)
+                setLine(option)
                 setFieldErrors((current) => ({ ...current, line: '' }))
               }}
-              className="border-input text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-brand-accent rounded-md border px-2 py-1 text-xs font-medium outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50"
+              className={cn(
+                'focus-visible:ring-brand-accent rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50',
+                line === option
+                  ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
+                  : 'border-input text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
             >
-              {suggestion}
+              {option}
             </button>
           ))}
         </div>

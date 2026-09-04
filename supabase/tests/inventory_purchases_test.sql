@@ -9,12 +9,18 @@
 -- ÚNICA transação, terminada sempre com ROLLBACK — nenhum dado criado por
 -- este script persiste no banco.
 --
--- Execução prevista (depois que as duas migrations desta rodada —
--- 20260828120000_create_inventory_purchases_table.sql e
--- 20260828121000_create_register_inventory_purchase_function.sql — forem
--- aplicadas ao projeto remoto, com autorização explícita separada; NÃO
--- aplicadas nesta rodada):
+-- Execução:
 --   npx supabase db query --linked --file supabase/tests/inventory_purchases_test.sql
+--
+-- 20260828120000_create_inventory_purchases_table.sql e
+-- 20260828121000_create_register_inventory_purchase_function.sql já estão
+-- aplicadas no projeto remoto (confirmado em rodada anterior). A Seção 11
+-- (2026-09-04) cobre a migration desta rodada,
+-- 20260904120000_add_filament_type_id_to_purchase.sql: o caminho NOVO de
+-- register_inventory_purchase (p_filament_type_id) do fluxo "Cadastrar tipo
+-- -> Registrar compra -> Rolos atualizados" — sem alterar nenhuma das
+-- Seções 1–10, que continuam cobrindo o caminho legado (find-or-create por
+-- nome), preservado integralmente.
 --
 -- LIMITAÇÃO CONHECIDA (mesma já registrada nos dois arquivos irmãos): uma
 -- única transação/conexão não pode exercitar concorrência real de duas
@@ -25,12 +31,8 @@
 -- 20260828121000). A Seção 8 (atomicidade) É exercitável dentro de uma
 -- transação só, porque não depende de concorrência — só de uma falha no
 -- MEIO de uma chamada já em andamento, que o próprio savepoint implícito do
--- bloco DO/EXCEPTION reverte sozinho.
---
--- Nenhum destes testes foi executado nesta sessão: o ambiente não tem
--- Docker/Postgres local, e a aplicação remota das duas migrations desta
--- rodada não foi autorizada. Este arquivo foi revisado linha a linha contra
--- as duas migrations; sua execução real fica pendente — ver relatório final.
+-- bloco DO/EXCEPTION reverte sozinho. A Seção 11.4 (atomicidade do caminho
+-- novo) usa a mesma técnica.
 
 begin;
 
@@ -737,6 +739,215 @@ begin
   exception when others then
     insert into zz_test_results(section, test_name, status, details)
       values ('10', '10.x checagens de privilégio', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+-- =============================================================================
+-- SEÇÃO 11 — Compra de FILAMENTO pelo caminho NOVO (p_filament_type_id,
+-- migration 20260904120000, fluxo "Cadastrar tipo -> Registrar compra ->
+-- Rolos atualizados"). A compra referencia diretamente um tipo já
+-- cadastrado, nunca cria nem localiza tipo por nome.
+-- =============================================================================
+
+do $$
+declare
+  v_user_id uuid;
+  v_type_id uuid;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  begin
+    v_type_id := (public.create_filament_type(
+      'PLA', 'TESTE COMPRAS FTID', 'Sólida', 'Verde', null, null, true, null, v_user_id
+    )).id;
+    insert into zz_fixtures(key, value) values ('ftid_type_id', v_type_id::text)
+      on conflict (key) do update set value = excluded.value;
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.0 setup: tipo ativo dedicado ao caminho novo', 'PASS', 'type_id=' || v_type_id);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.0 setup', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+do $$
+declare
+  v_user_id uuid;
+  v_type_id uuid;
+  v_type_count_before integer;
+  v_purchase public.inventory_purchases;
+  v_type_count_after integer;
+  v_spool_count integer;
+  v_movement_count integer;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_type_id from zz_fixtures where key = 'ftid_type_id';
+  select count(*) into v_type_count_before from public.filament_types where manufacturer = 'TESTE COMPRAS FTID';
+  begin
+    v_purchase := public.register_inventory_purchase(
+      p_category => 'FILAMENT', p_quantity => 3, p_item_value => 300.00, p_freight_value => 0,
+      p_changed_by => v_user_id, p_filament_type_id => v_type_id,
+      p_nominal_weight_grams => 500, p_gross_weights_grams => array[650, 640, 630]
+    );
+
+    select count(*) into v_type_count_after from public.filament_types where manufacturer = 'TESTE COMPRAS FTID';
+    select count(*) into v_spool_count
+      from public.filament_spools
+      where purchase_id = v_purchase.id and filament_type_id = v_type_id
+        and status = 'LACRADO' and is_active and nominal_weight_grams = 500;
+    select count(*) into v_movement_count
+      from public.filament_movements fm join public.filament_spools fs on fs.id = fm.spool_id
+      where fs.purchase_id = v_purchase.id and fm.movement_type = 'PURCHASE' and fm.quantity_delta = 500;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.1 compra por filament_type_id: item_id = tipo escolhido, 3 rolos vinculados, NENHUM tipo novo criado',
+        case
+          when v_purchase.item_id = v_type_id and v_purchase.category = 'FILAMENT'
+            and v_type_count_after = v_type_count_before
+            and v_spool_count = 3 and v_movement_count = 3
+          then 'PASS' else 'FAIL'
+        end,
+        'item_id=' || v_purchase.item_id || ' type_count ' || v_type_count_before || '->' || v_type_count_after ||
+        ' spool_count=' || v_spool_count || ' movement_count=' || v_movement_count);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.1 compra por filament_type_id (sucesso)', 'FAIL', sqlerrm);
+  end;
+end $$;
+
+do $$
+declare
+  v_user_id uuid;
+  v_type_id uuid;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_type_id from zz_fixtures where key = 'ftid_type_id';
+  begin
+    -- filament_type_id junto de um campo legado (material) é rejeitado —
+    -- nunca os dois caminhos ao mesmo tempo.
+    perform public.register_inventory_purchase(
+      p_category => 'FILAMENT', p_quantity => 1, p_item_value => 10, p_freight_value => 0,
+      p_changed_by => v_user_id, p_filament_type_id => v_type_id, p_material => 'PLA',
+      p_nominal_weight_grams => 500, p_gross_weights_grams => array[600]
+    );
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.2 filament_type_id + campo legado (material) juntos é rejeitado', 'FAIL', 'não levantou exceção');
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.2 filament_type_id + campo legado juntos é rejeitado',
+        case when sqlerrm like 'register_inventory_purchase: informe p_filament_type_id OU%' then 'PASS' else 'FAIL' end, sqlerrm);
+  end;
+end $$;
+
+do $$
+declare
+  v_user_id uuid;
+  v_spool_count_before integer;
+  v_purchase_count_before integer;
+  v_spool_count_after integer;
+  v_purchase_count_after integer;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select count(*) into v_spool_count_before from public.filament_spools;
+  select count(*) into v_purchase_count_before from public.inventory_purchases;
+  begin
+    -- UUID aleatório: não corresponde a nenhum filament_type.
+    perform public.register_inventory_purchase(
+      p_category => 'FILAMENT', p_quantity => 1, p_item_value => 10, p_freight_value => 0,
+      p_changed_by => v_user_id, p_filament_type_id => gen_random_uuid(),
+      p_nominal_weight_grams => 500, p_gross_weights_grams => array[600]
+    );
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.3a filament_type_id inexistente é rejeitado', 'FAIL', 'não levantou exceção');
+  exception when others then
+    select count(*) into v_spool_count_after from public.filament_spools;
+    select count(*) into v_purchase_count_after from public.inventory_purchases;
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.3a filament_type_id inexistente é rejeitado, nada criado',
+        case
+          when sqlerrm like '%não encontrado ou inativo%'
+            and v_spool_count_after = v_spool_count_before and v_purchase_count_after = v_purchase_count_before
+          then 'PASS' else 'FAIL'
+        end, sqlerrm);
+  end;
+end $$;
+
+do $$
+declare
+  v_user_id uuid;
+  v_inactive_type_id uuid;
+  v_spool_count_before integer;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  v_inactive_type_id := (public.create_filament_type(
+    'PLA', 'TESTE COMPRAS FTID Inativo', 'Sólida', 'Roxo', null, null, false, null, v_user_id
+  )).id;
+  select count(*) into v_spool_count_before from public.filament_spools where filament_type_id = v_inactive_type_id;
+  begin
+    perform public.register_inventory_purchase(
+      p_category => 'FILAMENT', p_quantity => 1, p_item_value => 10, p_freight_value => 0,
+      p_changed_by => v_user_id, p_filament_type_id => v_inactive_type_id,
+      p_nominal_weight_grams => 500, p_gross_weights_grams => array[600]
+    );
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.3b filament_type_id INATIVO é rejeitado — nunca reativa em silêncio', 'FAIL', 'não levantou exceção');
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.3b filament_type_id inativo é rejeitado, tipo continua inativo, nenhum rolo criado',
+        case
+          when sqlerrm like '%não encontrado ou inativo%'
+            and not (select is_active from public.filament_types where id = v_inactive_type_id)
+            and (select count(*) from public.filament_spools where filament_type_id = v_inactive_type_id) = v_spool_count_before
+          then 'PASS' else 'FAIL'
+        end, sqlerrm);
+  end;
+end $$;
+
+do $$
+declare
+  v_user_id uuid;
+  v_type_id uuid;
+  v_spool_count_before integer;
+  v_purchase_count_before integer;
+  v_spool_count_after integer;
+  v_purchase_count_after integer;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_type_id from zz_fixtures where key = 'ftid_type_id';
+  select count(*) into v_spool_count_before from public.filament_spools where filament_type_id = v_type_id;
+  select count(*) into v_purchase_count_before from public.inventory_purchases where item_id = v_type_id;
+  begin
+    -- Mesma técnica da Seção 8: pré-insere uma filament_movements com a
+    -- chave que o SEGUNDO rolo desta compra usaria, forçando
+    -- IDEMPOTENCY_KEY_CONFLICT: no meio da chamada — a falha propaga e
+    -- desfaz TODA a compra (nenhum rolo parcial, nenhuma linha de compra).
+    insert into public.filament_movements (
+      filament_type_id, spool_id, movement_type, quantity_delta, balance_before, balance_after,
+      idempotency_key, created_by
+    )
+    select ft.id, fs.id, 'PURCHASE', 1, 0, 1, 'teste-compras-ftid-atomicidade:spool:2', v_user_id
+    from public.filament_types ft
+    join public.filament_spools fs on fs.filament_type_id = ft.id
+    limit 1;
+
+    perform public.register_inventory_purchase(
+      p_category => 'FILAMENT', p_quantity => 2, p_item_value => 10, p_freight_value => 0,
+      p_changed_by => v_user_id, p_idempotency_key => 'teste-compras-ftid-atomicidade',
+      p_filament_type_id => v_type_id, p_nominal_weight_grams => 500, p_gross_weights_grams => array[600, 600]
+    );
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.4 falha no segundo rolo (caminho novo) desfaz TODA a compra', 'FAIL', 'não levantou exceção');
+  exception when others then
+    select count(*) into v_spool_count_after from public.filament_spools where filament_type_id = v_type_id;
+    select count(*) into v_purchase_count_after from public.inventory_purchases where item_id = v_type_id;
+    insert into zz_test_results(section, test_name, status, details)
+      values ('11', '11.4 falha no segundo rolo (caminho novo) desfaz TODA a compra, tipo permanece intacto',
+        case
+          when v_spool_count_after = v_spool_count_before and v_purchase_count_after = v_purchase_count_before
+            and (select is_active from public.filament_types where id = v_type_id)
+          then 'PASS' else 'FAIL' end,
+        'spools ' || v_spool_count_before || '->' || v_spool_count_after ||
+        ' purchases ' || v_purchase_count_before || '->' || v_purchase_count_after || ' err=' || sqlerrm);
   end;
 end $$;
 

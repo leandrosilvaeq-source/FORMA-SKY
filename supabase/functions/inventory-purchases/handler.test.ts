@@ -310,6 +310,81 @@ Deno.test("validateRegisterInventoryPurchasePayload aceita um payload mínimo v�
   });
 });
 
+// ---------------------------------------------------------------------------
+// FILAMENT — caminho novo (2026-09-04): filament_type_id
+// ---------------------------------------------------------------------------
+
+Deno.test("validateRegisterInventoryPurchasePayload aceita um payload mínimo válido de FILAMENT com filament_type_id", () => {
+  const result = validateRegisterInventoryPurchasePayload({
+    category: "FILAMENT",
+    quantity: 2,
+    item_value: 200,
+    freight_value: 20,
+    filament_type_id: VALID_UUID,
+    nominal_weight_grams: 1000,
+    gross_weights_grams: [1250, 1240],
+  });
+  assertEquals(result, {
+    p_category: "FILAMENT",
+    p_quantity: 2,
+    p_item_value: 200,
+    p_freight_value: 20,
+    p_occurred_at: null,
+    p_notes: null,
+    p_idempotency_key: null,
+    p_filament_type_id: VALID_UUID,
+    p_nominal_weight_grams: 1000,
+    p_gross_weights_grams: [1250, 1240],
+  });
+});
+
+Deno.test("validateRegisterInventoryPurchasePayload rejeita filament_type_id junto de QUALQUER campo legado de identidade", () => {
+  const base = {
+    category: "FILAMENT",
+    quantity: 1,
+    item_value: 1,
+    filament_type_id: VALID_UUID,
+    nominal_weight_grams: 1000,
+    gross_weights_grams: [1050],
+  };
+  for (const legacyKey of ["material", "manufacturer", "line", "commercial_color"] as const) {
+    assertThrows(
+      () =>
+        validateRegisterInventoryPurchasePayload({
+          ...base,
+          [legacyKey]: legacyKey === "material" ? "PLA" : "X",
+        }),
+      (err) => {
+        if (!isValidationError(err)) throw new Error("esperado ValidationError");
+      },
+    );
+  }
+});
+
+Deno.test("validateRegisterInventoryPurchasePayload rejeita filament_type_id inválido (não-UUID)", () => {
+  assertThrows(() =>
+    validateRegisterInventoryPurchasePayload({
+      category: "FILAMENT",
+      quantity: 1,
+      item_value: 1,
+      filament_type_id: "nao-e-um-uuid",
+      nominal_weight_grams: 1000,
+      gross_weights_grams: [1050],
+    }),
+  );
+});
+
+Deno.test("validateRegisterInventoryPurchasePayload continua exigindo peso nominal/pesos brutos mesmo com filament_type_id", () => {
+  assertThrows(() =>
+    validateRegisterInventoryPurchasePayload({
+      category: "FILAMENT",
+      quantity: 1,
+      item_value: 1,
+      filament_type_id: VALID_UUID,
+    }),
+  );
+});
+
 Deno.test("validateRegisterInventoryPurchasePayload rejeita ABS para FILAMENT", () => {
   assertThrows(() =>
     validateRegisterInventoryPurchasePayload({
