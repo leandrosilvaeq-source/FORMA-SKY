@@ -40,6 +40,11 @@ import {
   type RegisterInventoryPurchaseInput,
 } from '@/lib/api/inventoryPurchases'
 import { ApiError } from '@/lib/api/errors'
+import {
+  formatDateToBrShort,
+  maskBrShortDate,
+  parseBrShortDate,
+} from '@/lib/forms/brShortDate'
 import { parseNumberField } from '@/lib/forms/numberField'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
 import {
@@ -91,43 +96,6 @@ function formatBRL(value: number): string {
 // usuário; sempre "1.000 g".
 function formatGrams(value: number): string {
   return `${value.toLocaleString('pt-BR')} g`
-}
-
-// ---------------------------------------------------------------------------
-// Data da compra — exibida/editada como dd/mm/aa (ano com 2 dígitos, mesmo
-// padrão já usado no gerador RL-YY-NNN de filament_spools.code), convertida
-// internamente para uma data ISO (YYYY-MM-DD) antes de enviar como
-// occurred_at ao backend. "aa" é sempre lido como 20aa (século 21) — mesma
-// convenção do gerador de código de rolo, coerente com o período real de uso
-// do sistema.
-// ---------------------------------------------------------------------------
-function formatDateToBrShort(date: Date): string {
-  const dd = String(date.getDate()).padStart(2, '0')
-  const mm = String(date.getMonth() + 1).padStart(2, '0')
-  const yy = String(date.getFullYear() % 100).padStart(2, '0')
-  return `${dd}/${mm}/${yy}`
-}
-
-// Valida a EXISTÊNCIA REAL da data (rejeita 31/02/26, 30/02/26, 29/02/27 —
-// ano não bissexto — etc.), não só o formato: monta um Date e confere se
-// dia/mês/ano voltaram exatamente como informados (o construtor de Date
-// nunca lança erro para uma data inválida — ele "rola" para o mês seguinte
-// em silêncio, então essa comparação é a única forma confiável de detectar
-// o problema).
-function parseBrShortDate(raw: string): { value: string | null; error: string | null } {
-  const match = /^(\d{2})\/(\d{2})\/(\d{2})$/.exec(raw.trim())
-  if (!match) {
-    return { value: null, error: 'Informe a data no formato dd/mm/aa (ex.: 04/09/26).' }
-  }
-  const day = Number(match[1])
-  const month = Number(match[2])
-  const year = 2000 + Number(match[3])
-  const date = new Date(year, month - 1, day)
-  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
-    return { value: null, error: 'Data inválida.' }
-  }
-  const iso = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-  return { value: iso, error: null }
 }
 
 const ACTION_BUTTON_CLASSNAME =
@@ -992,10 +960,16 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
                       <Input
                         id="purchase-date"
                         inputMode="numeric"
+                        autoComplete="off"
+                        maxLength={8}
                         placeholder="dd/mm/aa"
                         value={purchaseDateText}
                         onChange={(event) => {
-                          setPurchaseDateText(event.target.value)
+                          // Só dígitos entram; as barras são inseridas pela
+                          // máscara. Colagem com ou sem barras cai aqui pelo
+                          // mesmo caminho (o event.target.value já traz o
+                          // texto colado inteiro).
+                          setPurchaseDateText(maskBrShortDate(event.target.value))
                           setFieldErrors((current) => ({ ...current, purchase_date: '' }))
                         }}
                         disabled={isSubmitting}

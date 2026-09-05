@@ -472,6 +472,228 @@ describe('PurchaseDialog', () => {
     expect(registerFilamentPurchaseMock.mock.calls[0][0].occurred_at).toBe('2026-09-04')
   })
 
+  // ---------------------------------------------------------------------------
+  // Máscara automática dd/mm/aa da Data da compra (2026-09-05) — o usuário
+  // digita SÓ números; as barras aparecem sozinhas; colagem com/sem barras;
+  // Backspace corrige normalmente. A conversão para YYYY-MM-DD (contrato da
+  // API inalterado) é coberta pelo teste "4." acima; a lógica pura da
+  // máscara/conversão tem sua própria suíte em lib/forms/brShortDate.test.ts.
+  // ---------------------------------------------------------------------------
+
+  it('Data da compra: placeholder dd/mm/aa, inputMode numérico e nome acessível', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    const dateInput = within(dialog).getByLabelText('Data da compra') as HTMLInputElement
+    expect(dateInput).toHaveAttribute('placeholder', 'dd/mm/aa')
+    expect(dateInput).toHaveAttribute('inputmode', 'numeric')
+  })
+
+  it('Data da compra: digitar 050926 insere as barras automaticamente (05/09/26)', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    const dateInput = within(dialog).getByLabelText('Data da compra') as HTMLInputElement
+    await user.clear(dateInput)
+    await user.type(dateInput, '050926')
+    expect(dateInput.value).toBe('05/09/26')
+  })
+
+  it('Data da compra: caracteres não numéricos digitados são ignorados', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    const dateInput = within(dialog).getByLabelText('Data da compra') as HTMLInputElement
+    await user.clear(dateInput)
+    await user.type(dateInput, '0a5b0c9d2e6')
+    expect(dateInput.value).toBe('05/09/26')
+  })
+
+  it('Data da compra: colar 050926 (sem barras) resulta em 05/09/26', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    const dateInput = within(dialog).getByLabelText('Data da compra') as HTMLInputElement
+    await user.clear(dateInput)
+    await user.click(dateInput)
+    await user.paste('050926')
+    expect(dateInput.value).toBe('05/09/26')
+  })
+
+  it('Data da compra: colar 05/09/26 (com barras) resulta em 05/09/26', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    const dateInput = within(dialog).getByLabelText('Data da compra') as HTMLInputElement
+    await user.clear(dateInput)
+    await user.click(dateInput)
+    await user.paste('05/09/26')
+    expect(dateInput.value).toBe('05/09/26')
+  })
+
+  it('Data da compra: Backspace permite corrigir a data digitada', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    const dateInput = within(dialog).getByLabelText('Data da compra') as HTMLInputElement
+    await user.clear(dateInput)
+    await user.type(dateInput, '050926')
+    expect(dateInput.value).toBe('05/09/26')
+    // Apaga os 2 dígitos do ano (a barra final some junto, sem "grudar") e
+    // digita outro ano.
+    await user.type(dateInput, '{Backspace}{Backspace}')
+    expect(dateInput.value).toBe('05/09')
+    await user.type(dateInput, '27')
+    expect(dateInput.value).toBe('05/09/27')
+  })
+
+  it('Data da compra: data incompleta é rejeitada no envio, com mensagem clara', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await selectPurchaseChannel(user, dialog, 'Mercado Livre')
+    await fillFilamentItem(user, dialog, 1, {
+      query: 'PLA',
+      optionName: 'PLA - Sólida - Preto',
+      weightLabel: '1.000 g',
+      quantity: '1',
+      manufacturer: 'Bambu Lab',
+      totalValueRaw: '9500',
+    })
+
+    const dateInput = within(dialog).getByLabelText('Data da compra')
+    await user.clear(dateInput)
+    await user.type(dateInput, '0509')
+    await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
+
+    expect(
+      await within(dialog).findByText(/informe a data no formato dd\/mm\/aa/i),
+    ).toBeInTheDocument()
+    expect(registerFilamentPurchaseMock).not.toHaveBeenCalled()
+  })
+
+  it('Data da compra: com a máscara, uma compra válida ainda envia occurred_at (YYYY-MM-DD), total_value e frete corretos', async () => {
+    mockFilamentTypes([filamentTypeFixture({ filament_type_id: 't1' })])
+    registerFilamentPurchaseMock.mockResolvedValue(filamentPurchaseResultFixture())
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await selectPurchaseChannel(user, dialog, 'Mercado Livre')
+    await fillFilamentItem(user, dialog, 1, {
+      query: 'PLA',
+      optionName: 'PLA - Sólida - Preto',
+      weightLabel: '1.000 g',
+      quantity: '2',
+      manufacturer: 'Bambu Lab',
+      totalValueRaw: '19000', // R$ 190,00
+    })
+    await user.type(within(dialog).getByLabelText('Valor do frete'), '2000') // R$ 20,00
+
+    const dateInput = within(dialog).getByLabelText('Data da compra')
+    await user.clear(dateInput)
+    await user.type(dateInput, '050926')
+    await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
+
+    await waitFor(() => expect(registerFilamentPurchaseMock).toHaveBeenCalledTimes(1))
+    const payload = registerFilamentPurchaseMock.mock.calls[0][0]
+    expect(payload.occurred_at).toBe('2026-09-05')
+    expect(payload.freight_value).toBe(20)
+    expect(payload.items).toContainEqual(expect.objectContaining({ quantity: 2, total_value: 190 }))
+  })
+
+  // ---------------------------------------------------------------------------
+  // Lista de sugestões do campo "Tipo — item N" (2026-09-05) — o painel
+  // precisa ser TOTALMENTE OPACO e ficar acima dos itens seguintes (era
+  // possível ver o Item 2 por baixo da lista aberta no Item 1).
+  // ---------------------------------------------------------------------------
+
+  it('lista do Tipo: fundo opaco (bg-popover, sem alpha), borda e sombra visíveis, z alto, rolagem só vertical', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    const row = within(dialog).getByRole('group', { name: 'Item 1' })
+    await user.type(within(row).getByRole('combobox', { name: 'Tipo — item 1' }), 'PLA')
+    const listbox = await within(row).findByRole('listbox')
+
+    expect(listbox.className).toContain('bg-popover')
+    // Nenhuma cor de fundo com transparência (ex.: bg-popover/80).
+    expect(listbox.className).not.toMatch(/bg-[a-z-]+\/\d/)
+    expect(listbox.className).toContain('border')
+    expect(listbox.className).toContain('shadow-md')
+    expect(listbox.className).toContain('z-50')
+    expect(listbox.className).toContain('max-h-64')
+    expect(listbox.className).toContain('overflow-y-auto')
+    expect(listbox.className).toContain('overflow-x-hidden')
+    // Largura alinhada ao campo.
+    expect(listbox.className).toContain('inset-x-0')
+  })
+
+  it('lista do Tipo: o wrapper sobe para z-30 enquanto aberta (para cobrir os itens seguintes) e volta a z-20 ao fechar', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar filamento' }))
+
+    const row1 = within(dialog).getByRole('group', { name: 'Item 1' })
+    const combo1 = within(row1).getByRole('combobox', { name: 'Tipo — item 1' })
+    const wrapper1 = combo1.closest('div') as HTMLElement
+    expect(wrapper1.className).toContain('z-20')
+    expect(wrapper1.className).not.toContain('z-30')
+
+    await user.type(combo1, 'PLA')
+    await within(row1).findByRole('listbox')
+    expect(wrapper1.className).toContain('z-30')
+
+    await user.keyboard('{Escape}')
+    expect(wrapper1.className).toContain('z-20')
+    expect(wrapper1.className).not.toContain('z-30')
+  })
+
+  it('lista do Tipo: continua selecionável por mouse E por teclado, inclusive no Item 2', async () => {
+    mockFilamentTypes([
+      filamentTypeFixture({ filament_type_id: 't1', commercial_color: 'Preto' }),
+      filamentTypeFixture({ filament_type_id: 't2', commercial_color: 'Azul' }),
+    ])
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar filamento' }))
+
+    // Item 1 — seleção por mouse.
+    const row1 = within(dialog).getByRole('group', { name: 'Item 1' })
+    await user.type(within(row1).getByRole('combobox', { name: 'Tipo — item 1' }), 'PLA')
+    await user.click(await within(row1).findByRole('option', { name: 'PLA - Sólida - Preto' }))
+    expect((within(row1).getByRole('combobox', { name: 'Tipo — item 1' }) as HTMLInputElement).value).toBe(
+      'PLA - Sólida - Preto',
+    )
+
+    // Item 2 — seleção por teclado (ArrowDown até "Azul", Enter).
+    const row2 = within(dialog).getByRole('group', { name: 'Item 2' })
+    const combo2 = within(row2).getByRole('combobox', { name: 'Tipo — item 2' })
+    await user.type(combo2, 'PLA')
+    await within(row2).findByRole('listbox')
+    await user.keyboard('{ArrowDown}{ArrowDown}{Enter}')
+    expect((combo2 as HTMLInputElement).value).toBe('PLA - Sólida - Azul')
+  })
+
   it('5. os 6 locais de compra aparecem (Mercado Livre, AliExpress, Shopee, Presencial, Site, Outro)', async () => {
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()

@@ -203,7 +203,16 @@ export function SearchAutocomplete({
       : undefined
 
   return (
-    <div ref={wrapperRef} className={cn('relative z-20', className)}>
+    // z-index do wrapper sobe para z-30 ENQUANTO a lista está aberta — assim
+    // um dropdown aberto passa por cima de campos/linhas irmãos que também
+    // usam este componente (ex.: os vários itens da "Compra de filamentos",
+    // cujos wrappers ficam em z-20). Fechado, volta a z-20, sem mudar nada
+    // para os demais seletores (Clientes/Produtos/Pedidos), que nunca ficam
+    // empilhados uns sobre os outros.
+    <div
+      ref={wrapperRef}
+      className={cn('relative', showSuggestions ? 'z-30' : 'z-20', className)}
+    >
       <SearchIcon className="text-muted-foreground pointer-events-none absolute inset-y-0 left-2.5 my-auto size-4" />
       <Input
         role="combobox"
@@ -242,7 +251,14 @@ export function SearchAutocomplete({
           id={listboxId}
           role="listbox"
           aria-label={listboxAriaLabel}
-          className="bg-popover text-popover-foreground ring-foreground/10 absolute inset-x-0 top-full mt-1 max-h-64 overflow-y-auto rounded-lg p-1 shadow-md ring-1"
+          // Fundo TOTALMENTE opaco (bg-popover = branco/escuro sólido do
+          // tema, nunca com alpha) para o conteúdo de baixo nunca vazar
+          // através da lista; borda visível (border-border) + sombra discreta
+          // (shadow-md) para separar do formulário; z-50 acima do conteúdo do
+          // próprio wrapper; inset-x-0 alinha a largura ao campo; max-h-64 +
+          // overflow-y-auto dão rolagem vertical quando há muitas opções;
+          // overflow-x-hidden garante que nunca aparece rolagem horizontal.
+          className="bg-popover text-popover-foreground border-border absolute inset-x-0 top-full z-50 mt-1 max-h-64 overflow-x-hidden overflow-y-auto rounded-lg border p-1 shadow-md"
         >
           {suggestions.length === 0 ? (
             <li className="text-muted-foreground px-2 py-1.5 text-sm">{noResultsText}</li>
