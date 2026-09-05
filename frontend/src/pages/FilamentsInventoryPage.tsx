@@ -7,6 +7,7 @@ import {
   type FilamentTypeFormValues,
 } from '@/components/inventory/FilamentTypeForm'
 import { FilamentTypeDrawer } from '@/components/inventory/FilamentTypeDrawer'
+import { FilamentColorBadge } from '@/components/inventory/FilamentColorBadge'
 import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
 import { ColumnResizeHandle } from '@/components/dataTable/ColumnResizeHandle'
 import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
@@ -886,8 +887,8 @@ export function FilamentsInventoryPage() {
                       <TableCell className="truncate" title={group.lineLabel}>
                         {group.lineLabel}
                       </TableCell>
-                      <TableCell className="truncate" title={group.colorLabel}>
-                        {group.colorLabel}
+                      <TableCell className="truncate">
+                        <FilamentColorBadge label={group.colorLabel} />
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {formatGrams(group.availableGrams)}

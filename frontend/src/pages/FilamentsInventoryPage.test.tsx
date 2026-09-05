@@ -559,6 +559,102 @@ describe('FilamentsInventoryPage — listagem consolidada por Material + Linha +
   })
 })
 
+describe('FilamentsInventoryPage — coluna Cor como badge (2026-09-04)', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+    mockSpools([])
+    mockMovements()
+    mockSpoolCounts()
+  })
+
+  it('1. a Cor aparece como badge (não mais texto solto) na linha do grupo', () => {
+    mockTypes([typeFixture({ commercial_color: 'Preto' })])
+    renderPage()
+    const badge = within(getGroupRow('PLA', 'Sólida', 'Preto')).getByText('Preto')
+    expect(badge.tagName).toBe('SPAN')
+    expect(badge.className).toContain('rounded-md')
+    expect(badge.className).toContain('border')
+  })
+
+  it('2. o mesmo badge é o que aparece em qualquer largura de tela — esta listagem consolidada nunca teve um card mobile separado (só a <table> com overflow-x-auto), então não há um segundo lugar para duplicar o mapeamento de cor', () => {
+    mockTypes([typeFixture({ commercial_color: 'Azul' })])
+    renderPage()
+    // Um único elemento com o texto "Azul" no documento inteiro — não dois
+    // (um de tabela, outro de card), confirmando que existe só UM caminho
+    // de renderização para a Cor nesta listagem.
+    expect(screen.getAllByText('Azul')).toHaveLength(1)
+    expect(screen.getByText('Azul').className).toContain('rounded-md')
+  })
+
+  it('3. Preto recebe o estilo escuro próprio do mapeamento de cor', () => {
+    mockTypes([typeFixture({ commercial_color: 'Preto' })])
+    renderPage()
+    expect(screen.getByText('Preto').className).toContain('neutral-800')
+  })
+
+  it('4. "Azul claro" recebe estilo azul (variante clara, distinta do "Azul" simples)', () => {
+    mockTypes([typeFixture({ commercial_color: 'Azul claro' })])
+    renderPage()
+    expect(screen.getByText('Azul claro').className).toContain('sky')
+  })
+
+  it('5. Dourado permanece legível — texto num tom mais escuro (text-*-900)', () => {
+    mockTypes([typeFixture({ commercial_color: 'Dourado' })])
+    renderPage()
+    expect(screen.getByText('Dourado').className).toContain('text-yellow-900')
+  })
+
+  it('6. Branco permanece visível — nunca fundo branco puro sobre o fundo branco da página', () => {
+    mockTypes([typeFixture({ commercial_color: 'Branco' })])
+    renderPage()
+    const badge = screen.getByText('Branco')
+    expect(badge.className).not.toContain('bg-white')
+    expect(badge.className).toContain('border-slate-400')
+  })
+
+  it('7. a identificação da cor ignora acentos e caixa (grafias diferentes do mesmo tipo recebem o mesmo estilo)', () => {
+    mockTypes([
+      typeFixture({ filament_type_id: 'a', commercial_color: 'ROXO' }),
+      typeFixture({ filament_type_id: 'b', commercial_color: 'roxo', line: 'Silk' }),
+    ])
+    renderPage()
+    const upper = screen.getByText('ROXO')
+    const lower = screen.getByText('roxo')
+    expect(upper.className).toBe(lower.className)
+    expect(upper.className).toContain('purple')
+  })
+
+  it('8. o texto original cadastrado é sempre preservado por completo dentro do badge', () => {
+    mockTypes([typeFixture({ commercial_color: 'Azul Bambu Lab' })])
+    renderPage()
+    const badge = screen.getByText('Azul Bambu Lab')
+    expect(badge).toBeInTheDocument()
+    expect(badge.className).toContain('blue')
+  })
+
+  it('9. uma cor não reconhecida usa o estilo neutro, nunca texto invisível', () => {
+    mockTypes([typeFixture({ commercial_color: 'Holográfico' })])
+    renderPage()
+    const badge = screen.getByText('Holográfico')
+    expect(badge).toBeInTheDocument()
+    expect(badge.className).toContain('border-input')
+    expect(badge.className).toContain('text-muted-foreground')
+  })
+
+  it('10. Situação e as demais colunas continuam exatamente como antes — só a Cor virou badge', () => {
+    mockTypes([typeFixture({ commercial_color: 'Preto', minimum_stock_grams: 200 })])
+    renderPage()
+    const row = getGroupRow('PLA', 'Sólida', 'Preto')
+    expect(within(row).getByText('PLA')).toBeInTheDocument()
+    expect(within(row).getByText('Sólida')).toBeInTheDocument()
+    const situationBadge = within(row).getByText('Normal')
+    expect(situationBadge.className).toContain('emerald')
+    expect(within(row).getByText('500g')).toBeInTheDocument()
+    expect(within(row).getByText('200 g')).toBeInTheDocument()
+  })
+})
+
 describe('FilamentsInventoryPage — filtros Material / Linha / Cor', () => {
   beforeEach(() => {
     toastMock.success.mockReset()
