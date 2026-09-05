@@ -667,31 +667,52 @@ export function FilamentsInventoryPage() {
           </Button>
         </div>
 
+        {/* Material | Linha | Cor na MESMA linha no desktop largo — Material e
+            Cor com a largura do próprio conteúdo (shrink-0), Linha ocupando
+            o resto do espaço (flex-1 + min-w-0, para os botões internos
+            quebrarem DENTRO da própria área em vez de esticar a linha e
+            gerar rolagem horizontal). `md:flex-wrap` deixa a linha quebrar
+            em duas em telas intermediárias; abaixo de `md` tudo empilha
+            (flex-col). `md:items-start` alinha os rótulos dos três grupos no
+            mesmo topo. Sem nenhuma largura rígida — só shrink/grow do flex. */}
         <div className="flex flex-col gap-3">
-          <SingleSelectActionFilter
-            label="Material"
-            ariaLabel="Filtrar por material"
-            options={FILAMENT_MATERIAL_FILTER_OPTIONS}
-            selectedValue={selectedMaterial}
-            onSelect={(value) => setSingleFilterValue('materials', value)}
-          />
-          <SingleSelectActionFilter
-            label="Linha"
-            ariaLabel="Filtrar por linha"
-            options={FILAMENT_LINE_FILTER_OPTIONS}
-            selectedValue={selectedLine}
-            onSelect={(value) => setSingleFilterValue('lines', value)}
-          />
-          <div className="flex flex-wrap items-center gap-2">
-            <MultiSelectFilterButton
-              label="Cor"
-              ariaLabel="Filtrar por cor"
-              options={filterOptions.colors}
-              selected={filters.colors}
-              onToggle={(value) => toggleFilterValue('colors', value)}
-              onClear={() => clearFilterGroup('colors')}
-            />
-            {activeFilterCount > 0 && (
+          <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-start md:gap-4">
+            <div className="md:shrink-0">
+              <SingleSelectActionFilter
+                label="Material"
+                ariaLabel="Filtrar por material"
+                options={FILAMENT_MATERIAL_FILTER_OPTIONS}
+                selectedValue={selectedMaterial}
+                onSelect={(value) => setSingleFilterValue('materials', value)}
+              />
+            </div>
+            <div className="min-w-0 md:flex-1">
+              <SingleSelectActionFilter
+                label="Linha"
+                ariaLabel="Filtrar por linha"
+                options={FILAMENT_LINE_FILTER_OPTIONS}
+                selectedValue={selectedLine}
+                onSelect={(value) => setSingleFilterValue('lines', value)}
+              />
+            </div>
+            <div className="md:shrink-0">
+              {/* Cor continua o mesmo Popover multisseleção — só ganhou um
+                  rótulo próprio, para alinhar com Material/Linha no topo. */}
+              <div className="flex flex-col items-start gap-1.5">
+                <Label>Cor</Label>
+                <MultiSelectFilterButton
+                  label="Cor"
+                  ariaLabel="Filtrar por cor"
+                  options={filterOptions.colors}
+                  selected={filters.colors}
+                  onToggle={(value) => toggleFilterValue('colors', value)}
+                  onClear={() => clearFilterGroup('colors')}
+                />
+              </div>
+            </div>
+          </div>
+          {activeFilterCount > 0 && (
+            <div>
               <Button
                 type="button"
                 variant="outline"
@@ -701,8 +722,8 @@ export function FilamentsInventoryPage() {
               >
                 Limpar filtros ({activeFilterCount})
               </Button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
 
