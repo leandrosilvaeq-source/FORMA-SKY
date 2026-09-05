@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { EllipsisIcon, SlidersHorizontalIcon } from 'lucide-react'
 import { FilamentSpoolForm, type FilamentSpoolFormValues } from './FilamentSpoolForm'
-import { FilamentSpoolPanel } from './FilamentSpoolPanel'
+import { FilamentSpoolHistoryDialog } from './FilamentSpoolHistoryDialog'
+import { FilamentSpoolStatusControl } from './FilamentSpoolStatusControl'
+import { FilamentSpoolWeightAdjustDialog } from './FilamentSpoolWeightAdjustDialog'
 import { StockLevelBadge, getStockLevel } from './StockMovementPanel'
 import { UNSPECIFIED_MANUFACTURER } from './FilamentTypeForm'
 import { Button } from '@/components/ui/button'
@@ -34,7 +36,7 @@ import {
 import { useFilamentSpools } from '@/hooks/useFilamentSpools'
 import { ApiError } from '@/lib/api/errors'
 import type { FilamentGroup } from '@/lib/inventory/filamentGroups'
-import type { FilamentSpool, FilamentTypeSummary } from '@/types/domain'
+import type { FilamentSpool, FilamentSpoolStatus, FilamentTypeSummary } from '@/types/domain'
 
 function toErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message
@@ -43,11 +45,6 @@ function toErrorMessage(err: unknown): string {
 
 function formatGrams(value: number): string {
   return `${value.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}g`
-}
-
-function formatDate(value: string | null): string {
-  if (!value) return '—'
-  return new Date(`${value}T00:00:00`).toLocaleDateString('pt-BR')
 }
 
 function typeLabel(type: FilamentTypeSummary): string {
@@ -160,11 +157,6 @@ export function FilamentTypeDrawer({
     return map
   }, [group.types])
 
-  function spoolManufacturerLabel(spool: FilamentSpool): string {
-    const type = typeById.get(spool.filament_type_id)
-    return type ? `${type.manufacturer} · ${type.line} · ${type.commercial_color}` : '—'
-  }
-
   // Marca (2026-09-04) — DISTINTA de "Fabricante / tipo" acima: aquela é
   // sempre o fabricante do TIPO (mesmo valor para todo rolo do tipo); esta é
   // a marca REAL desta compra específica, que pode variar rolo a rolo dentro
@@ -202,13 +194,22 @@ export function FilamentTypeDrawer({
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  const [managingSpool, setManagingSpool] = useState<FilamentSpool | null>(null)
-  const [isManageDialogOpen, setIsManageDialogOpen] = useState(false)
-  // Como a janela "Gerenciar" foi aberta: null = botão "Gerenciar" (estado
-  // inicial previsível, sem operação marcada); 'ADJUST' = atalho "Ajustar
-  // peso" (já entra em Movimentar com "Ajuste" selecionado). Só um sinal de
-  // abertura — o painel é remontado a cada abertura do diálogo.
-  const [manageInitialOperation, setManageInitialOperation] = useState<'ADJUST' | null>(null)
+  // Janela simplificada "Ajustar peso" (2026-09-05) — substitui o antigo
+  // atalho que abria a janela "Gerenciar" com "Ajuste" pré-selecionado.
+  const [adjustingSpool, setAdjustingSpool] = useState<FilamentSpool | null>(null)
+
+  // Janela dedicada de histórico (2026-09-05), aberta pelo item "Histórico"
+  // do menu de três pontos — nunca mais a antiga janela "Gerenciar".
+  const [historySpool, setHistorySpool] = useState<FilamentSpool | null>(null)
+
+  // Id do rolo com uma mudança de status em andamento — evita clique duplo
+  // no dropdown/menu enquanto a chamada ao backend ainda não voltou.
+  const [pendingStatusSpoolId, setPendingStatusSpoolId] = useState<string | null>(null)
+
+  // Rolo aguardando confirmação explícita antes de ser marcado DESCARTADO
+  // (terminal — ver update_filament_spool/FILAMENT_SPOOL_DISCARD_IS_FINAL).
+  // Nenhuma outra transição de status pede confirmação.
+  const [discardCandidate, setDiscardCandidate] = useState<FilamentSpool | null>(null)
 
   const openCount = useMemo(
     () => spools.filter((spool) => spool.status === 'ABERTO').length,
@@ -224,14 +225,6 @@ export function FilamentTypeDrawer({
   )
   const stockLevel = getStockLevel(group.availableGrams, group.minimumStockGrams)
   const createTargetType = createTargetTypeId ? (typeById.get(createTargetTypeId) ?? null) : null
-
-  // Cabeçalho da janela "Gerenciar": Marca - Cor - Tipo (fabricante - cor
-  // comercial - linha), com o código do rolo como subtítulo. Sem o tipo do
-  // grupo carregado, cai no próprio código.
-  function spoolTitleLabel(spool: FilamentSpool): string {
-    const type = typeById.get(spool.filament_type_id)
-    return type ? `${type.manufacturer} - ${type.commercial_color} - ${type.line}` : spool.code
-  }
 
   function openCreateDialog(typeId: string) {
     setCreateTargetTypeId(typeId)
@@ -334,30 +327,59 @@ export function FilamentTypeDrawer({
     }
   }
 
-  function openManageDialog(spool: FilamentSpool) {
-    setManagingSpool(spool)
-    setManageInitialOperation(null)
-    setIsManageDialogOpen(true)
+  // Status interativo (2026-09-05) — substitui o botão "Gerenciar"/a antiga
+  // aba "Movimentar" para trocar de status. Sempre passa por
+  // update_filament_spool (a MESMA rota/regra já usada por Editar rolo),
+  // nunca um estado só visual: só é aplicado ao estado local depois da
+  // resposta do backend. DESCARTADO é terminal (FILAMENT_SPOOL_DISCARD_IS_FINAL)
+  // — a proteção real continua no backend, esta função só evita uma
+  // chamada previsivelmente rejeitada.
+  async function applyStatusChange(spool: FilamentSpool, status: FilamentSpoolStatus) {
+    setPendingStatusSpoolId(spool.id)
+    try {
+      await update(spool.id, { status })
+      toast.success('Status atualizado.')
+      onSummaryChanged()
+    } catch (err) {
+      toast.error(toErrorMessage(err))
+    } finally {
+      setPendingStatusSpoolId(null)
+    }
   }
 
-  // Atalho "Ajustar peso" da tabela/cards: mesma janela do botão
-  // "Gerenciar", mas já entra na aba "Movimentar" com a operação "Ajuste"
-  // pré-selecionada — sem exigir um segundo clique. O rolo é mantido pelo
-  // id; o ajuste só é gravado após a confirmação do formulário.
-  function openAdjustDialog(spool: FilamentSpool) {
-    setManagingSpool(spool)
-    setManageInitialOperation('ADJUST')
-    setIsManageDialogOpen(true)
+  // Selecionar a opção JÁ atual nunca chega aqui (FilamentSpoolStatusControl
+  // desabilita o próprio item) — o `status === spool.status` abaixo é só uma
+  // segunda barreira. Mudar para DESCARTADO sempre pede confirmação
+  // explícita antes de gravar (evita descarte acidental); as demais
+  // transições são imediatas.
+  function handleStatusSelect(spool: FilamentSpool, status: FilamentSpoolStatus) {
+    if (status === spool.status) return
+    if (status === 'DESCARTADO') {
+      setDiscardCandidate(spool)
+      return
+    }
+    void applyStatusChange(spool, status)
   }
 
-  // Menu de três pontos de cada rolo físico — só "Editar" e "Excluir rolo"
-  // (Desativar/Descartar/Arquivar não voltam ao menu). "Excluir rolo"
-  // resolve entre exclusão física (sem histórico) e arquivamento com
-  // preservação do histórico (com movimentações) — ver
-  // handleConfirmRemoveSpool. Um rolo já arquivado (is_active=false) já foi
-  // removido do estoque ativo: "Excluir rolo" fica desabilitado para não
-  // repetir a remoção.
+  async function handleConfirmDiscard() {
+    if (!discardCandidate) return
+    await applyStatusChange(discardCandidate, 'DESCARTADO')
+    setDiscardCandidate(null)
+  }
+
+  // Menu de três pontos de cada rolo físico — "Editar" e "Excluir rolo"
+  // (Desativar/Arquivar não voltam ao menu), mais "Abrir rolo" e "Histórico"
+  // (2026-09-05). "Excluir rolo" resolve entre exclusão física (sem
+  // histórico) e arquivamento com preservação do histórico (com
+  // movimentações) — ver handleConfirmRemoveSpool. Um rolo já arquivado
+  // (is_active=false) já foi removido do estoque ativo: "Excluir rolo" fica
+  // desabilitado para não repetir a remoção. "Abrir rolo" usa a MESMA regra
+  // de backend do dropdown de Status (applyStatusChange/update_filament_spool)
+  // — só aparece quando o rolo está ativo e ainda não está ABERTO nem
+  // DESCARTADO (terminal).
   function SpoolActionsMenu({ spool }: { spool: FilamentSpool }) {
+    const canOpen = spool.is_active && spool.status !== 'ABERTO' && spool.status !== 'DESCARTADO'
+    const isPending = pendingStatusSpoolId === spool.id
     return (
       <DropdownMenu>
         <DropdownMenuTrigger
@@ -381,36 +403,37 @@ export function FilamentTypeDrawer({
           >
             Excluir rolo
           </DropdownMenuItem>
+          {canOpen && (
+            <DropdownMenuItem disabled={isPending} onClick={() => handleStatusSelect(spool, 'ABERTO')}>
+              Abrir rolo
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem onClick={() => setHistorySpool(spool)}>Histórico</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     )
   }
 
+  // Botão compacto (2026-09-05) — mesmo ícone de antes (SlidersHorizontalIcon),
+  // agora só o ícone (rótulo continua acessível via aria-label) para caber
+  // ao lado do menu de três pontos dentro da coluna "Ações". Abre a janela
+  // simplificada FilamentSpoolWeightAdjustDialog em vez da antiga janela
+  // "Gerenciar" com "Ajuste" pré-selecionado. Desabilitado para um rolo
+  // DESCARTADO (terminal) ou arquivado — mesma regra que já bloqueava
+  // Movimentar/Pesar dentro da antiga janela "Gerenciar"
+  // (FilamentSpoolPanel.isReadOnly).
   function AdjustWeightButton({ spool }: { spool: FilamentSpool }) {
+    const disabled = spool.status === 'DESCARTADO' || !spool.is_active
     return (
       <Button
         variant="outline"
-        size="sm"
-        onClick={() => openAdjustDialog(spool)}
+        size="icon-sm"
+        onClick={() => setAdjustingSpool(spool)}
         aria-label={`Ajustar peso do rolo ${spool.code}`}
+        disabled={disabled}
         className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0"
       >
         <SlidersHorizontalIcon className="size-4" aria-hidden="true" />
-        Ajustar peso
-      </Button>
-    )
-  }
-
-  function ManageSpoolButton({ spool }: { spool: FilamentSpool }) {
-    return (
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => openManageDialog(spool)}
-        aria-label={`Gerenciar rolo ${spool.code} — movimentar, pesar ou consultar histórico`}
-        className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0"
-      >
-        Gerenciar
       </Button>
     )
   }
@@ -548,21 +571,15 @@ export function FilamentTypeDrawer({
               <Table className="table-fixed text-sm">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="h-auto w-[11%] py-2 whitespace-normal">
+                    <TableHead className="h-auto w-[18%] py-2 whitespace-normal">
                       Identificador
                     </TableHead>
-                    <TableHead className="h-auto w-[17%] py-2 whitespace-normal">
-                      Fabricante / tipo
-                    </TableHead>
-                    <TableHead className="h-auto w-[12%] py-2 whitespace-normal">Marca</TableHead>
-                    <TableHead className="h-auto w-[13%] py-2 whitespace-normal">
+                    <TableHead className="h-auto w-[20%] py-2 whitespace-normal">Marca</TableHead>
+                    <TableHead className="h-auto w-[19%] py-2 whitespace-normal">
                       Peso Líquido
                     </TableHead>
-                    <TableHead className="h-auto w-[10%] py-2 whitespace-normal">Status</TableHead>
-                    <TableHead className="h-auto w-[16%] py-2 whitespace-normal">
-                      Ajustar peso
-                    </TableHead>
-                    <TableHead className="h-auto w-[21%] py-2 text-right whitespace-normal">
+                    <TableHead className="h-auto w-[19%] py-2 whitespace-normal">Status</TableHead>
+                    <TableHead className="h-auto w-[24%] py-2 text-right whitespace-normal">
                       Ações
                     </TableHead>
                   </TableRow>
@@ -576,9 +593,6 @@ export function FilamentTypeDrawer({
                       <TableCell className="truncate" title={spool.code}>
                         {spool.code}
                       </TableCell>
-                      <TableCell className="truncate" title={spoolManufacturerLabel(spool)}>
-                        {spoolManufacturerLabel(spool)}
-                      </TableCell>
                       <TableCell className="truncate" title={spoolMarcaLabel(spool)}>
                         {spoolMarcaLabel(spool)}
                       </TableCell>
@@ -587,16 +601,18 @@ export function FilamentTypeDrawer({
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap items-center gap-1.5 whitespace-normal">
-                          <span>{spool.status}</span>
+                          <FilamentSpoolStatusControl
+                            spoolCode={spool.code}
+                            status={spool.status}
+                            disabled={!spool.is_active || pendingStatusSpoolId === spool.id}
+                            onSelect={(status) => handleStatusSelect(spool, status)}
+                          />
                           {!spool.is_active && <ArchivedBadge />}
                         </div>
                       </TableCell>
                       <TableCell>
-                        <AdjustWeightButton spool={spool} />
-                      </TableCell>
-                      <TableCell>
                         <div className="flex min-w-0 items-center justify-end gap-2">
-                          <ManageSpoolButton spool={spool} />
+                          <AdjustWeightButton spool={spool} />
                           <SpoolActionsMenu spool={spool} />
                         </div>
                       </TableCell>
@@ -615,18 +631,17 @@ export function FilamentTypeDrawer({
                       {!spool.is_active && <ArchivedBadge />}
                     </div>
                     <div className="text-muted-foreground grid grid-cols-1 gap-1 text-xs">
-                      <span>Fabricante / tipo: {spoolManufacturerLabel(spool)}</span>
                       <span>Marca: {spoolMarcaLabel(spool)}</span>
                       <span>Peso Líquido: {formatGrams(spool.current_net_weight_grams)}</span>
-                      <span>Status: {spool.status}</span>
-                      <span>
-                        Abertura:{' '}
-                        {formatDate(spool.opened_at ? spool.opened_at.slice(0, 10) : null)}
-                      </span>
                     </div>
+                    <FilamentSpoolStatusControl
+                      spoolCode={spool.code}
+                      status={spool.status}
+                      disabled={!spool.is_active || pendingStatusSpoolId === spool.id}
+                      onSelect={(status) => handleStatusSelect(spool, status)}
+                    />
                     <div className="flex flex-wrap items-center justify-end gap-2">
                       <AdjustWeightButton spool={spool} />
-                      <ManageSpoolButton spool={spool} />
                       <SpoolActionsMenu spool={spool} />
                     </div>
                   </CardContent>
@@ -780,30 +795,56 @@ export function FilamentTypeDrawer({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isManageDialogOpen} onOpenChange={setIsManageDialogOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
+      {/* Confirmação antes de Descartado (2026-09-05) — a única transição de
+          status que pede confirmação explícita, para evitar descarte
+          acidental (DESCARTADO é terminal: update_filament_spool rejeita
+          qualquer mudança de status posterior). */}
+      <Dialog
+        open={discardCandidate !== null}
+        onOpenChange={(open) => {
+          if (!open && pendingStatusSpoolId !== discardCandidate?.id) setDiscardCandidate(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            {/* Cabeçalho da janela "Gerenciar": Marca - Cor - Tipo, com o
-                código do rolo (uma única vez) como subtítulo. Sem o texto
-                fixo "Movimentar / Pesar / Histórico". */}
-            <DialogTitle>{managingSpool ? spoolTitleLabel(managingSpool) : ''}</DialogTitle>
-            <DialogDescription>{managingSpool?.code}</DialogDescription>
+            <DialogTitle>Descartar rolo</DialogTitle>
+            <DialogDescription>
+              {discardCandidate &&
+                `Tem certeza que deseja marcar o rolo "${discardCandidate.code}" como Descartado? Esta ação é definitiva — um rolo descartado não pode voltar a ser movimentado nem ter o status alterado.`}
+            </DialogDescription>
           </DialogHeader>
-          {managingSpool && (
-            <FilamentSpoolPanel
-              key={`${managingSpool.id}-${manageInitialOperation ?? 'manage'}`}
-              spool={managingSpool}
-              initialMovementOperation={manageInitialOperation}
-              onSpoolChanged={(patch) => {
-                setLocalSpoolState(managingSpool.id, patch)
-                setManagingSpool((current) => (current ? { ...current, ...patch } : current))
-                onSummaryChanged()
-              }}
-              onClose={() => setIsManageDialogOpen(false)}
-            />
-          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDiscardCandidate(null)}
+              disabled={pendingStatusSpoolId === discardCandidate?.id}
+              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => void handleConfirmDiscard()}
+              disabled={pendingStatusSpoolId === discardCandidate?.id}
+            >
+              {pendingStatusSpoolId === discardCandidate?.id ? 'Descartando...' : 'Descartar rolo'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <FilamentSpoolWeightAdjustDialog
+        spool={adjustingSpool}
+        onClose={() => setAdjustingSpool(null)}
+        onAdjusted={(spoolId, patch) => {
+          setLocalSpoolState(spoolId, patch)
+          onSummaryChanged()
+        }}
+      />
+
+      <FilamentSpoolHistoryDialog spool={historySpool} onClose={() => setHistorySpool(null)} />
     </div>
   )
 }

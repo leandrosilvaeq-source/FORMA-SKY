@@ -953,7 +953,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     expect(within(dialog).getByRole('switch', { name: 'Mostrar arquivados' })).toBeInTheDocument()
   })
 
-  it('"Ver rolos" abre TODOS os tipos/fabricantes do grupo, com o fabricante visível em cada rolo', async () => {
+  it('"Ver rolos" abre TODOS os tipos/fabricantes do grupo, com a marca correta em cada rolo', async () => {
     mockTypes([
       typeFixture({ filament_type_id: 'a', manufacturer: 'Voolt3D' }),
       typeFixture({ filament_type_id: 'b', manufacturer: 'National3D' }),
@@ -967,14 +967,15 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
 
     const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
     // O resumo "Fabricantes: ..." foi removido do topo da janela; a
-    // identificação do grupo agora é só o título. O fabricante continua
-    // visível por rolo na tabela abaixo.
+    // identificação do grupo agora é só o título. A coluna "Fabricante /
+    // tipo" também foi removida da tabela (simplificação 2026-09-05) — o
+    // fabricante de cada rolo continua visível pela coluna "Marca".
     expect(within(dialog).queryByText(/Fabricantes:/)).not.toBeInTheDocument()
     const table = getSpoolsTable(dialog)
     const rl1 = within(table).getByText('RL-26-001').closest('tr') as HTMLElement
     const rl2 = within(table).getByText('RL-26-002').closest('tr') as HTMLElement
-    expect(within(rl1).getByText('Voolt3D · Sólida · Preto')).toBeInTheDocument()
-    expect(within(rl2).getByText('National3D · Sólida · Preto')).toBeInTheDocument()
+    expect(within(rl1).getByText('Voolt3D')).toBeInTheDocument()
+    expect(within(rl2).getByText('National3D')).toBeInTheDocument()
   })
 
   it('o rodapé traz um conjunto de botões por tipo/fabricante do grupo — cada botão age no tipo individual', async () => {
@@ -1034,7 +1035,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     const heading = within(dialog).getByText('Rolos em estoque')
     const table = getSpoolsTable(dialog)
     // Card mobile do mesmo rolo (fora da <table>).
-    const mobileCard = within(dialog).getByText(/Fabricante \/ tipo:/i)
+    const mobileCard = within(dialog).getByText(/^Marca:/i)
     const archivedSwitch = within(dialog).getByRole('switch', { name: 'Mostrar arquivados' })
     const typeActions = within(dialog).getByRole('group', {
       name: /Ações do tipo Voolt3D — Preto/i,
@@ -1279,7 +1280,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     mockSpoolCounts()
   })
 
-  it('registrar movimentação (Ajuste) atualiza o saldo local do rolo e aciona o refetch do resumo', async () => {
+  it('"Ajustar peso" registra o ajuste (diferença calculada), atualiza o saldo local e aciona o refetch do resumo', async () => {
     const setLocalSpoolState = vi.fn()
     const typesRefetch = vi.fn()
     const register = vi.fn().mockResolvedValue({
@@ -1290,7 +1291,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
       quantity_delta: 100,
       balance_before: 500,
       balance_after: 600,
-      reason: 'pesagem real',
+      reason: 'Ajuste de peso líquido (janela Ver rolos)',
       reference_type: null,
       reference_id: null,
       idempotency_key: null,
@@ -1306,16 +1307,17 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
 
     const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
     await user.click(
-      within(getSpoolsTable(dialog)).getByRole('button', {
-        name: /movimentar, pesar ou consultar histórico/i,
-      }),
+      within(getSpoolsTable(dialog)).getByRole('button', { name: 'Ajustar peso do rolo RL-26-001' }),
     )
-    await user.click(screen.getByRole('radio', { name: 'Ajuste' }))
-    await user.type(screen.getByLabelText('Novo peso líquido (g)'), '600')
-    await user.type(screen.getByLabelText('Motivo/observação'), 'pesagem real')
-    await user.click(screen.getByRole('button', { name: 'Confirmar ajuste' }))
+    const adjustDialog = await screen.findByRole('dialog', { name: 'Ajustar peso' })
+    // Peso líquido atual é só leitura; o campo pede o NOVO PESO ABSOLUTO.
+    expect(within(adjustDialog).getByText('500g')).toBeInTheDocument()
+    await user.type(within(adjustDialog).getByLabelText('Novo peso líquido (g)'), '600')
+    await user.click(within(adjustDialog).getByRole('button', { name: 'Salvar ajuste' }))
 
     await waitFor(() => expect(register).toHaveBeenCalledTimes(1))
+    // A diferença (600 - 500 = +100) é calculada aqui e gravada pela MESMA
+    // rota de ajuste já existente — nunca um UPDATE direto do peso.
     expect(register.mock.calls[0][0]).toMatchObject({
       movement_type: 'POSITIVE_ADJUSTMENT',
       quantity: 100,
@@ -1325,22 +1327,114 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
       status: undefined,
     })
     expect(typesRefetch).toHaveBeenCalledTimes(1)
+    expect(toastMock.success).toHaveBeenCalledWith('Peso ajustado.')
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Ajustar peso' })).not.toBeInTheDocument(),
+    )
   })
 
-  it('rolo descartado: só o histórico, sem área de movimentação/pesagem', async () => {
+  it('"Ajustar peso": campo obrigatório, não aceita negativo, mas aceita zero; impede envio duplicado', async () => {
+    let resolveRegister: (value: unknown) => void = () => {}
+    const register = vi.fn<(input: unknown) => Promise<unknown>>(
+      () =>
+        new Promise((resolve) => {
+          resolveRegister = resolve
+        }),
+    )
+    mockTypes([typeFixture()])
+    mockSpools([spoolFixture()])
+    mockMovements({ register })
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    await user.click(
+      within(getSpoolsTable(dialog)).getByRole('button', { name: 'Ajustar peso do rolo RL-26-001' }),
+    )
+    const adjustDialog = await screen.findByRole('dialog', { name: 'Ajustar peso' })
+    const saveButton = within(adjustDialog).getByRole('button', { name: 'Salvar ajuste' })
+
+    // Campo obrigatório.
+    await user.click(saveButton)
+    expect(await within(adjustDialog).findByText(/informe o novo peso líquido/i)).toBeInTheDocument()
+    expect(register).not.toHaveBeenCalled()
+
+    // Não aceita negativo.
+    await user.type(within(adjustDialog).getByLabelText('Novo peso líquido (g)'), '-10')
+    await user.click(saveButton)
+    expect(
+      await within(adjustDialog).findByText(/deve ser maior ou igual a 0/i),
+    ).toBeInTheDocument()
+    expect(register).not.toHaveBeenCalled()
+
+    // Zero é um valor válido (zera o rolo).
+    await user.clear(within(adjustDialog).getByLabelText('Novo peso líquido (g)'))
+    await user.type(within(adjustDialog).getByLabelText('Novo peso líquido (g)'), '0')
+    await user.click(saveButton)
+    await waitFor(() => expect(register).toHaveBeenCalledTimes(1))
+    expect(register.mock.calls[0][0]).toMatchObject({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity: 500 })
+
+    // Enquanto a chamada não resolve, o botão vira "Salvando..." (desabilitado)
+    // e um novo clique não dispara um segundo envio.
+    const busyButton = within(adjustDialog).getByRole('button', { name: 'Salvando...' })
+    expect(busyButton).toBeDisabled()
+    await user.click(busyButton)
+    expect(register).toHaveBeenCalledTimes(1)
+
+    resolveRegister({ balance_after: 0 })
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Ajustar peso' })).not.toBeInTheDocument(),
+    )
+  })
+
+  it('"Ajustar peso" não vaza entre rolos diferentes: reabrir com outro rolo começa com o campo vazio', async () => {
+    mockTypes([typeFixture()])
+    mockSpools([
+      spoolFixture({ id: 's1', code: 'RL-26-001', current_net_weight_grams: 500 }),
+      spoolFixture({ id: 's2', code: 'RL-26-002', current_net_weight_grams: 300 }),
+    ])
+    mockMovements()
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const table = getSpoolsTable(dialog)
+
+    await user.click(within(table).getByRole('button', { name: 'Ajustar peso do rolo RL-26-001' }))
+    let adjustDialog = await screen.findByRole('dialog', { name: 'Ajustar peso' })
+    await user.type(within(adjustDialog).getByLabelText('Novo peso líquido (g)'), '700')
+    await user.click(within(adjustDialog).getByRole('button', { name: 'Cancelar' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Ajustar peso' })).not.toBeInTheDocument(),
+    )
+
+    await user.click(within(table).getByRole('button', { name: 'Ajustar peso do rolo RL-26-002' }))
+    adjustDialog = await screen.findByRole('dialog', { name: 'Ajustar peso' })
+    expect(within(adjustDialog).getByText('RL-26-002')).toBeInTheDocument()
+    expect(within(adjustDialog).getByText('300g')).toBeInTheDocument()
+    expect(within(adjustDialog).getByLabelText('Novo peso líquido (g)')).toHaveValue('')
+  })
+
+  it('rolo descartado: status e "Ajustar peso" ficam bloqueados; "Abrir rolo" não aparece; histórico continua acessível', async () => {
     mockTypes([typeFixture()])
     mockSpools([spoolFixture({ status: 'DESCARTADO' })])
+    mockMovements()
     renderPage()
     const user = userEvent.setup()
     const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
-    await user.click(
-      within(getSpoolsTable(dialog)).getByRole('button', {
-        name: /movimentar, pesar ou consultar histórico/i,
-      }),
-    )
-    expect(screen.getByText(/foi descartado e não aceita novas movimentações/i)).toBeInTheDocument()
-    expect(screen.queryByRole('radiogroup', { name: 'Ação' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('radiogroup', { name: 'Operação' })).not.toBeInTheDocument()
+    const row = within(getSpoolsTable(dialog)).getByText('RL-26-001').closest('tr') as HTMLElement
+
+    expect(
+      within(row).getByRole('button', { name: 'Status do rolo RL-26-001: Descartado' }),
+    ).toBeDisabled()
+    expect(within(row).getByRole('button', { name: 'Ajustar peso do rolo RL-26-001' })).toBeDisabled()
+
+    await user.click(within(row).getByRole('button', { name: 'Mais ações para o rolo RL-26-001' }))
+    const items = (await screen.findAllByRole('menuitem')).map((i) => i.textContent)
+    expect(items).toEqual(['Editar', 'Excluir rolo', 'Histórico'])
+
+    await user.click(screen.getByRole('menuitem', { name: 'Histórico' }))
+    expect(await screen.findByRole('dialog', { name: 'Histórico do rolo' })).toBeInTheDocument()
   })
 
   it('rolo SEM histórico: "Excluir rolo" faz exclusão física definitiva e a confirmação informa que é permanente', async () => {
@@ -1384,9 +1478,10 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
         name: 'Mais ações para o rolo RL-26-001',
       }),
     )
-    // Menu segue só com Editar e Excluir rolo — sem Arquivar/Desativar/Descartar.
+    // Menu segue só com Editar, Excluir rolo e Histórico — sem Arquivar/
+    // Desativar/Descartar, e sem "Abrir rolo" (o fixture já está ABERTO).
     const items = (await screen.findAllByRole('menuitem')).map((i) => i.textContent)
-    expect(items).toEqual(['Editar', 'Excluir rolo'])
+    expect(items).toEqual(['Editar', 'Excluir rolo', 'Histórico'])
     await user.click(screen.getByRole('menuitem', { name: 'Excluir rolo' }))
 
     // Confirmação diferente: fala em remover do estoque ativo, sem a palavra "permanente".
@@ -1488,7 +1583,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
     // Card mobile (fora da <table>): mesmo componente de menu do rolo.
     const mobileCard = within(dialog)
-      .getByText('Fabricante / tipo: Voolt3D · Sólida · Preto')
+      .getByText('Marca: Voolt3D')
       .closest('[data-slot="card"]') as HTMLElement
     await user.click(
       within(mobileCard).getByRole('button', { name: 'Mais ações para o rolo RL-26-001' }),
@@ -1543,7 +1638,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     expect(create.mock.calls[0][0]).toMatchObject({ filament_type_id: 'b' })
   })
 
-  it('movimentar/pesar dentro de "Ver rolos" também aciona o refetch da contagem de rolos disponíveis', async () => {
+  it('ajustar peso dentro de "Ver rolos" também aciona o refetch da contagem de rolos disponíveis', async () => {
     const register = vi.fn().mockResolvedValue({
       id: 'm1',
       filament_type_id: 't1',
@@ -1552,7 +1647,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
       quantity_delta: -100,
       balance_before: 500,
       balance_after: 400,
-      reason: 'correção',
+      reason: 'Ajuste de peso líquido (janela Ver rolos)',
       reference_type: null,
       reference_id: null,
       idempotency_key: null,
@@ -1568,17 +1663,17 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
 
     const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
     await user.click(
-      within(getSpoolsTable(dialog)).getByRole('button', {
-        name: /movimentar, pesar ou consultar histórico/i,
-      }),
+      within(getSpoolsTable(dialog)).getByRole('button', { name: 'Ajustar peso do rolo RL-26-001' }),
     )
-    await user.click(screen.getByRole('radio', { name: 'Registrar perda' }))
-    await user.type(screen.getByLabelText('Quantidade (g)'), '100')
-    await user.type(screen.getByLabelText('Motivo/observação'), 'material contaminado')
-    await user.click(screen.getByRole('button', { name: 'Registrar perda' }))
+    const adjustDialog = await screen.findByRole('dialog', { name: 'Ajustar peso' })
+    await user.type(within(adjustDialog).getByLabelText('Novo peso líquido (g)'), '400')
+    await user.click(within(adjustDialog).getByRole('button', { name: 'Salvar ajuste' }))
 
     await waitFor(() => expect(register).toHaveBeenCalledTimes(1))
-    expect(register.mock.calls[0][0]).toMatchObject({ movement_type: 'LOSS', quantity: 100 })
+    expect(register.mock.calls[0][0]).toMatchObject({
+      movement_type: 'NEGATIVE_ADJUSTMENT',
+      quantity: 100,
+    })
     expect(refetchCountsMock).toHaveBeenCalled()
   })
 
@@ -1603,7 +1698,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     expect(within(dialog).getByText('Peso Líquido: 200g')).toBeInTheDocument()
   })
 
-  it('nova coluna "Ajustar peso" fica entre "Status" e "Ações", com botão rotulado pelo código do rolo', async () => {
+  it('tabela simplificada (2026-09-05): só Identificador, Marca, Peso Líquido, Status e Ações — sem "Fabricante / tipo", coluna própria de peso ou botão "Gerenciar"', async () => {
     mockTypes([typeFixture()])
     mockSpools([spoolFixture()])
     renderPage()
@@ -1614,18 +1709,15 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     const headers = within(table)
       .getAllByRole('columnheader')
       .map((h) => h.textContent)
-    expect(headers).toEqual([
-      'Identificador',
-      'Fabricante / tipo',
-      'Marca',
-      'Peso Líquido',
-      'Status',
-      'Ajustar peso',
-      'Ações',
-    ])
+    expect(headers).toEqual(['Identificador', 'Marca', 'Peso Líquido', 'Status', 'Ações'])
+
     const row = within(table).getByText('RL-26-001').closest('tr') as HTMLElement
-    const adjustButton = within(row).getByRole('button', { name: 'Ajustar peso do rolo RL-26-001' })
-    expect(adjustButton).toHaveTextContent('Ajustar peso')
+    // "Ajustar peso" (compacto, só ícone) e o menu de três pontos moram
+    // juntos na coluna "Ações" — sem o botão "Gerenciar", removido.
+    expect(within(row).getByRole('button', { name: 'Ajustar peso do rolo RL-26-001' })).toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: 'Mais ações para o rolo RL-26-001' })).toBeInTheDocument()
+    expect(within(row).queryByRole('button', { name: /gerenciar/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^gerenciar/i })).not.toBeInTheDocument()
   })
 
   it('coluna "Marca" aparece na tabela de rolos, com o valor derivado do item da compra multi-item (purchase_item_manufacturer)', async () => {
@@ -1652,11 +1744,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
     const table = getSpoolsTable(dialog)
     const row = within(table).getByText('RL-26-001').closest('tr') as HTMLElement
-    // A coluna "Marca" (só o fabricante) é distinta de "Fabricante / tipo"
-    // (fabricante + linha + cor combinados) — as duas derivam do MESMO
-    // fabricante histórico do tipo, mas com textos diferentes.
     expect(within(row).getByText('National3D')).toBeInTheDocument()
-    expect(within(row).getByText('National3D · Sólida · Preto')).toBeInTheDocument()
   })
 
   it('rolo sem marca real (fabricante do tipo = "Não informado") mostra "—" na coluna Marca', async () => {
@@ -1681,9 +1769,10 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     expect(within(dialog).getByText('Marca: Voolt')).toBeInTheDocument()
   })
 
-  it('"Ajustar peso" abre a janela de gerenciamento do rolo certo já com "Ajuste" selecionado', async () => {
+  it('"Ajustar peso" abre a janela simplificada do rolo certo, com o peso líquido atual em modo leitura', async () => {
     mockTypes([typeFixture({ filament_type_id: 't1', manufacturer: 'MasterPrint' })])
-    mockSpools([spoolFixture({ id: 's1', code: 'RL-26-002' })])
+    mockSpools([spoolFixture({ id: 's1', code: 'RL-26-002', current_net_weight_grams: 750 })])
+    mockMovements()
     renderPage()
     const user = userEvent.setup()
 
@@ -1694,15 +1783,18 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
       }),
     )
 
-    const manageDialog = await screen.findByRole('dialog', { name: 'MasterPrint - Preto - Sólida' })
-    expect(within(manageDialog).getByRole('radio', { name: 'Ajuste' })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    )
-    expect(within(manageDialog).getByLabelText('Novo peso líquido (g)')).toBeInTheDocument()
+    const adjustDialog = await screen.findByRole('dialog', { name: 'Ajustar peso' })
+    expect(within(adjustDialog).getByText('RL-26-002')).toBeInTheDocument()
+    expect(within(adjustDialog).getByText('750g')).toBeInTheDocument()
+    const newWeightField = within(adjustDialog).getByLabelText('Novo peso líquido (g)')
+    expect(newWeightField).toBeInTheDocument()
+    expect(newWeightField).not.toHaveAttribute('readonly')
+    // Nenhum outro campo (motivo/data/operação) desta antiga janela "Gerenciar".
+    expect(within(adjustDialog).queryByRole('radio', { name: 'Ajuste' })).not.toBeInTheDocument()
+    expect(within(adjustDialog).queryByLabelText('Motivo/observação')).not.toBeInTheDocument()
   })
 
-  it('menu de três pontos do rolo físico tem só "Editar" e "Excluir rolo"', async () => {
+  it('menu de três pontos do rolo físico: "Editar", "Excluir rolo" e "Histórico" (sem "Abrir rolo" quando já ABERTO)', async () => {
     mockTypes([typeFixture()])
     mockSpools([spoolFixture()])
     renderPage()
@@ -1715,7 +1807,52 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
       }),
     )
     const items = (await screen.findAllByRole('menuitem')).map((i) => i.textContent)
-    expect(items).toEqual(['Editar', 'Excluir rolo'])
+    expect(items).toEqual(['Editar', 'Excluir rolo', 'Histórico'])
+  })
+
+  it('menu de três pontos: "Abrir rolo" aparece para um rolo LACRADO, muda o status para Aberto e some do menu depois', async () => {
+    const update = vi.fn().mockResolvedValue(spoolFixture({ status: 'ABERTO' }))
+    const typesRefetch = vi.fn()
+    mockTypes([typeFixture()], { refetch: typesRefetch })
+    mockSpools([spoolFixture({ status: 'LACRADO' })], { update })
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    await user.click(
+      within(getSpoolsTable(dialog)).getByRole('button', {
+        name: 'Mais ações para o rolo RL-26-001',
+      }),
+    )
+    const items = (await screen.findAllByRole('menuitem')).map((i) => i.textContent)
+    expect(items).toEqual(['Editar', 'Excluir rolo', 'Abrir rolo', 'Histórico'])
+
+    await user.click(screen.getByRole('menuitem', { name: 'Abrir rolo' }))
+
+    // Mesma rota de backend do dropdown de Status (update_filament_spool).
+    await waitFor(() => expect(update).toHaveBeenCalledWith('s1', { status: 'ABERTO' }))
+    expect(toastMock.success).toHaveBeenCalledWith('Status atualizado.')
+    expect(typesRefetch).toHaveBeenCalled()
+  })
+
+  it('"Abrir rolo" não aparece para um rolo já ABERTO nem para um rolo DESCARTADO', async () => {
+    mockTypes([typeFixture()])
+    mockSpools([
+      spoolFixture({ id: 's1', code: 'RL-26-001', status: 'ABERTO' }),
+      spoolFixture({ id: 's2', code: 'RL-26-002', status: 'DESCARTADO' }),
+    ])
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const table = getSpoolsTable(dialog)
+
+    await user.click(within(table).getByRole('button', { name: 'Mais ações para o rolo RL-26-001' }))
+    expect(screen.queryByRole('menuitem', { name: 'Abrir rolo' })).not.toBeInTheDocument()
+    await user.keyboard('{Escape}')
+
+    await user.click(within(table).getByRole('button', { name: 'Mais ações para o rolo RL-26-002' }))
+    expect(screen.queryByRole('menuitem', { name: 'Abrir rolo' })).not.toBeInTheDocument()
   })
 
   it('"Editar" no menu do rolo continua abrindo a edição do rolo', async () => {
@@ -1761,112 +1898,149 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     expect(typesRefetch).toHaveBeenCalled()
   })
 
-  it('janela "Gerenciar": cabeçalho é só "Marca - Cor - Tipo" + código (uma vez), sem "Movimentar / Pesar / Histórico"', async () => {
+  it('"Histórico" abre a janela dedicada do rolo certo — nunca a antiga janela "Gerenciar"', async () => {
     mockTypes([typeFixture({ filament_type_id: 't1', manufacturer: 'MasterPrint' })])
     mockSpools([spoolFixture({ id: 's1', code: 'RL-26-002' })])
+    mockMovements({
+      movements: [
+        {
+          id: 'm1',
+          filament_type_id: 't1',
+          spool_id: 's1',
+          movement_type: 'POSITIVE_ADJUSTMENT',
+          quantity_delta: 100,
+          balance_before: 500,
+          balance_after: 600,
+          reason: 'correção',
+          reference_type: null,
+          reference_id: null,
+          idempotency_key: null,
+          occurred_at: '2026-08-27T12:00:00Z',
+          created_by: 'u1',
+          created_at: '2026-08-27T12:00:00Z',
+        },
+      ],
+    })
     renderPage()
     const user = userEvent.setup()
 
     const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
     await user.click(
       within(getSpoolsTable(dialog)).getByRole('button', {
-        name: /movimentar, pesar ou consultar histórico/i,
+        name: 'Mais ações para o rolo RL-26-002',
       }),
     )
-    const manageDialog = await screen.findByRole('dialog', { name: 'MasterPrint - Preto - Sólida' })
-    expect(
-      within(manageDialog).queryByText('Movimentar / Pesar / Histórico'),
-    ).not.toBeInTheDocument()
-    expect(within(manageDialog).getAllByText('RL-26-002')).toHaveLength(1)
+    await user.click(await screen.findByRole('menuitem', { name: 'Histórico' }))
+
+    const historyDialog = await screen.findByRole('dialog', { name: 'Histórico do rolo' })
+    expect(within(historyDialog).getByText('RL-26-002')).toBeInTheDocument()
+    expect(within(historyDialog).getByText('Ajuste positivo')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'MasterPrint - Preto - Sólida' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Movimentar / Pesar / Histórico')).not.toBeInTheDocument()
   })
 
-  it('janela "Gerenciar": resumo tem só Peso Líquido, Status e Peso Disponível (nesta ordem), sem Peso nominal nem % restante', async () => {
-    mockTypes([typeFixture()])
-    mockSpools([spoolFixture({ current_net_weight_grams: 320, nominal_weight_grams: 1000 })])
-    renderPage()
-    const user = userEvent.setup()
-
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
-    await user.click(
-      within(getSpoolsTable(dialog)).getByRole('button', {
-        name: /movimentar, pesar ou consultar histórico/i,
-      }),
-    )
-    const manageDialog = await screen.findByRole('dialog', { name: 'Voolt3D - Preto - Sólida' })
-    const labels = within(manageDialog)
-      .getAllByText(/^(Peso Líquido|Status|Peso Disponível|Peso nominal|% restante)$/)
-      .map((el) => el.textContent)
-    expect(labels).toEqual(['Peso Líquido', 'Status', 'Peso Disponível'])
-    // Sem reserva implementada: Peso Disponível == Peso Líquido.
-    expect(within(manageDialog).getAllByText('320g')).toHaveLength(2)
-    expect(within(manageDialog).queryByText(/%/)).not.toBeInTheDocument()
-  })
-
-  it('janela "Gerenciar": operações são só "Registrar perda" e "Ajuste"; "Registrar pesagem" preservada', async () => {
+  it('"Histórico": estados de carregando, vazio e erro (reaproveitando FilamentMovementHistory)', async () => {
     mockTypes([typeFixture()])
     mockSpools([spoolFixture()])
     renderPage()
     const user = userEvent.setup()
-
     const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
-    await user.click(
-      within(getSpoolsTable(dialog)).getByRole('button', {
-        name: /movimentar, pesar ou consultar histórico/i,
-      }),
-    )
-    const manageDialog = await screen.findByRole('dialog', { name: 'Voolt3D - Preto - Sólida' })
-    // Aba de pesagem preservada.
-    expect(
-      within(manageDialog).getByRole('radio', { name: 'Registrar pesagem' }),
-    ).toBeInTheDocument()
-    expect(within(manageDialog).getByText('Histórico')).toBeInTheDocument()
-    // Operações de movimentação.
-    expect(within(manageDialog).getByRole('radio', { name: 'Registrar perda' })).toBeInTheDocument()
-    expect(within(manageDialog).getByRole('radio', { name: 'Ajuste' })).toBeInTheDocument()
-    for (const gone of ['Entrada', 'Compra', 'Devolução']) {
-      expect(within(manageDialog).queryByRole('radio', { name: gone })).not.toBeInTheDocument()
+    const table = getSpoolsTable(dialog)
+
+    async function openHistory() {
+      await user.click(within(table).getByRole('button', { name: 'Mais ações para o rolo RL-26-001' }))
+      await user.click(await screen.findByRole('menuitem', { name: 'Histórico' }))
+      return screen.findByRole('dialog', { name: 'Histórico do rolo' })
     }
-    expect(
-      within(manageDialog).queryByRole('radiogroup', { name: 'Tipo de movimentação' }),
-    ).not.toBeInTheDocument()
+
+    // Carregando.
+    mockMovements({ isLoading: true })
+    let historyDialog = await openHistory()
+    expect(within(historyDialog).getByText('Carregando histórico...')).toBeInTheDocument()
+    await user.click(within(historyDialog).getByRole('button', { name: 'Fechar' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Histórico do rolo' })).not.toBeInTheDocument(),
+    )
+
+    // Vazio.
+    mockMovements({ movements: [] })
+    historyDialog = await openHistory()
+    expect(within(historyDialog).getByText('Nenhuma movimentação registrada.')).toBeInTheDocument()
+    await user.click(within(historyDialog).getByRole('button', { name: 'Fechar' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Histórico do rolo' })).not.toBeInTheDocument(),
+    )
+
+    // Erro.
+    const { ApiError } = await import('@/lib/api/errors')
+    mockMovements({ loadError: new ApiError('database', 500, 'Falha ao carregar histórico.') })
+    historyDialog = await openHistory()
+    expect(within(historyDialog).getByText('Falha ao carregar histórico.')).toBeInTheDocument()
   })
 
-  it('o atalho "Ajustar peso" não vaza: abrir depois pelo botão "Gerenciar" começa sem operação selecionada', async () => {
+  it('dropdown de Status: mostra Lacrado/Aberto/Descartado, identifica a opção atual e não faz nada ao clicar nela de novo', async () => {
     mockTypes([typeFixture()])
-    mockSpools([spoolFixture({ id: 's1', code: 'RL-26-001' })])
+    mockSpools([spoolFixture({ status: 'LACRADO' })])
     renderPage()
     const user = userEvent.setup()
 
     const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
-    const table = getSpoolsTable(dialog)
+    const trigger = within(getSpoolsTable(dialog)).getByRole('button', {
+      name: 'Status do rolo RL-26-001: Lacrado',
+    })
+    await user.click(trigger)
+    const options = (await screen.findAllByRole('menuitem')).map((i) => i.textContent)
+    expect(options).toEqual(['Lacrado', 'Aberto', 'Descartado'])
+    // A opção atual (Lacrado) vem desabilitada — clicar nela não dispara nada.
+    expect(screen.getByRole('menuitem', { name: 'Lacrado' })).toHaveAttribute('data-disabled')
+    await user.click(screen.getByRole('menuitem', { name: 'Lacrado' }))
+    expect(toastMock.success).not.toHaveBeenCalled()
+  })
 
-    // 1) Abre pelo atalho: "Ajuste" pré-selecionado.
-    await user.click(within(table).getByRole('button', { name: 'Ajustar peso do rolo RL-26-001' }))
-    let manageDialog = await screen.findByRole('dialog', { name: 'Voolt3D - Preto - Sólida' })
-    expect(within(manageDialog).getByRole('radio', { name: 'Ajuste' })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    )
-    await user.keyboard('{Escape}')
-    await waitFor(() =>
-      expect(
-        screen.queryByRole('dialog', { name: 'Voolt3D - Preto - Sólida' }),
-      ).not.toBeInTheDocument(),
-    )
+  it('dropdown de Status: selecionar "Aberto" chama update_filament_spool (mesma rota de Editar) e atualiza a tabela sem F5', async () => {
+    const typesRefetch = vi.fn()
+    const update = vi.fn().mockResolvedValue(spoolFixture({ status: 'ABERTO' }))
+    mockTypes([typeFixture()], { refetch: typesRefetch })
+    mockSpools([spoolFixture({ status: 'LACRADO' })], { update })
+    renderPage()
+    const user = userEvent.setup()
 
-    // 2) Reabre o MESMO rolo pelo botão "Gerenciar": nenhuma operação marcada.
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
     await user.click(
-      within(table).getByRole('button', { name: /movimentar, pesar ou consultar histórico/i }),
+      within(getSpoolsTable(dialog)).getByRole('button', { name: 'Status do rolo RL-26-001: Lacrado' }),
     )
-    manageDialog = await screen.findByRole('dialog', { name: 'Voolt3D - Preto - Sólida' })
-    expect(within(manageDialog).getByRole('radio', { name: 'Ajuste' })).toHaveAttribute(
-      'aria-checked',
-      'false',
+    await user.click(await screen.findByRole('menuitem', { name: 'Aberto' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('s1', { status: 'ABERTO' }))
+    expect(toastMock.success).toHaveBeenCalledWith('Status atualizado.')
+    expect(typesRefetch).toHaveBeenCalled()
+  })
+
+  it('dropdown de Status: mudar para "Descartado" pede confirmação antes de gravar; cancelar não chama o backend', async () => {
+    const update = vi.fn().mockResolvedValue(spoolFixture({ status: 'DESCARTADO' }))
+    mockTypes([typeFixture()])
+    mockSpools([spoolFixture({ status: 'ABERTO' })], { update })
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    await user.click(
+      within(getSpoolsTable(dialog)).getByRole('button', { name: 'Status do rolo RL-26-001: Aberto' }),
     )
-    expect(within(manageDialog).getByRole('radio', { name: 'Registrar perda' })).toHaveAttribute(
-      'aria-checked',
-      'false',
+    await user.click(await screen.findByRole('menuitem', { name: 'Descartado' }))
+
+    const confirm = await screen.findByRole('dialog', { name: 'Descartar rolo' })
+    expect(within(confirm).getByText(/"RL-26-001"/)).toBeInTheDocument()
+    await user.click(within(confirm).getByRole('button', { name: 'Cancelar' }))
+    expect(update).not.toHaveBeenCalled()
+
+    // Confirmando desta vez, o backend é chamado normalmente.
+    await user.click(
+      within(getSpoolsTable(dialog)).getByRole('button', { name: 'Status do rolo RL-26-001: Aberto' }),
     )
+    await user.click(await screen.findByRole('menuitem', { name: 'Descartado' }))
+    await user.click(await screen.findByRole('button', { name: 'Descartar rolo' }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith('s1', { status: 'DESCARTADO' }))
   })
 })
 
