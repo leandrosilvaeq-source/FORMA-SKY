@@ -30,7 +30,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
 import { TableHead } from '@/components/ui/table'
 import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table'
 import { useAuth } from '@/context/AuthContext'
@@ -55,9 +54,13 @@ import {
   type FilamentFilterOption,
   type FilamentGroupFilterState,
 } from '@/lib/inventory/filamentGroupFilters'
+import {
+  FILAMENT_LINE_FILTER_OPTIONS,
+  resolveFilamentLineDisplayLabel,
+} from '@/lib/inventory/filamentLineAliases'
 import type { ColumnWidthSpec } from '@/lib/tables/columnWidths'
 import { cn } from '@/lib/utils'
-import type { FilamentTypeSummary } from '@/types/domain'
+import type { FilamentMaterial, FilamentTypeSummary } from '@/types/domain'
 
 // Módulo 3 (Estoque) — listagem de Filamentos CONSOLIDADA por Material +
 // Linha + Cor (2026-09-01). A coluna Fabricante saiu da listagem principal
@@ -216,6 +219,78 @@ function MultiSelectFilterButton({
   )
 }
 
+// Material (fixo: PLA/PETG/TPU, mesmo enum de FilamentMaterial) — a partir
+// de 2026-09-05.
+const FILAMENT_MATERIAL_FILTER_OPTIONS: FilamentMaterial[] = ['PLA', 'PETG', 'TPU']
+
+const FILTER_ACTION_BUTTON_CLASSNAME =
+  'focus-visible:ring-brand-accent rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50'
+const FILTER_ACTION_BUTTON_SELECTED_CLASSNAME =
+  'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
+const FILTER_ACTION_BUTTON_UNSELECTED_CLASSNAME =
+  'border-input text-muted-foreground hover:bg-muted hover:text-foreground'
+
+// Filtro de seleção única (Material / Linha, 2026-09-05) — mesmo padrão
+// visual/semântico de action buttons já usado em "Novo tipo de filamento"
+// (FilamentTypeForm.tsx) e em "Compra de filamentos" (PurchaseDialog.tsx):
+// role="radiogroup" + botões role="radio" com aria-checked, nunca um
+// dropdown. "Todos" (selectedValue === null) é sempre a primeira opção —
+// limpa o grupo em vez de selecionar um valor. Aplica o filtro
+// imediatamente ao clicar (mesmo setFilters síncrono dos demais filtros
+// desta página) — nunca exige F5.
+function SingleSelectActionFilter({
+  label,
+  ariaLabel,
+  options,
+  selectedValue,
+  onSelect,
+}: {
+  label: string
+  ariaLabel: string
+  options: readonly string[]
+  selectedValue: string | null
+  onSelect: (value: string | null) => void
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label>{label}</Label>
+      <div role="radiogroup" aria-label={ariaLabel} className="flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={selectedValue === null}
+          onClick={() => onSelect(null)}
+          className={cn(
+            FILTER_ACTION_BUTTON_CLASSNAME,
+            selectedValue === null
+              ? FILTER_ACTION_BUTTON_SELECTED_CLASSNAME
+              : FILTER_ACTION_BUTTON_UNSELECTED_CLASSNAME,
+          )}
+        >
+          Todos
+        </button>
+        {options.map((option) => (
+          <button
+            key={option}
+            type="button"
+            role="radio"
+            aria-checked={selectedValue === option}
+            onClick={() => onSelect(option)}
+            className={cn(
+              FILTER_ACTION_BUTTON_CLASSNAME,
+              selectedValue === option
+                ? FILTER_ACTION_BUTTON_SELECTED_CLASSNAME
+                : FILTER_ACTION_BUTTON_UNSELECTED_CLASSNAME,
+            )}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function FilamentsInventoryPage() {
   const {
     types,
@@ -278,11 +353,6 @@ export function FilamentsInventoryPage() {
   const [filters, setFilters] = useState<FilamentGroupFilterState>(EMPTY_FILAMENT_GROUP_FILTERS)
   const [minSpoolsInput, setMinSpoolsInput] = useState('')
   const [maxSpoolsInput, setMaxSpoolsInput] = useState('')
-  // Desligado por padrão: a listagem operacional só mostra grupos com ao
-  // menos um tipo ATIVO. Ligando, grupos totalmente arquivados também
-  // aparecem (com selo "Arquivado"), ainda com "Ver rolos" acessível para
-  // consultar o histórico preservado. Não altera nenhum resumo/contagem.
-  const [showArchivedTypes, setShowArchivedTypes] = useState(false)
 
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
@@ -355,19 +425,25 @@ export function FilamentsInventoryPage() {
 
   const rangeInvalid = isFilamentSpoolRangeInvalid(filters)
 
+  // Grupos totalmente arquivados (nenhum tipo ATIVO) nunca aparecem nesta
+  // listagem operacional (2026-09-05: o controle "Mostrar tipos arquivados"
+  // foi removido — não há mais como revelá-los aqui). Os tipos continuam
+  // intactos no banco (nenhum UPDATE/DELETE por esta mudança) — só deixaram
+  // de ter um caminho de exibição/"Ver rolos" nesta tela. Não confundir com
+  // o "Mostrar arquivados" dos ROLOS, dentro da janela "Ver rolos"
+  // (FilamentTypeDrawer) — controle DIFERENTE, preservado sem alteração.
   const visibleGroups = useMemo(() => {
     const term = normalizeForSearch(searchTerm)
     return filterFilamentGroups(groups, filters)
-      .filter((group) => group.hasActiveType || showArchivedTypes)
+      .filter((group) => group.hasActiveType)
       .filter((group) => matchesFilamentGroupSearch(group, term))
-  }, [groups, filters, searchTerm, showArchivedTypes])
-
-  const archivedTypeGroupCount = useMemo(
-    () => groups.filter((group) => !group.hasActiveType).length,
-    [groups],
-  )
+  }, [groups, filters, searchTerm])
 
   const activeFilterCount = filamentGroupFilterCount(filters)
+  // Material/Linha são seleção única (action buttons, 2026-09-05) — o Set
+  // nunca guarda mais de um elemento; null representa "Todos".
+  const selectedMaterial = filters.materials.size > 0 ? [...filters.materials][0] : null
+  const selectedLine = filters.lines.size > 0 ? [...filters.lines][0] : null
 
   function toggleFilterValue(kind: 'materials' | 'lines' | 'colors', value: string) {
     setFilters((current) => {
@@ -380,6 +456,16 @@ export function FilamentsInventoryPage() {
 
   function clearFilterGroup(kind: 'materials' | 'lines' | 'colors') {
     setFilters((current) => ({ ...current, [kind]: new Set() }))
+  }
+
+  // Material/Linha: seleção ÚNICA — escolher um valor SUBSTITUI o Set
+  // (nunca soma); "Todos" (value === null) volta ao Set vazio, equivalente
+  // a clearFilterGroup. Aplica imediatamente (mesmo setFilters síncrono),
+  // nunca exige F5; combina normalmente com o resto de `filters` (Cor,
+  // faixa de rolos) e com a busca — tudo já é AND por construção em
+  // matchesFilamentGroupFilters/visibleGroups.
+  function setSingleFilterValue(kind: 'materials' | 'lines', value: string | null) {
+    setFilters((current) => ({ ...current, [kind]: value === null ? new Set() : new Set([value]) }))
   }
 
   function commitSpoolRange(minRaw: string, maxRaw: string) {
@@ -581,60 +667,40 @@ export function FilamentsInventoryPage() {
           </Button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <MultiSelectFilterButton
+        <div className="flex flex-col gap-3">
+          <SingleSelectActionFilter
             label="Material"
             ariaLabel="Filtrar por material"
-            options={filterOptions.materials}
-            selected={filters.materials}
-            onToggle={(value) => toggleFilterValue('materials', value)}
-            onClear={() => clearFilterGroup('materials')}
+            options={FILAMENT_MATERIAL_FILTER_OPTIONS}
+            selectedValue={selectedMaterial}
+            onSelect={(value) => setSingleFilterValue('materials', value)}
           />
-          <MultiSelectFilterButton
+          <SingleSelectActionFilter
             label="Linha"
             ariaLabel="Filtrar por linha"
-            options={filterOptions.lines}
-            selected={filters.lines}
-            onToggle={(value) => toggleFilterValue('lines', value)}
-            onClear={() => clearFilterGroup('lines')}
+            options={FILAMENT_LINE_FILTER_OPTIONS}
+            selectedValue={selectedLine}
+            onSelect={(value) => setSingleFilterValue('lines', value)}
           />
-          <MultiSelectFilterButton
-            label="Cor"
-            ariaLabel="Filtrar por cor"
-            options={filterOptions.colors}
-            selected={filters.colors}
-            onToggle={(value) => toggleFilterValue('colors', value)}
-            onClear={() => clearFilterGroup('colors')}
-          />
-          {activeFilterCount > 0 && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={clearAllFilters}
-              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-            >
-              Limpar filtros ({activeFilterCount})
-            </Button>
-          )}
-
-          {/* "Mostrar tipos arquivados" — desligado por padrão; próximo dos
-              filtros; funciona em desktop e mobile. NÃO é o "Mostrar
-              arquivados" dos rolos (aquele fica dentro da janela "Ver
-              rolos" e controla rolos, não tipos). */}
-          <div className="ml-auto flex items-center gap-1.5 text-sm">
-            <label className="flex w-fit items-center gap-2">
-              <Switch
-                checked={showArchivedTypes}
-                onCheckedChange={(checked) => setShowArchivedTypes(checked === true)}
-                className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
-              />
-              Mostrar tipos arquivados
-            </label>
-            {archivedTypeGroupCount > 0 && (
-              <span className="text-muted-foreground" aria-hidden="true">
-                ({archivedTypeGroupCount})
-              </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <MultiSelectFilterButton
+              label="Cor"
+              ariaLabel="Filtrar por cor"
+              options={filterOptions.colors}
+              selected={filters.colors}
+              onToggle={(value) => toggleFilterValue('colors', value)}
+              onClear={() => clearFilterGroup('colors')}
+            />
+            {activeFilterCount > 0 && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={clearAllFilters}
+                className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+              >
+                Limpar filtros ({activeFilterCount})
+              </Button>
             )}
           </div>
         </div>
@@ -878,14 +944,15 @@ export function FilamentsInventoryPage() {
               <TableBody>
                 {visibleGroups.map((group) => {
                   const stockLevel = getStockLevel(group.availableGrams, group.minimumStockGrams)
+                  const lineDisplayLabel = resolveFilamentLineDisplayLabel(group.lineLabel)
                   return (
                     <TableRow
                       key={group.key}
                       className="odd:bg-brand-primary-soft/50 hover:bg-brand-primary-soft even:bg-white"
                     >
                       <TableCell>{group.material}</TableCell>
-                      <TableCell className="truncate" title={group.lineLabel}>
-                        {group.lineLabel}
+                      <TableCell className="truncate" title={lineDisplayLabel}>
+                        {lineDisplayLabel}
                       </TableCell>
                       <TableCell className="truncate">
                         <FilamentColorBadge label={group.colorLabel} />
@@ -902,14 +969,7 @@ export function FilamentsInventoryPage() {
                           : '—'}
                       </TableCell>
                       <TableCell>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <FilamentStockLevelBadge level={stockLevel} />
-                          {!group.hasActiveType && (
-                            <span className="border-input text-muted-foreground inline-flex items-center rounded-md border px-1.5 py-0.5 text-xs font-medium">
-                              Arquivado
-                            </span>
-                          )}
-                        </div>
+                        <FilamentStockLevelBadge level={stockLevel} />
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-nowrap items-center gap-1.5">
@@ -917,7 +977,7 @@ export function FilamentsInventoryPage() {
                             variant="outline"
                             size="sm"
                             onClick={() => openDrawer(group)}
-                            aria-label={`Ver rolos de ${group.material} · ${group.lineLabel} · ${group.colorLabel}`}
+                            aria-label={`Ver rolos de ${group.material} · ${lineDisplayLabel} · ${group.colorLabel}`}
                             className={cn(
                               'border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0',
                               TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
@@ -1131,7 +1191,7 @@ export function FilamentsInventoryPage() {
                 identificação não aparece duas vezes. */}
             <DialogTitle>
               {openGroup
-                ? `${openGroup.material} - ${openGroup.lineLabel} - ${openGroup.colorLabel}`
+                ? `${openGroup.material} - ${resolveFilamentLineDisplayLabel(openGroup.lineLabel)} - ${openGroup.colorLabel}`
                 : ''}
             </DialogTitle>
           </DialogHeader>

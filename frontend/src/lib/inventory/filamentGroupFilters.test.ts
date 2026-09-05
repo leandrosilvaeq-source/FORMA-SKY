@@ -111,8 +111,8 @@ describe('matchesFilamentGroupFilters / filterFilamentGroups', () => {
     expect(result.some((g) => g.material === 'TPU')).toBe(false)
   })
 
-  it('filtro de Linha (token normalizado)', () => {
-    const result = filterFilamentGroups(groups, state({ lines: new Set(['matte']) }))
+  it('filtro de Linha (rótulo de exibição consolidado — 2026-09-05: "Matte" grava/exibe como "Mate")', () => {
+    const result = filterFilamentGroups(groups, state({ lines: new Set(['Mate']) }))
     expect(result.every((g) => g.lineLabel === 'Matte')).toBe(true)
     expect(result).toHaveLength(2)
   })
@@ -127,7 +127,7 @@ describe('matchesFilamentGroupFilters / filterFilamentGroups', () => {
       groups,
       state({
         materials: new Set(['PLA', 'PETG']),
-        lines: new Set(['basic']),
+        lines: new Set(['Basic']),
         colors: new Set(['preto']),
       }),
     )

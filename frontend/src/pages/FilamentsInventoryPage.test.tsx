@@ -244,12 +244,14 @@ function getVisibleGroupLabels(): string[] {
 }
 
 // O botão externo continua "Ver rolos"; a JANELA aberta tem como título a
-// identificação dinâmica do grupo (Material - Linha - Cor), então o diálogo
-// é localizado por esse nome (default = fixture PLA/Sólida/Preto).
+// identificação dinâmica do grupo (Material - Linha - Cor, Linha já com o
+// rótulo de exibição consolidado — resolveFilamentLineDisplayLabel,
+// 2026-09-05), então o diálogo é localizado por esse nome (default =
+// fixture PLA/Sólida/Preto, exibido como "PLA - Sólido - Preto").
 async function openDrawer(
   user: ReturnType<typeof userEvent.setup>,
   groupRow: HTMLElement,
-  dialogName: string | RegExp = 'PLA - Sólida - Preto',
+  dialogName: string | RegExp = 'PLA - Sólido - Preto',
 ) {
   await user.click(within(groupRow).getByRole('button', { name: /^ver rolos/i }))
   return screen.getByRole('dialog', { name: dialogName })
@@ -349,7 +351,7 @@ describe('FilamentsInventoryPage — listagem consolidada por Material + Linha +
     expect(getVisibleGroupLabels()).toEqual([
       'PETG/Basic/Preto',
       'PLA/Basic/Preto',
-      'PLA/Matte/Preto',
+      'PLA/Mate/Preto',
     ])
   })
 
@@ -394,7 +396,7 @@ describe('FilamentsInventoryPage — listagem consolidada por Material + Linha +
       }),
     ])
     renderPage()
-    const cells = within(getGroupRow('PLA', 'Sólida', 'Preto')).getAllByRole('cell')
+    const cells = within(getGroupRow('PLA', 'Sólido', 'Preto')).getAllByRole('cell')
     expect(cells[3].textContent).toBe('400g')
     expect(cells[4].textContent).toBe('2')
   })
@@ -417,7 +419,7 @@ describe('FilamentsInventoryPage — listagem consolidada por Material + Linha +
     renderPage()
     // disponível consolidado 400 <= maior mínimo ativo 500 -> Estoque baixo
     expect(
-      within(getGroupRow('PLA', 'Sólida', 'Preto')).getByText('Estoque baixo'),
+      within(getGroupRow('PLA', 'Sólido', 'Preto')).getByText('Estoque baixo'),
     ).toBeInTheDocument()
   })
 
@@ -425,11 +427,11 @@ describe('FilamentsInventoryPage — listagem consolidada por Material + Linha +
     // Fixture padrão: disponível 500 > mínimo 200 -> normal.
     mockTypes([typeFixture()])
     renderPage()
-    const badge = within(getGroupRow('PLA', 'Sólida', 'Preto')).getByText('Normal')
+    const badge = within(getGroupRow('PLA', 'Sólido', 'Preto')).getByText('Normal')
     expect(badge).toBeInTheDocument()
     expect(badge.className).toContain('emerald')
     expect(
-      within(getGroupRow('PLA', 'Sólida', 'Preto')).queryByText('Estoque normal'),
+      within(getGroupRow('PLA', 'Sólido', 'Preto')).queryByText('Estoque normal'),
     ).not.toBeInTheDocument()
   })
 
@@ -449,9 +451,9 @@ describe('FilamentsInventoryPage — listagem consolidada por Material + Linha +
       }),
     ])
     renderPage()
-    const lowBadge = within(getGroupRow('PLA', 'Sólida', 'Preto')).getByText('Estoque baixo')
+    const lowBadge = within(getGroupRow('PLA', 'Sólido', 'Preto')).getByText('Estoque baixo')
     expect(lowBadge.className).toContain('amber')
-    const emptyBadge = within(getGroupRow('PLA', 'Sólida', 'Azul')).getByText('Sem estoque')
+    const emptyBadge = within(getGroupRow('PLA', 'Sólido', 'Azul')).getByText('Sem estoque')
     expect(emptyBadge.className).toContain('destructive')
   })
 
@@ -462,14 +464,14 @@ describe('FilamentsInventoryPage — listagem consolidada por Material + Linha +
       .getAllByRole('columnheader')
       .map((h) => (h.textContent ?? '').replace(/Redimensionar coluna.*/i, '').trim())
     expect(headers).toContain('Estoque mínimo')
-    const cells = within(getGroupRow('PLA', 'Sólida', 'Preto')).getAllByRole('cell')
+    const cells = within(getGroupRow('PLA', 'Sólido', 'Preto')).getAllByRole('cell')
     expect(cells[5].textContent).toBe('1.000 g')
   })
 
   it('coluna "Estoque mínimo" mostra "—" quando o grupo não tem mínimo configurado (nenhum tipo ativo com limite)', () => {
     mockTypes([typeFixture({ minimum_stock_grams: null })])
     renderPage()
-    const cells = within(getGroupRow('PLA', 'Sólida', 'Preto')).getAllByRole('cell')
+    const cells = within(getGroupRow('PLA', 'Sólido', 'Preto')).getAllByRole('cell')
     expect(cells[5].textContent).toBe('—')
   })
 
@@ -489,7 +491,7 @@ describe('FilamentsInventoryPage — listagem consolidada por Material + Linha +
     renderPage()
     // O tipo inativo tem mínimo 5000, mas não conta — só o ativo (sem
     // mínimo) é considerado, então o grupo mostra "—".
-    const cells = within(getGroupRow('PLA', 'Sólida', 'Preto')).getAllByRole('cell')
+    const cells = within(getGroupRow('PLA', 'Sólido', 'Preto')).getAllByRole('cell')
     expect(cells[5].textContent).toBe('—')
   })
 
@@ -519,7 +521,7 @@ describe('FilamentsInventoryPage — listagem consolidada por Material + Linha +
     ])
     renderPage()
     expect(getVisibleGroupLabels()).toEqual([
-      'PETG/Matte/Azul',
+      'PETG/Mate/Azul',
       'PLA/Basic/Amarelo',
       'PLA/Basic/Verde',
     ])
@@ -535,11 +537,11 @@ describe('FilamentsInventoryPage — listagem consolidada por Material + Linha +
     const user = userEvent.setup()
 
     await user.type(screen.getByLabelText('Buscar tipos de filamento'), 'national')
-    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/Preto'])
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/Preto'])
 
     await user.clear(screen.getByLabelText('Buscar tipos de filamento'))
     await user.type(screen.getByLabelText('Buscar tipos de filamento'), 'azul')
-    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/Azul'])
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/Azul'])
   })
 
   it('estado vazio específico quando busca/filtros não retornam nada', async () => {
@@ -571,7 +573,7 @@ describe('FilamentsInventoryPage — coluna Cor como badge (2026-09-04)', () => 
   it('1. a Cor aparece como badge (não mais texto solto) na linha do grupo', () => {
     mockTypes([typeFixture({ commercial_color: 'Preto' })])
     renderPage()
-    const badge = within(getGroupRow('PLA', 'Sólida', 'Preto')).getByText('Preto')
+    const badge = within(getGroupRow('PLA', 'Sólido', 'Preto')).getByText('Preto')
     expect(badge.tagName).toBe('SPAN')
     expect(badge.className).toContain('rounded-md')
     expect(badge.className).toContain('border')
@@ -645,9 +647,9 @@ describe('FilamentsInventoryPage — coluna Cor como badge (2026-09-04)', () => 
   it('10. Situação e as demais colunas continuam exatamente como antes — só a Cor virou badge', () => {
     mockTypes([typeFixture({ commercial_color: 'Preto', minimum_stock_grams: 200 })])
     renderPage()
-    const row = getGroupRow('PLA', 'Sólida', 'Preto')
+    const row = getGroupRow('PLA', 'Sólido', 'Preto')
     expect(within(row).getByText('PLA')).toBeInTheDocument()
-    expect(within(row).getByText('Sólida')).toBeInTheDocument()
+    expect(within(row).getByText('Sólido')).toBeInTheDocument()
     const situationBadge = within(row).getByText('Normal')
     expect(situationBadge.className).toContain('emerald')
     expect(within(row).getByText('500g')).toBeInTheDocument()
@@ -666,7 +668,7 @@ describe('FilamentsInventoryPage — filtros Material / Linha / Cor', () => {
       typeFixture({
         filament_type_id: '1',
         material: 'PLA',
-        line: 'Basic',
+        line: 'Sólida',
         commercial_color: 'Preto',
       }),
       typeFixture({
@@ -678,7 +680,7 @@ describe('FilamentsInventoryPage — filtros Material / Linha / Cor', () => {
       typeFixture({
         filament_type_id: '3',
         material: 'PETG',
-        line: 'Basic',
+        line: 'Sólida',
         commercial_color: 'Preto',
       }),
       typeFixture({
@@ -690,93 +692,187 @@ describe('FilamentsInventoryPage — filtros Material / Linha / Cor', () => {
     ])
   })
 
-  // Abre o menu de um filtro (se ainda não estiver aberto) e marca N opções
-  // sem re-clicar o gatilho (o Popover não-modal continua aberto entre os
-  // cliques).
-  async function selectFilterOptions(
-    user: ReturnType<typeof userEvent.setup>,
-    button: RegExp,
-    options: string[],
-  ) {
-    await user.click(screen.getByRole('button', { name: button }))
+  // Material/Linha (2026-09-05): action buttons de seleção única, sempre
+  // visíveis (nunca um Popover) — os dois radiogroups são localizados pelo
+  // mesmo aria-label passado a SingleSelectActionFilter.
+  function materialFilterGroup(): HTMLElement {
+    return screen.getByRole('radiogroup', { name: 'Filtrar por material' })
+  }
+  function lineFilterGroup(): HTMLElement {
+    return screen.getByRole('radiogroup', { name: 'Filtrar por linha' })
+  }
+
+  // Cor continua um Popover multisseleção (inalterado) — mesmo helper de
+  // sempre para marcar opções dentro dele.
+  async function selectColorOptions(user: ReturnType<typeof userEvent.setup>, options: string[]) {
+    await user.click(screen.getByRole('button', { name: /^Cor/ }))
     for (const option of options) {
       await user.click(await screen.findByRole('checkbox', { name: option }))
     }
-    // Fecha o menu clicando fora (no título da tabela), para o próximo
-    // filtro poder abrir sem colisão de popovers.
     await user.click(screen.getByRole('heading', { level: 1 }))
   }
 
-  it('filtra por Material (OR dentro do grupo)', async () => {
+  it('Material aparece como action buttons — Todos, PLA, PETG, TPU, nesta ordem; "Todos" é o estado inicial', () => {
     renderPage()
-    const user = userEvent.setup()
-    await selectFilterOptions(user, /^Material/, ['PLA', 'PETG'])
-    expect(getVisibleGroupLabels().every((l) => l.startsWith('PLA') || l.startsWith('PETG'))).toBe(
-      true,
+    const radios = within(materialFilterGroup()).getAllByRole('radio')
+    expect(radios.map((r) => r.textContent)).toEqual(['Todos', 'PLA', 'PETG', 'TPU'])
+    expect(within(materialFilterGroup()).getByRole('radio', { name: 'Todos' })).toHaveAttribute(
+      'aria-checked',
+      'true',
     )
-    expect(getVisibleGroupLabels().some((l) => l.startsWith('TPU'))).toBe(false)
-    expect(screen.getByRole('button', { name: 'Material (2)' })).toBeInTheDocument()
   })
 
-  it('filtra por Linha e por Cor', async () => {
+  it('Linha aparece como action buttons — Todos + as 7 linhas oficiais, nesta ordem; "Todos" é o estado inicial', () => {
     renderPage()
-    const user = userEvent.setup()
-    await selectFilterOptions(user, /^Linha/, ['Basic'])
-    expect(getVisibleGroupLabels()).toEqual(['PETG/Basic/Preto', 'PLA/Basic/Preto'])
-    await selectFilterOptions(user, /^Cor/, ['Preto'])
-    expect(getVisibleGroupLabels()).toEqual(['PETG/Basic/Preto', 'PLA/Basic/Preto'])
+    const radios = within(lineFilterGroup()).getAllByRole('radio')
+    expect(radios.map((r) => r.textContent)).toEqual([
+      'Todos',
+      'Sólido',
+      'Silk',
+      'Mate',
+      'Velvet',
+      'Translúcido',
+      'Duocolor',
+      'Tricolor',
+    ])
+    expect(within(lineFilterGroup()).getByRole('radio', { name: 'Todos' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
   })
 
-  it('AND entre grupos: (Material PLA OU PETG) E (Linha Basic) E (Cor Preto)', async () => {
+  it('filtra por Material — só uma opção ativa por vez, aplicado imediatamente (sem F5)', async () => {
     renderPage()
     const user = userEvent.setup()
-    await selectFilterOptions(user, /^Material/, ['PLA', 'PETG'])
-    await selectFilterOptions(user, /^Linha/, ['Basic'])
-    await selectFilterOptions(user, /^Cor/, ['Preto'])
-    expect(getVisibleGroupLabels()).toEqual(['PETG/Basic/Preto', 'PLA/Basic/Preto'])
+    const group = materialFilterGroup()
+
+    await user.click(within(group).getByRole('radio', { name: 'PLA' }))
+    expect(within(group).getByRole('radio', { name: 'PLA' })).toHaveAttribute('aria-checked', 'true')
+    expect(within(group).getByRole('radio', { name: 'Todos' })).toHaveAttribute('aria-checked', 'false')
+    expect(getVisibleGroupLabels().every((l) => l.startsWith('PLA'))).toBe(true)
+    expect(getVisibleGroupLabels()).toHaveLength(2)
+
+    // Escolher outro Material SUBSTITUI a seleção — nunca soma as duas.
+    await user.click(within(group).getByRole('radio', { name: 'PETG' }))
+    expect(within(group).getByRole('radio', { name: 'PLA' })).toHaveAttribute('aria-checked', 'false')
+    expect(within(group).getByRole('radio', { name: 'PETG' })).toHaveAttribute('aria-checked', 'true')
+    expect(getVisibleGroupLabels()).toEqual(['PETG/Sólido/Preto'])
   })
 
-  it('combina com a busca', async () => {
+  it('filtra por Linha — só uma opção ativa por vez, casando com variações de grafia (Matte -> Mate)', async () => {
     renderPage()
     const user = userEvent.setup()
-    await selectFilterOptions(user, /^Cor/, ['Preto'])
-    await user.type(screen.getByLabelText('Buscar tipos de filamento'), 'petg')
-    expect(getVisibleGroupLabels()).toEqual(['PETG/Basic/Preto'])
+    const group = lineFilterGroup()
+
+    await user.click(within(group).getByRole('radio', { name: 'Mate' }))
+    expect(within(group).getByRole('radio', { name: 'Mate' })).toHaveAttribute('aria-checked', 'true')
+    expect(getVisibleGroupLabels().sort()).toEqual(['PLA/Mate/Branco', 'TPU/Mate/Vermelho'])
+
+    await user.click(within(group).getByRole('radio', { name: 'Sólido' }))
+    expect(within(group).getByRole('radio', { name: 'Mate' })).toHaveAttribute('aria-checked', 'false')
+    expect(getVisibleGroupLabels().sort()).toEqual(['PETG/Sólido/Preto', 'PLA/Sólido/Preto'])
   })
 
-  it('limpa um filtro individualmente e limpa todos', async () => {
+  it('clicar na opção JÁ ativa não dispara nova operação — continua selecionada, resultado inalterado', async () => {
     renderPage()
     const user = userEvent.setup()
-    await selectFilterOptions(user, /^Material/, ['PLA'])
-    await selectFilterOptions(user, /^Linha/, ['Basic'])
+    const group = materialFilterGroup()
+
+    await user.click(within(group).getByRole('radio', { name: 'PLA' }))
+    expect(getVisibleGroupLabels()).toHaveLength(2)
+    await user.click(within(group).getByRole('radio', { name: 'PLA' }))
+    expect(within(group).getByRole('radio', { name: 'PLA' })).toHaveAttribute('aria-checked', 'true')
+    expect(getVisibleGroupLabels()).toHaveLength(2)
+  })
+
+  it('relação AND entre Material e Linha: PLA + Mate mostra só filamentos PLA da linha Mate', async () => {
+    renderPage()
+    const user = userEvent.setup()
+    await user.click(within(materialFilterGroup()).getByRole('radio', { name: 'PLA' }))
+    await user.click(within(lineFilterGroup()).getByRole('radio', { name: 'Mate' }))
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Mate/Branco'])
+  })
+
+  it('combina Material + Linha com o filtro de Cor e com a busca (tudo em AND)', async () => {
+    renderPage()
+    const user = userEvent.setup()
+    await user.click(within(materialFilterGroup()).getByRole('radio', { name: 'PLA' }))
+    await selectColorOptions(user, ['Preto'])
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/Preto'])
+
+    await user.type(screen.getByLabelText('Buscar tipos de filamento'), 'branco')
+    // Zero resultados -> a tabela some, dá lugar à mensagem de estado vazio
+    // (nunca uma <table> sem linhas).
+    expect(
+      screen.getByText('Nenhum resultado para a busca e os filtros atuais.'),
+    ).toBeInTheDocument()
+  })
+
+  it('"Limpar filtros" volta Material e Linha para "Todos" (e limpa Cor)', async () => {
+    renderPage()
+    const user = userEvent.setup()
+    await user.click(within(materialFilterGroup()).getByRole('radio', { name: 'PLA' }))
+    await user.click(within(lineFilterGroup()).getByRole('radio', { name: 'Mate' }))
     expect(screen.getByRole('button', { name: /^Limpar filtros \(2\)/ })).toBeInTheDocument()
 
-    // limpar só Material (dentro do próprio menu)
-    await user.click(screen.getByRole('button', { name: 'Material (1)' }))
-    await user.click(await screen.findByRole('button', { name: 'Limpar' }))
-    await user.click(screen.getByRole('heading', { level: 1 }))
-    expect(screen.getByRole('button', { name: 'Material' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Linha (1)' })).toBeInTheDocument()
-
-    // limpar todos
     await user.click(screen.getByRole('button', { name: /^Limpar filtros/ }))
     expect(screen.queryByRole('button', { name: /^Limpar filtros/ })).not.toBeInTheDocument()
+    expect(within(materialFilterGroup()).getByRole('radio', { name: 'Todos' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    expect(within(lineFilterGroup()).getByRole('radio', { name: 'Todos' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
     expect(getVisibleGroupLabels()).toHaveLength(4)
   })
 
-  it('as opções de filtro não têm duplicatas por maiúsculas/acentos/espaços', async () => {
+  it('Sólido consolida Sólida, Solida, Solido e Sólido — o botão encontra todas as variações de grafia', async () => {
     mockTypes([
-      typeFixture({ filament_type_id: 'a', line: 'Basic', commercial_color: 'Preto' }),
-      typeFixture({ filament_type_id: 'b', line: ' basic ', commercial_color: 'PRETO' }),
-      typeFixture({ filament_type_id: 'c', line: 'Matte', commercial_color: 'Vermelhão' }),
+      typeFixture({ filament_type_id: '1', material: 'PLA', line: 'Sólida', commercial_color: 'Preto' }),
+      typeFixture({ filament_type_id: '2', material: 'PLA', line: 'Solida', commercial_color: 'Branco' }),
+      typeFixture({ filament_type_id: '3', material: 'PLA', line: 'Solido', commercial_color: 'Azul' }),
+      typeFixture({ filament_type_id: '4', material: 'PLA', line: 'Sólido', commercial_color: 'Verde' }),
+      typeFixture({ filament_type_id: '5', material: 'PLA', line: 'Silk', commercial_color: 'Preto' }),
     ])
     renderPage()
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: /^Linha/ }))
-    const lineOptions = await screen.findAllByRole('checkbox')
-    expect(lineOptions).toHaveLength(2)
-    expect(screen.getByRole('checkbox', { name: 'Basic' })).toBeInTheDocument()
-    expect(screen.getByRole('checkbox', { name: 'Matte' })).toBeInTheDocument()
+
+    // Coluna Linha já mostra as 4 grafias como o mesmo rótulo consolidado.
+    for (const color of ['Preto', 'Branco', 'Azul', 'Verde']) {
+      expect(getVisibleGroupLabels()).toContain(`PLA/Sólido/${color}`)
+    }
+
+    await user.click(within(lineFilterGroup()).getByRole('radio', { name: 'Sólido' }))
+    expect(getVisibleGroupLabels().sort()).toEqual([
+      'PLA/Sólido/Azul',
+      'PLA/Sólido/Branco',
+      'PLA/Sólido/Preto',
+      'PLA/Sólido/Verde',
+    ])
+  })
+
+  it('o filtro de Linha tem sempre exatamente as 8 opções fixas, mesmo com várias grafias diferentes nos dados', () => {
+    mockTypes([
+      typeFixture({ filament_type_id: 'a', line: 'Sólida', commercial_color: 'Preto' }),
+      typeFixture({ filament_type_id: 'b', line: ' solido ', commercial_color: 'Branco' }),
+      typeFixture({ filament_type_id: 'c', line: 'Matte', commercial_color: 'Azul' }),
+      typeFixture({ filament_type_id: 'd', line: 'Linha Histórica Sem Alias', commercial_color: 'Verde' }),
+    ])
+    renderPage()
+    const radios = within(lineFilterGroup()).getAllByRole('radio')
+    expect(radios).toHaveLength(8)
+    expect(radios.map((r) => r.textContent)).toEqual([
+      'Todos',
+      'Sólido',
+      'Silk',
+      'Mate',
+      'Velvet',
+      'Translúcido',
+      'Duocolor',
+      'Tricolor',
+    ])
   })
 })
 
@@ -812,28 +908,28 @@ describe('FilamentsInventoryPage — filtro de Nº de rolos disponíveis (mín/m
     renderPage()
     const user = userEvent.setup()
     await setRange(user, '2', '')
-    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/B', 'PLA/Sólida/C', 'PLA/Sólida/D'])
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/B', 'PLA/Sólido/C', 'PLA/Sólido/D'])
   })
 
   it('somente máximo (inclusivo)', async () => {
     renderPage()
     const user = userEvent.setup()
     await setRange(user, '', '3')
-    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/A', 'PLA/Sólida/B', 'PLA/Sólida/C'])
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/A', 'PLA/Sólido/B', 'PLA/Sólido/C'])
   })
 
   it('intervalo [2, 5]', async () => {
     renderPage()
     const user = userEvent.setup()
     await setRange(user, '2', '5')
-    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/B', 'PLA/Sólida/C', 'PLA/Sólida/D'])
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/B', 'PLA/Sólido/C', 'PLA/Sólido/D'])
   })
 
   it('mínimo 0 e máximo 0 = grupos sem rolo disponível', async () => {
     renderPage()
     const user = userEvent.setup()
     await setRange(user, '0', '0')
-    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/A'])
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/A'])
   })
 
   it('mínimo > máximo: avisa e não aplica a faixa', async () => {
@@ -848,7 +944,7 @@ describe('FilamentsInventoryPage — filtro de Nº de rolos disponíveis (mín/m
     renderPage()
     const user = userEvent.setup()
     await setRange(user, '3', '')
-    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/C', 'PLA/Sólida/D'])
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/C', 'PLA/Sólido/D'])
     // o menu continua aberto depois de "Aplicar" — "Limpar" está logo ali.
     await user.click(screen.getByRole('button', { name: 'Limpar' }))
     expect(getVisibleGroupLabels()).toHaveLength(4)
@@ -879,7 +975,7 @@ describe('FilamentsInventoryPage — filtro de Nº de rolos disponíveis (mín/m
     const user = userEvent.setup()
     // grupo PLA/Sólida/X consolida 1+2 = 3 rolos
     await setRange(user, '3', '3')
-    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/X'])
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/X'])
   })
 })
 
@@ -898,7 +994,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
       typeFixture({ filament_type_id: 'b', manufacturer: 'B' }),
     ])
     renderPage()
-    const row = getGroupRow('PLA', 'Sólida', 'Preto')
+    const row = getGroupRow('PLA', 'Sólido', 'Preto')
     const buttons = within(row)
       .getAllByRole('button')
       .map((b) => b.textContent)
@@ -910,14 +1006,14 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     renderPage()
     const user = userEvent.setup()
 
-    const row = getGroupRow('PLA', 'Sólida', 'Preto')
+    const row = getGroupRow('PLA', 'Sólido', 'Preto')
     // O botão que abre a janela não muda: rótulo visível "Ver rolos".
     const trigger = within(row).getByRole('button', { name: /^ver rolos/i })
     expect(trigger).toHaveTextContent('Ver rolos')
 
     const dialog = await openDrawer(user, row)
     // A janela é localizada pelo nome acessível = título dinâmico do grupo.
-    expect(dialog).toBe(screen.getByRole('dialog', { name: 'PLA - Sólida - Preto' }))
+    expect(dialog).toBe(screen.getByRole('dialog', { name: 'PLA - Sólido - Preto' }))
     // O título fixo "Ver rolos" não se repete dentro da janela.
     expect(within(dialog).queryByText('Ver rolos')).not.toBeInTheDocument()
     // Bloco "Grupo" e resumo "Fabricantes:" foram removidos.
@@ -965,7 +1061,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     // O resumo "Fabricantes: ..." foi removido do topo da janela; a
     // identificação do grupo agora é só o título. A coluna "Fabricante /
     // tipo" também foi removida da tabela (simplificação 2026-09-05) — o
@@ -990,7 +1086,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     // Nenhum menu de três pontos de tipo — os botões são visíveis, um grupo
     // por tipo, identificado pelo fabricante/cor.
     const nationalActions = within(dialog).getByRole('group', {
@@ -1011,7 +1107,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     // O bloco data-testid="filament-type-row-*" foi removido.
     expect(within(dialog).queryByTestId('filament-type-row-a')).toBeNull()
     expect(within(dialog).queryByTestId('filament-type-row-b')).toBeNull()
@@ -1031,7 +1127,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const heading = within(dialog).getByText('Rolos em estoque')
     const table = getSpoolsTable(dialog)
     // Card mobile do mesmo rolo (fora da <table>).
@@ -1065,7 +1161,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const voolt = within(dialog).getByRole('group', { name: /Ações do tipo Voolt3D — Preto/i })
     const national = within(dialog).getByRole('group', {
       name: /Ações do tipo National3D — Preto/i,
@@ -1090,7 +1186,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     expect(within(dialog).getByText('Nenhum rolo cadastrado para este grupo.')).toBeInTheDocument()
 
     const typeActions = within(dialog).getByRole('group', {
@@ -1135,7 +1231,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const typeActions = within(dialog).getByRole('group', {
       name: /Ações do tipo Voolt3D — Preto/i,
     })
@@ -1146,10 +1242,10 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
 
     await waitFor(() =>
       expect(
-        screen.queryByRole('dialog', { name: 'PLA - Sólida - Preto' }),
+        screen.queryByRole('dialog', { name: 'PLA - Sólido - Preto' }),
       ).not.toBeInTheDocument(),
     )
-    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/Azul'])
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/Azul'])
   })
 
   it('remoção bloqueada por pedido ativo: o plano já vem BLOCKED_ACTIVE_ORDER — a mensagem de bloqueio aparece e não há botão destrutivo', async () => {
@@ -1170,7 +1266,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const typeActions = within(dialog).getByRole('group', {
       name: /Ações do tipo Voolt3D — Preto/i,
     })
@@ -1238,7 +1334,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const typeActions = within(dialog).getByRole('group', {
       name: /Ações do tipo Voolt3D — Preto/i,
     })
@@ -1265,7 +1361,7 @@ describe('FilamentsInventoryPage — ações da linha e painel "Ver rolos"', () 
     ])
     renderPage()
     const user = userEvent.setup()
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     expect(within(dialog).getByText('1.300g')).toBeInTheDocument()
     expect(within(dialog).queryByText('800g')).not.toBeInTheDocument()
   })
@@ -1305,7 +1401,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     await user.click(
       within(getSpoolsTable(dialog)).getByRole('button', { name: 'Ajustar peso do rolo RL-26-001' }),
     )
@@ -1347,7 +1443,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     await user.click(
       within(getSpoolsTable(dialog)).getByRole('button', { name: 'Ajustar peso do rolo RL-26-001' }),
     )
@@ -1397,7 +1493,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const table = getSpoolsTable(dialog)
 
     await user.click(within(table).getByRole('button', { name: 'Ajustar peso do rolo RL-26-001' }))
@@ -1421,7 +1517,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     mockMovements()
     renderPage()
     const user = userEvent.setup()
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const row = within(getSpoolsTable(dialog)).getByText('RL-26-001').closest('tr') as HTMLElement
 
     expect(
@@ -1446,7 +1542,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     await user.click(
       within(getSpoolsTable(dialog)).getByRole('button', {
         name: 'Mais ações para o rolo RL-26-001',
@@ -1472,7 +1568,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     await user.click(
       within(getSpoolsTable(dialog)).getByRole('button', {
         name: 'Mais ações para o rolo RL-26-001',
@@ -1544,7 +1640,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     expect(within(getSpoolsTable(dialog)).getByText('RL-26-001')).toBeInTheDocument()
 
     await user.click(
@@ -1580,7 +1676,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     // Card mobile (fora da <table>): mesmo componente de menu do rolo.
     const mobileCard = within(dialog)
       .getByText('Marca: Voolt3D')
@@ -1611,7 +1707,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     expect(within(getSpoolsTable(dialog)).queryByText('RL-26-002')).not.toBeInTheDocument()
     await user.click(within(dialog).getByRole('switch', { name: 'Mostrar arquivados' }))
     expect(within(getSpoolsTable(dialog)).getByText('RL-26-002')).toBeInTheDocument()
@@ -1628,7 +1724,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const nationalActions = screen.getByRole('group', { name: /Ações do tipo National3D — Preto/i })
     await user.click(within(nationalActions).getByRole('button', { name: 'Novo rolo' }))
     await user.type(screen.getByLabelText(/peso nominal/i), '1000')
@@ -1661,7 +1757,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     await user.click(
       within(getSpoolsTable(dialog)).getByRole('button', { name: 'Ajustar peso do rolo RL-26-001' }),
     )
@@ -1683,7 +1779,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const table = getSpoolsTable(dialog)
     const headers = within(table)
       .getAllByRole('columnheader')
@@ -1704,7 +1800,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const table = getSpoolsTable(dialog)
     const headers = within(table)
       .getAllByRole('columnheader')
@@ -1726,7 +1822,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const table = getSpoolsTable(dialog)
     const row = within(table).getByText('RL-26-001').closest('tr') as HTMLElement
     // A marca do ITEM da compra ("Bambu Lab") aparece — nunca o fabricante
@@ -1741,7 +1837,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const table = getSpoolsTable(dialog)
     const row = within(table).getByText('RL-26-001').closest('tr') as HTMLElement
     expect(within(row).getByText('National3D')).toBeInTheDocument()
@@ -1753,7 +1849,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const table = getSpoolsTable(dialog)
     const row = within(table).getByText('RL-26-001').closest('tr') as HTMLElement
     expect(within(row).getByText('—')).toBeInTheDocument()
@@ -1765,7 +1861,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     expect(within(dialog).getByText('Marca: Voolt')).toBeInTheDocument()
   })
 
@@ -1776,7 +1872,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     await user.click(
       within(getSpoolsTable(dialog)).getByRole('button', {
         name: 'Ajustar peso do rolo RL-26-002',
@@ -1800,7 +1896,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     await user.click(
       within(getSpoolsTable(dialog)).getByRole('button', {
         name: 'Mais ações para o rolo RL-26-001',
@@ -1818,7 +1914,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     await user.click(
       within(getSpoolsTable(dialog)).getByRole('button', {
         name: 'Mais ações para o rolo RL-26-001',
@@ -1844,7 +1940,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const table = getSpoolsTable(dialog)
 
     await user.click(within(table).getByRole('button', { name: 'Mais ações para o rolo RL-26-001' }))
@@ -1861,7 +1957,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     await user.click(
       within(getSpoolsTable(dialog)).getByRole('button', {
         name: 'Mais ações para o rolo RL-26-001',
@@ -1880,7 +1976,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     await user.click(
       within(getSpoolsTable(dialog)).getByRole('button', {
         name: 'Mais ações para o rolo RL-26-001',
@@ -1924,7 +2020,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     await user.click(
       within(getSpoolsTable(dialog)).getByRole('button', {
         name: 'Mais ações para o rolo RL-26-002',
@@ -1944,7 +2040,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     mockSpools([spoolFixture()])
     renderPage()
     const user = userEvent.setup()
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const table = getSpoolsTable(dialog)
 
     async function openHistory() {
@@ -1984,7 +2080,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const trigger = within(getSpoolsTable(dialog)).getByRole('button', {
       name: 'Status do rolo RL-26-001: Lacrado',
     })
@@ -2005,7 +2101,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     await user.click(
       within(getSpoolsTable(dialog)).getByRole('button', { name: 'Status do rolo RL-26-001: Lacrado' }),
     )
@@ -2023,7 +2119,7 @@ describe('FilamentsInventoryPage — regressões do gerenciamento de rolos (pres
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     await user.click(
       within(getSpoolsTable(dialog)).getByRole('button', { name: 'Status do rolo RL-26-001: Aberto' }),
     )
@@ -2059,7 +2155,7 @@ describe('FilamentsInventoryPage — contagem de rolos DISPONÍVEIS (regra: sald
     mockTypes([typeFixture({ filament_type_id: 't1', usable_spool_count: 5 })])
     mockSpoolCounts({ countByTypeId: new Map([['t1', 2]]) })
     renderPage()
-    expect(within(getGroupRow('PLA', 'Sólida', 'Preto')).getAllByRole('cell')[4].textContent).toBe(
+    expect(within(getGroupRow('PLA', 'Sólido', 'Preto')).getAllByRole('cell')[4].textContent).toBe(
       '2',
     )
   })
@@ -2076,7 +2172,7 @@ describe('FilamentsInventoryPage — contagem de rolos DISPONÍVEIS (regra: sald
       ]),
     })
     renderPage()
-    expect(within(getGroupRow('PLA', 'Sólida', 'Preto')).getAllByRole('cell')[4].textContent).toBe(
+    expect(within(getGroupRow('PLA', 'Sólido', 'Preto')).getAllByRole('cell')[4].textContent).toBe(
       '3',
     )
   })
@@ -2090,7 +2186,7 @@ describe('FilamentsInventoryPage — contagem de rolos DISPONÍVEIS (regra: sald
     renderPage()
     const user = userEvent.setup()
 
-    expect(within(getGroupRow('PLA', 'Sólida', 'Zerado')).getAllByRole('cell')[4].textContent).toBe(
+    expect(within(getGroupRow('PLA', 'Sólido', 'Zerado')).getAllByRole('cell')[4].textContent).toBe(
       '0',
     )
 
@@ -2103,7 +2199,7 @@ describe('FilamentsInventoryPage — contagem de rolos DISPONÍVEIS (regra: sald
     await user.type(screen.getByLabelText('Máximo'), '0')
     await user.click(screen.getByRole('button', { name: 'Aplicar' }))
 
-    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/Zerado'])
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/Zerado'])
   })
 
   it('o filtro mínimo/máximo usa a contagem correta, não a da view', async () => {
@@ -2128,7 +2224,7 @@ describe('FilamentsInventoryPage — contagem de rolos DISPONÍVEIS (regra: sald
     await user.type(await screen.findByLabelText('Mínimo'), '3')
     await user.click(screen.getByRole('button', { name: 'Aplicar' }))
 
-    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/B', 'PLA/Sólida/C'])
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/B', 'PLA/Sólido/C'])
   })
 
   it('listagem e drawer exibem a MESMA quantidade', async () => {
@@ -2138,7 +2234,7 @@ describe('FilamentsInventoryPage — contagem de rolos DISPONÍVEIS (regra: sald
     renderPage()
     const user = userEvent.setup()
 
-    const row = getGroupRow('PLA', 'Sólida', 'Preto')
+    const row = getGroupRow('PLA', 'Sólido', 'Preto')
     expect(within(row).getAllByRole('cell')[4].textContent).toBe('2')
     const dialog = await openDrawer(user, row)
     const rolosField = within(dialog).getByText('Rolos disponíveis').parentElement as HTMLElement
@@ -2153,7 +2249,7 @@ describe('FilamentsInventoryPage — contagem de rolos DISPONÍVEIS (regra: sald
     renderPage()
     const user = userEvent.setup()
 
-    expect(within(getGroupRow('PLA', 'Sólida', 'Preto')).getAllByRole('cell')[4].textContent).toBe(
+    expect(within(getGroupRow('PLA', 'Sólido', 'Preto')).getAllByRole('cell')[4].textContent).toBe(
       '—',
     )
     expect(screen.queryByText('9')).not.toBeInTheDocument()
@@ -2170,7 +2266,7 @@ describe('FilamentsInventoryPage — contagem de rolos DISPONÍVEIS (regra: sald
     expect(await screen.findByText(/indisponível/i)).toBeInTheDocument()
     expect(screen.queryByLabelText('Mínimo')).not.toBeInTheDocument()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const rolosField = within(dialog).getByText('Rolos disponíveis').parentElement as HTMLElement
     expect(within(rolosField).getByText('—')).toBeInTheDocument()
   })
@@ -2331,7 +2427,7 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const typeActions = within(dialog).getByRole('group', {
       name: /Ações do tipo National3D — Preto/i,
     })
@@ -2629,7 +2725,7 @@ describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () 
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const typeActions = within(dialog).getByRole('group', {
       name: /Ações do tipo Voolt3D — Preto/i,
     })
@@ -2671,7 +2767,7 @@ describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () 
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const typeActions = within(dialog).getByRole('group', {
       name: /Ações do tipo Voolt3D — Preto/i,
     })
@@ -2699,7 +2795,7 @@ describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () 
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const typeActions = within(dialog).getByRole('group', {
       name: /Ações do tipo Voolt3D — Preto/i,
     })
@@ -2775,8 +2871,8 @@ describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () 
     renderPage()
     const user = userEvent.setup()
 
-    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólida/Preto'])
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/Preto'])
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const typeActions = within(dialog).getByRole('group', {
       name: /Ações do tipo Voolt3D — Preto/i,
     })
@@ -2792,7 +2888,13 @@ describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () 
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
   })
 
-  it('tipo arquivado fica oculto por padrão; "Mostrar tipos arquivados" o revela com selo "Arquivado" e "Ver rolos" acessível', async () => {
+  // 2026-09-05: o controle "Mostrar tipos arquivados" foi removido da tela.
+  // Um grupo totalmente arquivado (nenhum tipo ativo) fica oculto SEMPRE —
+  // não há mais nenhuma forma de revelá-lo nesta tela. O registro em si
+  // (filament_types) continua intacto no banco (nenhum UPDATE/DELETE por
+  // esta mudança); só deixou de ter um caminho de exibição/"Ver rolos"
+  // aqui.
+  it('tipo (grupo) totalmente arquivado fica permanentemente oculto — nenhum controle nesta tela o revela', () => {
     mockTypes([
       typeFixture({
         filament_type_id: 'a',
@@ -2805,30 +2907,25 @@ describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () 
       }),
     ])
     renderPage()
-    const user = userEvent.setup()
 
-    // Oculto por padrão.
     expect(
       screen.getByText('Nenhum resultado para a busca e os filtros atuais.'),
     ).toBeInTheDocument()
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole('switch', { name: 'Mostrar tipos arquivados' }))
-
-    const row = getGroupRow('PLA', 'Sólida', 'Preto')
-    expect(within(row).getByText('Arquivado')).toBeInTheDocument()
-    // Não conta como disponibilidade: 0g e 0 rolos.
-    const cells = within(row).getAllByRole('cell')
-    expect(cells[3].textContent).toBe('0g')
-    // "Ver rolos" continua acessível para consultar o histórico preservado.
-    expect(within(row).getByRole('button', { name: /^ver rolos/i })).toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: 'Mostrar tipos arquivados' })).not.toBeInTheDocument()
   })
 
-  it('"Excluir tipo" fica desabilitado num tipo já arquivado — não repete a remoção', async () => {
+  it('"Excluir tipo" fica desabilitado num tipo já arquivado dentro de um grupo com outro tipo ainda ativo — não repete a remoção', async () => {
     mockTypes([
       typeFixture({
         filament_type_id: 'a',
         manufacturer: 'Voolt3D',
+        commercial_color: 'Preto',
+        is_active: true,
+      }),
+      typeFixture({
+        filament_type_id: 'b',
+        manufacturer: 'National3D',
         commercial_color: 'Preto',
         is_active: false,
         total_spool_count: 1,
@@ -2837,22 +2934,31 @@ describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () 
     renderPage()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('switch', { name: 'Mostrar tipos arquivados' }))
-    const row = getGroupRow('PLA', 'Sólida', 'Preto')
-    const dialog = await openDrawer(user, row)
-    const typeActions = within(dialog).getByRole('group', {
+    // O grupo continua visível (tem um tipo ATIVO) — sem precisar de nenhum
+    // toggle. Dentro dele, o tipo arquivado (National3D) tem "Excluir tipo"
+    // desabilitado; o tipo ativo (Voolt3D) continua normal.
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
+    const nationalActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo National3D — Preto/i,
+    })
+    expect(within(nationalActions).getByRole('button', { name: 'Excluir tipo' })).toBeDisabled()
+    const voolt3dActions = within(dialog).getByRole('group', {
       name: /Ações do tipo Voolt3D — Preto/i,
     })
-    expect(within(typeActions).getByRole('button', { name: 'Excluir tipo' })).toBeDisabled()
+    expect(within(voolt3dActions).getByRole('button', { name: 'Excluir tipo' })).not.toBeDisabled()
   })
 
-  it('o controle "Mostrar tipos arquivados" começa desligado e é um switch próximo dos filtros (não confundir com "Mostrar arquivados" dos rolos)', () => {
+  it('o controle "Mostrar tipos arquivados" foi removido; "Mostrar arquivados" dos ROLOS continua preservado dentro de "Ver rolos" (conceito diferente)', async () => {
     mockTypes([typeFixture()])
+    mockSpools([])
     renderPage()
-    const toggle = screen.getByRole('switch', { name: 'Mostrar tipos arquivados' })
-    expect(toggle).toHaveAttribute('aria-checked', 'false')
-    // O "Mostrar arquivados" (rolos) NÃO aparece na página — só dentro da janela "Ver rolos".
-    expect(screen.queryByRole('switch', { name: 'Mostrar arquivados' })).not.toBeInTheDocument()
+    const user = userEvent.setup()
+
+    expect(screen.queryByRole('switch', { name: 'Mostrar tipos arquivados' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/mostrar tipos arquivados/i)).not.toBeInTheDocument()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
+    expect(within(dialog).getByRole('switch', { name: 'Mostrar arquivados' })).toBeInTheDocument()
   })
 })
 
@@ -2975,10 +3081,10 @@ describe('FilamentsInventoryPage — atualização automática sem F5', () => {
     renderPage()
     const user = userEvent.setup()
 
-    const firstDrawer = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const firstDrawer = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     expect(within(getSpoolsTable(firstDrawer)).queryByText('RL-26-002')).not.toBeInTheDocument()
     await user.click(within(firstDrawer).getByRole('button', { name: 'Fechar' }))
-    expect(screen.queryByRole('dialog', { name: 'PLA - Sólida - Preto' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'PLA - Sólido - Preto' })).not.toBeInTheDocument()
 
     await submitRealFilamentPurchase(user, 'PLA - Sólida - Preto')
     await waitFor(() => expect(registerFilamentPurchaseMock).toHaveBeenCalledTimes(1))
@@ -2988,7 +3094,7 @@ describe('FilamentsInventoryPage — atualização automática sem F5', () => {
       expect(screen.queryByRole('dialog', { name: 'Compra de filamentos' })).not.toBeInTheDocument(),
     )
 
-    const reopenedDrawer = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const reopenedDrawer = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     const table = getSpoolsTable(reopenedDrawer)
     expect(within(table).getByText('RL-26-002')).toBeInTheDocument()
     const newRow = within(table).getByText('RL-26-002').closest('tr') as HTMLElement
@@ -3007,7 +3113,7 @@ describe('FilamentsInventoryPage — atualização automática sem F5', () => {
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     expect(spoolsRefetchMock).not.toHaveBeenCalled()
 
     const typeActions = within(dialog).getByRole('group', {
@@ -3029,7 +3135,7 @@ describe('FilamentsInventoryPage — atualização automática sem F5', () => {
     renderPage()
     const user = userEvent.setup()
 
-    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))
     // Escopo pela tabela desktop — em JSDOM as classes responsivas
     // (hidden/sm:block) não escondem o card mobile, então buscar o texto
     // direto no diálogo casaria com os dois (tabela e card) ao mesmo tempo.

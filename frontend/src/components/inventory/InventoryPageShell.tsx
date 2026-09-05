@@ -13,10 +13,14 @@ import type { InventoryPurchaseCategory } from '@/types/domain'
 // por sua vez importaria de volta InventoryPage.tsx).
 export type InventoryArea = 'acessorios' | 'embalagens' | 'filamentos'
 
+// Ordem das abas (2026-09-05): Filamentos primeiro — área de maior uso —,
+// depois Acessórios e Embalagens. Só a ORDEM de exibição muda; rotas,
+// permissões (ProtectedRoute, só autenticação — nenhuma checagem por área)
+// e o conteúdo/funcionamento de cada aba permanecem exatamente os mesmos.
 const INVENTORY_AREA_ITEMS: Array<{ key: InventoryArea; to: string; label: string }> = [
+  { key: 'filamentos', to: '/estoque/filamentos', label: 'Filamentos' },
   { key: 'acessorios', to: '/estoque/acessorios', label: 'Acessórios' },
   { key: 'embalagens', to: '/estoque/embalagens', label: 'Embalagens' },
-  { key: 'filamentos', to: '/estoque/filamentos', label: 'Filamentos' },
 ]
 
 // Navegação interna entre as três áreas — mesmo idioma visual/semântico já

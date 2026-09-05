@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import type { Session } from '@supabase/supabase-js'
 
@@ -37,11 +37,19 @@ vi.mock('@/lib/supabase', () => ({
 // App.tsx real. Sempre resolve vazio: o suficiente para provar que a rota
 // e o roteamento funcionam, sem testar o conteúdo da listagem em si (já
 // coberto por InventoryPage.test.tsx com os hooks mockados diretamente).
+// `builder.order` PRECISA ser encadeável (retornar o próprio builder) — a
+// consulta de Filamentos (listFilamentTypeSummaries) chama .order() DUAS
+// vezes seguidas (.order('manufacturer', ...).order('commercial_color',
+// ...)), diferente de Acessórios/Embalagens (uma única .order()). O builder
+// é "thenable" (tem .then) para que `await` resolva vazio não importa
+// quantos .select()/.order() encadeados vieram antes.
 function mockEmptySupabaseFrom() {
   const builder: Record<string, unknown> = {}
   const chain = () => builder
   builder.select = vi.fn(chain)
-  builder.order = vi.fn(() => Promise.resolve({ data: [], error: null }))
+  builder.order = vi.fn(chain)
+  builder.then = (resolve: (value: { data: unknown[]; error: null }) => void) =>
+    resolve({ data: [], error: null })
   fromMock.mockReturnValue(builder)
 }
 
@@ -108,13 +116,33 @@ describe('App — rota coringa (integração real de roteamento)', () => {
 // provar sozinho — que /estoque de fato redireciona via App.tsx real, e que
 // as duas sub-rotas resolvem para a área correta a partir da URL.
 describe('App — rotas de Estoque (integração real de roteamento)', () => {
-  it('sessão autenticada em /estoque redireciona para /estoque/acessorios (área Acessórios ativa)', async () => {
+  it('sessão autenticada em /estoque redireciona para /estoque/filamentos (área Filamentos ativa, primeira aba — 2026-09-05)', async () => {
     renderAppAt('/estoque', { user: { email: 'op@formasky.com' } } as Session)
 
     expect(await screen.findByRole('heading', { name: 'Estoque' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Acessórios' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Filamentos' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Acessórios' })).not.toHaveAttribute('aria-current')
     expect(screen.getByRole('link', { name: 'Embalagens' })).not.toHaveAttribute('aria-current')
     expect(screen.getByRole('link', { name: 'Estoque' })).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('a aba Filamentos aparece antes de Acessórios e Embalagens na navegação de Estoque', async () => {
+    renderAppAt('/estoque', { user: { email: 'op@formasky.com' } } as Session)
+    await screen.findByRole('heading', { name: 'Estoque' })
+
+    const nav = screen.getByRole('navigation', { name: 'Áreas do Estoque' })
+    const labels = within(nav)
+      .getAllByRole('link')
+      .map((link) => link.textContent)
+    expect(labels).toEqual(['Filamentos', 'Acessórios', 'Embalagens'])
+  })
+
+  it('acesso direto a /estoque/filamentos abre a área Filamentos', async () => {
+    renderAppAt('/estoque/filamentos', { user: { email: 'op@formasky.com' } } as Session)
+
+    expect(await screen.findByRole('heading', { name: 'Estoque' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Filamentos' })).toHaveAttribute('aria-current', 'page')
+    expect(await screen.findByText('Nenhum tipo de filamento cadastrado.')).toBeInTheDocument()
   })
 
   it('acesso direto a /estoque/acessorios abre a área Acessórios', async () => {

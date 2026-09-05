@@ -9,6 +9,7 @@ import {
   pickCanonicalLabel,
   type FilamentGroup,
 } from '@/lib/inventory/filamentGroups'
+import { resolveFilamentLineDisplayLabel } from '@/lib/inventory/filamentLineAliases'
 import type { FilamentTypeSummary } from '@/types/domain'
 
 export interface FilamentFilterOption {
@@ -21,8 +22,14 @@ export interface FilamentFilterOption {
 
 export interface FilamentGroupFilterState {
   // Materiais são valores técnicos (PLA/PETG/TPU) — guardados como estão.
+  // No máximo 1 elemento a partir de 2026-09-05 (action buttons de seleção
+  // única na interface) — Set por compatibilidade com o restante deste
+  // módulo (contagem/limpeza genéricas), nunca mais de um selecionado.
   materials: Set<string>
-  // Linhas e Cores guardam TOKENS normalizados.
+  // Linha guarda o RÓTULO DE EXIBIÇÃO consolidado (resolveFilamentLineDisplayLabel,
+  // ex. "Sólido"/"Mate"/"Duocolor" — nunca o token normalizado cru), também
+  // no máximo 1 elemento (action buttons de seleção única). Cor continua
+  // multisseleção, guardando TOKENS normalizados (normalizeFilamentToken).
   lines: Set<string>
   colors: Set<string>
   // Faixa inclusiva de rolos disponíveis consolidados. null = sem limite
@@ -102,7 +109,14 @@ export function matchesFilamentGroupFilters(
   filters: FilamentGroupFilterState,
 ): boolean {
   if (filters.materials.size > 0 && !filters.materials.has(group.material)) return false
-  if (filters.lines.size > 0 && !filters.lines.has(normalizeFilamentToken(group.lineLabel)))
+  // Linha compara pelo RÓTULO DE EXIBIÇÃO consolidado (2026-09-05) — nunca
+  // o token cru — para que o botão "Sólido" encontre Sólida/Solida/Solido/
+  // Sólido, "Mate" encontre Mate/Matte, etc. (mesmo helper usado pela
+  // coluna Linha da tabela, nunca uma segunda regra).
+  if (
+    filters.lines.size > 0 &&
+    !filters.lines.has(resolveFilamentLineDisplayLabel(group.lineLabel))
+  )
     return false
   if (filters.colors.size > 0 && !filters.colors.has(normalizeFilamentToken(group.colorLabel)))
     return false

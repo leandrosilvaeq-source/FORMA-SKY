@@ -69,15 +69,15 @@ function App() {
         />
         {/* Módulo 3 — Estoque (Incremento 4: somente consulta e navegação).
             /estoque sozinho não é uma área de verdade — redireciona para a
-            primeira aba (Acessórios), sempre dentro de ProtectedRoute para
-            que sessão ausente caia em /login antes de qualquer redirect
-            interno. replace evita empilhar /estoque no histórico a cada
-            visita. */}
+            primeira aba (Filamentos, 2026-09-05 — antes Acessórios), sempre
+            dentro de ProtectedRoute para que sessão ausente caia em /login
+            antes de qualquer redirect interno. replace evita empilhar
+            /estoque no histórico a cada visita. */}
         <Route
           path="/estoque"
           element={
             <ProtectedRoute>
-              <Navigate to="/estoque/acessorios" replace />
+              <Navigate to="/estoque/filamentos" replace />
             </ProtectedRoute>
           }
         />
