@@ -109,8 +109,11 @@ function filamentTypeFixture(overrides: Partial<FilamentTypeSummary> = {}): Fila
   }
 }
 
+// Devolve os mocks usados (nunca só configura) — permite a um teste capturar
+// `refetch` e afirmar quando ele foi chamado (2026-09-04, correção da
+// atualização automática do fluxo de Filamentos).
 function mockFilamentTypes(list: FilamentTypeSummary[]) {
-  useFilamentTypesMock.mockReturnValue({
+  const mocks = {
     types: list,
     isLoading: false,
     error: null,
@@ -119,7 +122,9 @@ function mockFilamentTypes(list: FilamentTypeSummary[]) {
     update: vi.fn(),
     getRemovalPlan: vi.fn(),
     delete: vi.fn(),
-  })
+  }
+  useFilamentTypesMock.mockReturnValue(mocks)
+  return mocks
 }
 
 // getByText normaliza o texto do nó (colapsando qualquer espaço, incluindo
@@ -376,6 +381,33 @@ describe('PurchaseDialog', () => {
     // Botões Cancelar/Registrar compra vêm depois de tudo isso, no rodapé.
     const footer = within(dialog).getByRole('button', { name: /^cancelar$/i })
     expect(footer).toBeInTheDocument()
+  })
+
+  // ---------------------------------------------------------------------------
+  // CORREÇÃO (2026-09-04) — "corrija a atualização automática do fluxo de
+  // Filamentos": este useFilamentTypes() é uma instância PRÓPRIA de
+  // PurchaseDialog, independente da usada por FilamentsInventoryPage.tsx (o
+  // projeto não tem um cache/query client compartilhado). Sem refazer a
+  // busca ao abrir, um tipo cadastrado/editado/arquivado na página de
+  // Filamentos nunca aparecia (ou continuava aparecendo desatualizado) neste
+  // seletor até um F5. Ver também useFilamentTypes.test.ts ("refetch() busca
+  // a lista de novo...") para a prova de que refetch() de fato traz dados
+  // atualizados — aqui só se prova que a ABERTURA da janela o aciona.
+  // ---------------------------------------------------------------------------
+
+  it('abrir a janela de Compras sempre refaz a busca de tipos de filamento (nunca depende de F5 para ver um tipo novo/editado/arquivado)', async () => {
+    const mocks = mockFilamentTypes([filamentTypeFixture()])
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Compras' }))
+    expect(mocks.refetch).toHaveBeenCalledTimes(1)
+
+    // Fechar e reabrir busca de novo — cada abertura é uma oportunidade de
+    // ver dados atualizados, nunca só a primeira.
+    await user.click(screen.getByRole('button', { name: /^cancelar$/i }))
+    await user.click(screen.getByRole('button', { name: 'Compras' }))
+    expect(mocks.refetch).toHaveBeenCalledTimes(2)
   })
 
   it('2. Data da compra aparece pré-preenchida no formato dd/mm/aa', async () => {

@@ -11,6 +11,7 @@ const {
   useFilamentMovementsMock,
   useAuthMock,
   toastMock,
+  registerFilamentPurchaseMock,
 } = vi.hoisted(() => ({
   useFilamentTypesMock: vi.fn(),
   useFilamentSpoolsMock: vi.fn(),
@@ -18,6 +19,11 @@ const {
   useFilamentMovementsMock: vi.fn(),
   useAuthMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
+  // Só para o describe "atualização automática sem F5" no fim deste arquivo
+  // (2026-09-04) — registra uma compra de verdade pela janela real de
+  // Compras, renderizada de dentro de InventoryPageShell (nunca mockada),
+  // para provar a sincronização entre os dois diálogos.
+  registerFilamentPurchaseMock: vi.fn(),
 }))
 
 vi.mock('@/hooks/useFilamentTypes', () => ({ useFilamentTypes: useFilamentTypesMock }))
@@ -28,6 +34,10 @@ vi.mock('@/hooks/useFilamentSpoolCounts', () => ({
 vi.mock('@/hooks/useFilamentMovements', () => ({ useFilamentMovements: useFilamentMovementsMock }))
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
 vi.mock('sonner', () => ({ toast: toastMock }))
+vi.mock('@/lib/api/inventoryPurchases', () => ({
+  registerFilamentPurchase: registerFilamentPurchaseMock,
+  registerInventoryPurchase: vi.fn(),
+}))
 
 import { FilamentsInventoryPage } from './FilamentsInventoryPage'
 
@@ -2573,5 +2583,207 @@ describe('FilamentsInventoryPage — remoção segura de tipo de filamento', () 
     expect(toggle).toHaveAttribute('aria-checked', 'false')
     // O "Mostrar arquivados" (rolos) NÃO aparece na página — só dentro da janela "Ver rolos".
     expect(screen.queryByRole('switch', { name: 'Mostrar arquivados' })).not.toBeInTheDocument()
+  })
+})
+
+// =============================================================================
+// Atualização automática sem F5 (2026-09-04) — "corrija a atualização
+// automática do fluxo de Filamentos". PurchaseDialog (via InventoryPageShell)
+// NUNCA é mockado nestes testes — é o mesmo componente real usado pela
+// aplicação, renderizado lado a lado com "Ver rolos" (diálogos aninhados,
+// suportados pelo primitivo de Dialog do projeto) para provar a sincronização
+// real entre os dois, sem depender de nenhum cache/query client central (o
+// projeto não usa nenhum).
+// =============================================================================
+// Texto-fonte dos arquivos tocados por esta correção (2026-09-04) — usado só
+// pelo teste "10. não usa window.location.reload" abaixo, via import.meta.glob
+// (Vite/vitest, sem nenhuma dependência de módulos Node fora do escopo deste
+// projeto de frontend). Precisa de caminhos ESTÁTICOS (literais), nunca uma
+// variável — é o próprio Vite quem resolve isto em tempo de build/transform.
+const sourceFilesTouchedByThisFix = import.meta.glob(
+  [
+    './FilamentsInventoryPage.tsx',
+    '../components/inventory/FilamentTypeDrawer.tsx',
+    '../components/inventory/PurchaseDialog.tsx',
+    '../hooks/useFilamentTypes.ts',
+    '../hooks/useFilamentSpools.ts',
+    '../hooks/useFilamentSpoolCounts.ts',
+  ],
+  { query: '?raw', import: 'default', eager: true },
+) as Record<string, string>
+
+describe('FilamentsInventoryPage — atualização automática sem F5', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+    registerFilamentPurchaseMock.mockReset()
+    mockMovements()
+    mockSpoolCounts()
+  })
+
+  // Preenche e envia uma compra de Filamento pela janela REAL de Compras,
+  // já aberta e com a categoria "Filamento" selecionada — mesmos passos que
+  // um usuário faria, usados só neste describe (o fluxo completo da janela
+  // já tem cobertura própria e exaustiva em PurchaseDialog.test.tsx).
+  async function submitRealFilamentPurchase(
+    user: ReturnType<typeof userEvent.setup>,
+    typeOptionName: string,
+  ) {
+    await user.click(screen.getByRole('button', { name: 'Compras' }))
+    const purchaseDialog = screen.getByRole('dialog', { name: 'Registrar compra' })
+    await user.click(within(purchaseDialog).getByRole('radio', { name: 'Filamento' }))
+
+    const filamentDialog = screen.getByRole('dialog', { name: 'Compra de filamentos' })
+    await user.click(within(filamentDialog).getByRole('radio', { name: 'Mercado Livre' }))
+    const itemRow = within(filamentDialog).getByRole('group', { name: 'Item 1' })
+    await user.type(within(itemRow).getByRole('combobox', { name: 'Tipo — item 1' }), 'PLA')
+    await user.click(await within(itemRow).findByRole('option', { name: typeOptionName }))
+    await user.click(within(itemRow).getByRole('radio', { name: '1.000 g' }))
+    await user.type(within(itemRow).getByLabelText('Quantidade'), '1')
+    await user.type(within(itemRow).getByLabelText('Marca'), 'Bambu Lab')
+    await user.type(within(itemRow).getByLabelText('Valor unitário'), '9500')
+
+    await user.click(within(filamentDialog).getByRole('button', { name: /^registrar compra$/i }))
+  }
+
+  it('5./6. registrar uma compra e reabrir "Ver rolos" mostra o número de rolos e a Marca atualizados — nunca exige F5', async () => {
+    // "Compras" e "Ver rolos" são diálogos de nível de página, não
+    // aninhados entre si — abrir um torna o outro inacessível (mesmo
+    // comportamento do primitivo de Dialog para diálogos independentes), ou
+    // seja, uma compra NUNCA acontece com "Ver rolos" já aberto. O fluxo
+    // real é: abrir "Ver rolos", FECHAR (o componente desmonta por
+    // completo), registrar a compra por "Compras", e reabrir "Ver rolos" —
+    // a reabertura remonta useFilamentSpools do zero e busca os rolos de
+    // novo sozinha (nenhum código novo desta correção entra em jogo aqui;
+    // é o comportamento de sempre do componente condicional). O `refetch`
+    // mockado do PRIMEIRO useFilamentSpools nunca precisa ser chamado — é
+    // uma instância nova, criada do zero na reabertura, que já nasce
+    // buscando os dados atuais.
+    mockTypes([typeFixture({ filament_type_id: 't1' })])
+    const firstOpenSpools = [spoolFixture({ purchase_item_manufacturer: null })]
+    const reopenedSpools = [
+      spoolFixture({ purchase_item_manufacturer: null }),
+      spoolFixture({
+        id: 's2',
+        code: 'RL-26-002',
+        purchase_item_id: 'pi-new',
+        purchase_item_manufacturer: 'Bambu Lab',
+      }),
+    ]
+    useFilamentSpoolsMock
+      .mockReturnValueOnce({
+        spools: firstOpenSpools,
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+        create: vi.fn(),
+        update: vi.fn(),
+        delete: vi.fn(),
+        setLocalSpoolState: vi.fn(),
+      })
+      .mockReturnValue({
+        spools: reopenedSpools,
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+        create: vi.fn(),
+        update: vi.fn(),
+        delete: vi.fn(),
+        setLocalSpoolState: vi.fn(),
+      })
+    registerFilamentPurchaseMock.mockResolvedValue({
+      purchase_id: 'p1',
+      occurred_at: '2026-09-04',
+      notes: null,
+      purchase_channel: 'MERCADO_LIVRE',
+      freight_value: 0,
+      subtotal_value: 95,
+      total_value: 95,
+      created_at: '2026-09-04T00:00:00Z',
+      items: [],
+    })
+    renderPage()
+    const user = userEvent.setup()
+
+    const firstDrawer = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    expect(within(getSpoolsTable(firstDrawer)).queryByText('RL-26-002')).not.toBeInTheDocument()
+    await user.click(within(firstDrawer).getByRole('button', { name: 'Fechar' }))
+    expect(screen.queryByRole('dialog', { name: 'PLA - Sólida - Preto' })).not.toBeInTheDocument()
+
+    await submitRealFilamentPurchase(user, 'PLA - Sólida - Preto')
+    await waitFor(() => expect(registerFilamentPurchaseMock).toHaveBeenCalledTimes(1))
+    // handleFilamentSubmit fecha "Compra de filamentos" (e "Registrar
+    // compra") sozinho ao suceder — confirma antes de reabrir "Ver rolos".
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Compra de filamentos' })).not.toBeInTheDocument(),
+    )
+
+    const reopenedDrawer = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    const table = getSpoolsTable(reopenedDrawer)
+    expect(within(table).getByText('RL-26-002')).toBeInTheDocument()
+    const newRow = within(table).getByText('RL-26-002').closest('tr') as HTMLElement
+    expect(within(newRow).getByText('Bambu Lab')).toBeInTheDocument()
+  })
+
+  it('7. arquivar um tipo pelos botões da própria janela "Ver rolos" também refaz a busca de rolos do drawer (os rolos do tipo foram arquivados junto)', async () => {
+    const spoolsRefetchMock = vi.fn()
+    mockSpools([spoolFixture()], { refetch: spoolsRefetchMock })
+    const deleteType = vi
+      .fn()
+      .mockResolvedValue({ success: true, result: 'ARCHIVED', archived_spool_count: 1 })
+    mockTypes([typeFixture({ filament_type_id: 'a', manufacturer: 'Voolt3D', total_spool_count: 1 })], {
+      delete: deleteType,
+    })
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    expect(spoolsRefetchMock).not.toHaveBeenCalled()
+
+    const typeActions = within(dialog).getByRole('group', {
+      name: /Ações do tipo Voolt3D — Preto/i,
+    })
+    await user.click(within(typeActions).getByRole('button', { name: 'Excluir tipo' }))
+    const confirm = await screen.findByRole('dialog', { name: 'Remover tipo do estoque' })
+    await user.click(within(confirm).getByRole('button', { name: /^remover do estoque$/i }))
+
+    await waitFor(() => expect(deleteType).toHaveBeenCalledWith('a', 'ARCHIVED'))
+    await waitFor(() => expect(spoolsRefetchMock).toHaveBeenCalledTimes(1))
+  })
+
+  it('9. ações de DENTRO da janela "Ver rolos" (ex.: editar um rolo) nunca disparam uma segunda busca redundante de rolos — só a atualização local já existente', async () => {
+    const spoolsRefetchMock = vi.fn()
+    const update = vi.fn().mockResolvedValue(spoolFixture({ status: 'ABERTO' }))
+    mockTypes([typeFixture()])
+    mockSpools([spoolFixture()], { refetch: spoolsRefetchMock, update })
+    renderPage()
+    const user = userEvent.setup()
+
+    const dialog = await openDrawer(user, getGroupRow('PLA', 'Sólida', 'Preto'))
+    // Escopo pela tabela desktop — em JSDOM as classes responsivas
+    // (hidden/sm:block) não escondem o card mobile, então buscar o texto
+    // direto no diálogo casaria com os dois (tabela e card) ao mesmo tempo.
+    const table = getSpoolsTable(dialog)
+    const row = within(table).getByText('RL-26-001').closest('tr') as HTMLElement
+    await user.click(within(row).getByRole('button', { name: 'Mais ações para o rolo RL-26-001' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Editar' }))
+    await user.click(await screen.findByRole('button', { name: /^salvar altera/i }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1))
+    // A tabela já reflete a edição via atualização local (update() do
+    // hook) — nenhuma busca extra de rolos foi necessária nem disparada.
+    expect(spoolsRefetchMock).not.toHaveBeenCalled()
+  })
+
+  it('10. não usa window.location.reload nem qualquer navegação forçada para atualizar a tela', () => {
+    // import.meta.glob (Vite, tipado por vite/client — sem depender de
+    // módulos Node fora do escopo deste projeto de frontend) carrega o
+    // TEXTO-FONTE dos arquivos tocados por esta correção.
+    const contents = Object.values(sourceFilesTouchedByThisFix)
+    expect(contents.length).toBe(6)
+    for (const content of contents) {
+      expect(content).not.toMatch(/location\.reload/)
+      expect(content).not.toMatch(/window\.location\.href\s*=/)
+    }
   })
 })

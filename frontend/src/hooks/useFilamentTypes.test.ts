@@ -62,6 +62,23 @@ describe('useFilamentTypes', () => {
     expect(result.current.error).toBeNull()
   })
 
+  it('refetch() busca a lista de novo e substitui o estado local pelo resultado mais recente (base do "sem F5" — 2026-09-04)', async () => {
+    listFilamentTypeSummariesMock.mockResolvedValueOnce([summary])
+
+    const { result } = renderHook(() => useFilamentTypes())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(result.current.types).toEqual([summary])
+
+    // Um tipo novo foi cadastrado por FORA desta instância do hook (ex.: em
+    // outra tela/instância) — refetch() precisa trazê-lo sem exigir F5.
+    listFilamentTypeSummariesMock.mockResolvedValueOnce([summary, otherSummary])
+    act(() => result.current.refetch())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    expect(listFilamentTypeSummariesMock).toHaveBeenCalledTimes(2)
+    expect(result.current.types).toEqual([summary, otherSummary])
+  })
+
   it('exposes an ApiError when the list fails to load', async () => {
     listFilamentTypeSummariesMock.mockRejectedValue(new ApiError('database', 500, 'falhou'))
 

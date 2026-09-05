@@ -249,6 +249,31 @@ export function FilamentsInventoryPage() {
     refetchCounts()
   }, [refetch, refetchCounts])
 
+  // CORREÇÃO (2026-09-04, "corrija a atualização automática do fluxo de
+  // Filamentos"): a janela "Ver rolos" (FilamentTypeDrawer) carrega seus
+  // próprios rolos com um useFilamentSpools() independente. Uma COMPRA nunca
+  // acontece com "Ver rolos" aberto ao mesmo tempo (diálogos de nível de
+  // página não-aninhados — abrir "Compras" torna "Ver rolos" inacessível, e
+  // vice-versa; reabrir "Ver rolos" depois já remonta o componente do zero e
+  // busca os rolos de novo sozinho, sem precisar de nada aqui). O caso real
+  // que FICA aberto durante uma mudança externa é "Excluir tipo" pelos
+  // botões do próprio rodapé de "Ver rolos": esse diálogo de confirmação É
+  // aninhado (aberto de DENTRO do drawer), então arquivar um tipo com rolos
+  // deixava a tabela de rolos do drawer (que continua montada por baixo)
+  // mostrando os rolos como se ainda estivessem ativos, até fechar/reabrir
+  // ou dar F5. dataVersion é o sinal que sobe SÓ nesse caso — repassado como
+  // prop `refreshSignal`; o drawer decide, ao notar a mudança, refazer sua
+  // própria busca de rolos. Ações que já acontecem DENTRO da janela (criar/
+  // editar/excluir rolo, pesar, ajustar) continuam chamando só refetchAll
+  // (via onSummaryChanged, inalterado) — elas já atualizam seus próprios
+  // rolos localmente (create/update/setLocalSpoolState), então subir
+  // dataVersion ali geraria uma segunda busca redundante.
+  const [dataVersion, setDataVersion] = useState(0)
+  const refetchAllAndSignalDrawer = useCallback(() => {
+    refetchAll()
+    setDataVersion((current) => current + 1)
+  }, [refetchAll])
+
   const [filters, setFilters] = useState<FilamentGroupFilterState>(EMPTY_FILAMENT_GROUP_FILTERS)
   const [minSpoolsInput, setMinSpoolsInput] = useState('')
   const [maxSpoolsInput, setMaxSpoolsInput] = useState('')
@@ -494,8 +519,11 @@ export function FilamentsInventoryPage() {
         toast.success('Tipo removido do estoque. Histórico preservado.')
         // O tipo e todos os seus rolos foram inativados na mesma transação
         // no backend — recarrega tipos e contagens para refletir os
-        // agregados corretos (e o grupo sai da listagem operacional).
-        refetchAll()
+        // agregados corretos (e o grupo sai da listagem operacional). Este
+        // botão também é alcançável de DENTRO da janela "Ver rolos" (ações
+        // de tipo no rodapé) — sinaliza o drawer para refazer sua própria
+        // busca de rolos (os rolos deste tipo também foram arquivados).
+        refetchAllAndSignalDrawer()
       }
       setIsDeleteDialogOpen(false)
     } catch (err) {
@@ -521,6 +549,13 @@ export function FilamentsInventoryPage() {
     <InventoryPageShell
       area="filamentos"
       onPurchaseCompleted={(category) => {
+        // "Compras" é um diálogo de nível de página (o botão fica no
+        // cabeçalho, fora de "Ver rolos") — os dois nunca ficam abertos ao
+        // mesmo tempo (abrir um torna o outro inacessível, mesmo
+        // comportamento do primitivo de Dialog para diálogos não
+        // aninhados), então não há uma janela "Ver rolos" para sinalizar
+        // aqui. Ao reabri-la depois, ela remonta do zero e busca os rolos
+        // de novo sozinha (useFilamentSpools) — já sem exigir F5.
         if (category === 'FILAMENT') refetchAll()
       }}
     >
@@ -1103,6 +1138,7 @@ export function FilamentsInventoryPage() {
             <FilamentTypeDrawer
               group={openGroup}
               onSummaryChanged={refetchAll}
+              refreshSignal={dataVersion}
               onClose={() => handleDrawerOpenChange(false)}
               onEditType={openEditDialog}
               onToggleType={openToggleDialog}

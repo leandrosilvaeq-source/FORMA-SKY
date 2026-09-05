@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { EllipsisIcon, SlidersHorizontalIcon } from 'lucide-react'
 import { FilamentSpoolForm, type FilamentSpoolFormValues } from './FilamentSpoolForm'
@@ -80,6 +80,19 @@ export interface FilamentTypeDrawerProps {
   // — repassado ao FilamentSpoolPanel — movimentar/pesar). O pai
   // (FilamentsInventoryPage) reaproveita o `refetch` de useFilamentTypes.
   onSummaryChanged: () => void
+  // CORREÇÃO (2026-09-04): sobe quando um tipo do grupo é arquivado/removido
+  // pelos botões do próprio rodapé desta janela ("Excluir tipo") — esse
+  // diálogo de confirmação é ANINHADO (aberto de dentro do drawer, que
+  // continua montado por baixo dele) e arquivar um tipo também arquiva
+  // todos os seus rolos no backend, deixando a tabela de rolos aqui
+  // desatualizada até o sinal chegar. Nunca sobe por ações de DENTRO desta
+  // janela (criar/editar/excluir rolo, pesar), que já atualizam seus
+  // próprios rolos localmente, nem por uma compra (que nunca acontece com
+  // esta janela aberta ao mesmo tempo — diálogos de nível de página não-
+  // aninhados). O drawer reage à mudança do número refazendo sua própria
+  // busca de rolos (useFilamentSpools), nunca por polling — só quando o
+  // valor realmente muda.
+  refreshSignal: number
   onClose: () => void
   // Ações de TIPO (individuais por filament_type_id) — os diálogos moram no
   // pai (FilamentsInventoryPage), a linha consolidada da listagem nunca as
@@ -103,6 +116,7 @@ export interface FilamentTypeDrawerProps {
 export function FilamentTypeDrawer({
   group,
   onSummaryChanged,
+  refreshSignal,
   onClose,
   onEditType,
   onToggleType,
@@ -119,6 +133,24 @@ export function FilamentTypeDrawer({
     delete: deleteSpool,
     setLocalSpoolState,
   } = useFilamentSpools(group.filamentTypeIds)
+
+  // CORREÇÃO (2026-09-04): refaz a busca de rolos quando refreshSignal muda
+  // DEPOIS da primeira renderização — nunca no mount inicial (useFilamentSpools
+  // já busca sozinho ao montar; refazer aqui também seria uma requisição
+  // duplicada). Como o drawer inteiro desmonta ao fechar (só é renderizado
+  // enquanto `openGroup` existe, em FilamentsInventoryPage.tsx), a primeira
+  // renderização de CADA abertura reinicia esta guarda — o efeito só dispara
+  // de verdade quando algo muda por fora enquanto a janela está aberta (hoje,
+  // só um tipo do grupo sendo arquivado pelo próprio rodapé deste drawer —
+  // ver o comentário de refreshSignal na interface acima).
+  const isFirstRenderRef = useRef(true)
+  useEffect(() => {
+    if (isFirstRenderRef.current) {
+      isFirstRenderRef.current = false
+      return
+    }
+    refetch()
+  }, [refreshSignal, refetch])
 
   // filament_type_id -> resumo do tipo, para rotular cada rolo com seu
   // fabricante/linha/cor.

@@ -563,7 +563,18 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
   // adicionado por "Adicionar filamento", para focar o Tipo dele.
   const [filamentItems, setFilamentItems] = useState<FilamentPurchaseItemState[]>([])
   const [autoFocusItemKey, setAutoFocusItemKey] = useState<string | null>(null)
-  const { types: filamentTypes, isLoading: isLoadingFilamentTypes } = useFilamentTypes()
+  // CORREÇÃO (2026-09-04, "corrija a atualização automática do fluxo de
+  // Filamentos"): este useFilamentTypes() é uma instância PRÓPRIA, distinta
+  // da de FilamentsInventoryPage.tsx — cada hook tem seu próprio estado, sem
+  // nada compartilhado entre elas (o projeto não usa um cache/query client
+  // central). Sem isto, um tipo cadastrado/editado/arquivado na página de
+  // Filamentos nunca aparecia (ou continuava aparecendo já arquivado) neste
+  // seletor até um F5 recarregar o componente do zero. `refetchFilamentTypes`
+  // é chamado toda vez que a janela ABRE (handleOpenChange abaixo) — nunca a
+  // cada tecla nem em loop/polling — garantindo que o seletor de "Tipo de
+  // filamento" sempre reflita o cadastro mais recente sem exigir F5.
+  const { types: filamentTypes, isLoading: isLoadingFilamentTypes, refetch: refetchFilamentTypes } =
+    useFilamentTypes()
   const activeFilamentTypes = filamentTypes.filter((type) => type.is_active)
 
   // Compartilhados: quantidade/Valor dos itens são usados só por Acessório/
@@ -606,7 +617,14 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
   }
 
   function handleOpenChange(next: boolean) {
-    if (next) resetForm()
+    if (next) {
+      resetForm()
+      // Sempre busca os tipos de filamento mais recentes ao abrir — nunca os
+      // dados carregados na primeira montagem do diálogo (ver comentário de
+      // useFilamentTypes acima). Só dispara neste instante (abertura), nunca
+      // em polling nem a cada renderização.
+      refetchFilamentTypes()
+    }
     setIsOpen(next)
   }
 
