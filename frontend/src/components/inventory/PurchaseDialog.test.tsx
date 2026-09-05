@@ -218,8 +218,10 @@ describe('PurchaseDialog', () => {
   }
 
   // Preenche uma linha de item por completo (tipo + peso + quantidade +
-  // marca + valor unitário) — usado nos testes que só precisam de um item
-  // válido sem repetir os 5 passos toda vez.
+  // marca + valor total) — usado nos testes que só precisam de um item
+  // válido sem repetir os 5 passos toda vez. `totalValueRaw` é o quanto o
+  // usuário pagou por TODOS os rolos da linha (2026-09-05, campo renomeado
+  // de "Valor unitário" para "Valor total"), nunca o preço de um rolo só.
   async function fillFilamentItem(
     user: ReturnType<typeof userEvent.setup>,
     dialog: HTMLElement,
@@ -230,7 +232,7 @@ describe('PurchaseDialog', () => {
       weightLabel: string
       quantity: string
       manufacturer: string
-      unitValueRaw: string
+      totalValueRaw: string
     },
   ) {
     await selectFilamentType(user, dialog, itemIndex, opts.query, opts.optionName)
@@ -238,7 +240,7 @@ describe('PurchaseDialog', () => {
     await user.click(within(row).getByRole('radio', { name: opts.weightLabel }))
     await user.type(within(row).getByLabelText('Quantidade'), opts.quantity)
     await user.type(within(row).getByLabelText('Marca'), opts.manufacturer)
-    await user.type(within(row).getByLabelText('Valor unitário'), opts.unitValueRaw)
+    await user.type(within(row).getByLabelText('Valor total'), opts.totalValueRaw)
   }
 
   // Local da compra usa o mesmo padrão de radiogroup de botões já usado por
@@ -432,7 +434,7 @@ describe('PurchaseDialog', () => {
       weightLabel: '1.000 g',
       quantity: '1',
       manufacturer: 'Bambu Lab',
-      unitValueRaw: '9500',
+      totalValueRaw: '9500',
     })
 
     const dateInput = within(dialog).getByLabelText('Data da compra')
@@ -458,7 +460,7 @@ describe('PurchaseDialog', () => {
       weightLabel: '1.000 g',
       quantity: '1',
       manufacturer: 'Bambu Lab',
-      unitValueRaw: '9500',
+      totalValueRaw: '9500',
     })
 
     const dateInput = within(dialog).getByLabelText('Data da compra')
@@ -498,7 +500,7 @@ describe('PurchaseDialog', () => {
       weightLabel: '1.000 g',
       quantity: '1',
       manufacturer: 'Bambu Lab',
-      unitValueRaw: '9500',
+      totalValueRaw: '9500',
     })
 
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
@@ -544,7 +546,7 @@ describe('PurchaseDialog', () => {
       weightLabel: '1.000 g',
       quantity: '1',
       manufacturer: 'Bambu Lab',
-      unitValueRaw: '9500',
+      totalValueRaw: '9500',
     })
 
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
@@ -565,7 +567,7 @@ describe('PurchaseDialog', () => {
       weightLabel: '1.000 g',
       quantity: '1',
       manufacturer: 'Bambu Lab',
-      unitValueRaw: '9500',
+      totalValueRaw: '9500',
     })
 
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
@@ -582,13 +584,13 @@ describe('PurchaseDialog', () => {
 
     const row = getFilamentItemRow(dialog, 1)
     expect(row.className).toMatch(/sm:grid-cols-\[/)
-    // Os 6 campos (Tipo/Peso/Quantidade/Marca/Valor unitário/Remover) vivem
+    // Os 6 campos (Tipo/Peso/Quantidade/Marca/Valor total/Remover) vivem
     // todos dentro da MESMA linha (o mesmo elemento role="group").
     expect(within(row).getByRole('combobox', { name: 'Tipo — item 1' })).toBeInTheDocument()
     expect(within(row).getByRole('radiogroup', { name: 'Peso — item 1' })).toBeInTheDocument()
     expect(within(row).getByLabelText('Quantidade')).toBeInTheDocument()
     expect(within(row).getByLabelText('Marca')).toBeInTheDocument()
-    expect(within(row).getByLabelText('Valor unitário')).toBeInTheDocument()
+    expect(within(row).getByLabelText('Valor total')).toBeInTheDocument()
     expect(within(row).getByRole('button', { name: 'Remover item 1' })).toBeInTheDocument()
   })
 
@@ -717,12 +719,14 @@ describe('PurchaseDialog', () => {
       weightLabel: '1.000 g',
       quantity: '2',
       manufacturer: 'Bambu Lab',
-      unitValueRaw: '9500',
+      // Valor total da linha (2 rolos) — não mais "por rolo".
+      totalValueRaw: '19000',
     })
     await user.type(within(dialog).getByLabelText('Valor do frete'), '3000')
 
-    // Subtotal = 2×95 = 190,00; Frete = 30,00; Total = 220,00 (subtotal
-    // isolado NUNCA aparece como linha própria do Resumo).
+    // Subtotal = 190,00 (Valor total do item, usado diretamente — nunca
+    // quantity×unit_value); Frete = 30,00; Total = 220,00 (subtotal isolado
+    // NUNCA aparece como linha própria do Resumo).
     expect(within(dialog).queryByText(/subtotal/i)).not.toBeInTheDocument()
     expect(within(dialog).getByText(normalizedBRL(22000))).toBeInTheDocument()
     expect(within(dialog).getByText(normalizedBRL(3000))).toBeInTheDocument()
@@ -747,32 +751,218 @@ describe('PurchaseDialog', () => {
     const user = userEvent.setup()
     const dialog = await openDialog(user)
     await selectCategory(user, dialog, 'Filamento')
-    // Item 1: 2 rolos de R$ 90,00.
+    // Item 1: 2 rolos, Valor total R$ 180,00 (R$ 90,00 cada).
     await fillFilamentItem(user, dialog, 1, {
       query: 'Matte',
       optionName: 'PLA - Matte - Preto',
       weightLabel: '1.000 g',
       quantity: '2',
       manufacturer: 'Bambu Lab',
-      unitValueRaw: '9000',
+      totalValueRaw: '18000',
     })
     await user.click(within(dialog).getByRole('button', { name: 'Adicionar filamento' }))
-    // Item 2: 1 rolo de R$ 100,00.
+    // Item 2: 1 rolo, Valor total R$ 100,00.
     await fillFilamentItem(user, dialog, 2, {
       query: 'Silk',
       optionName: 'PLA - Silk - Dourado',
       weightLabel: '1.000 g',
       quantity: '1',
       manufacturer: 'Voolt',
-      unitValueRaw: '10000',
+      totalValueRaw: '10000',
     })
     // Frete de R$ 20,00 -> total = 180+100+20 = 300,00; quantidade total = 3
     // -> custo por filamento = 100,00 (exemplo exato do pedido).
     await user.type(within(dialog).getByLabelText('Valor do frete'), '2000')
 
     expect(within(dialog).getByText(normalizedBRL(30000))).toBeInTheDocument()
-    // "R$ 100,00" aparece 2x: valor unitário do item 2 e custo por filamento.
+    // "R$ 100,00" aparece 2x: Valor total do item 2 e custo por filamento.
     expect(within(dialog).getAllByText(normalizedBRL(10000)).length).toBeGreaterThanOrEqual(1)
+  })
+
+  // ---------------------------------------------------------------------------
+  // "Valor unitário" -> "Valor total" (2026-09-05) — o usuário informa quanto
+  // pagou por TODOS os rolos da linha, nunca o preço de um rolo só. O valor
+  // individual (unit_value) é derivado internamente só no envio; o RESUMO
+  // exibido aqui nunca reconstrói a partir dele (usa sempre o total em
+  // centavos informado, exato).
+  // ---------------------------------------------------------------------------
+
+  it('campo "Valor unitário" não aparece mais em nenhum item', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+
+    expect(within(dialog).queryByLabelText('Valor unitário')).not.toBeInTheDocument()
+    expect(within(dialog).queryByText('Valor unitário')).not.toBeInTheDocument()
+  })
+
+  it('"Valor total" aparece em cada item — dois itens podem ter totais diferentes, cada um com seu próprio campo', async () => {
+    mockFilamentTypes([
+      filamentTypeFixture({
+        filament_type_id: 't1',
+        material: 'PLA',
+        line: 'Matte',
+        commercial_color: 'Preto',
+      }),
+      filamentTypeFixture({
+        filament_type_id: 't2',
+        material: 'PLA',
+        line: 'Silk',
+        commercial_color: 'Dourado',
+      }),
+    ])
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await fillFilamentItem(user, dialog, 1, {
+      query: 'Matte',
+      optionName: 'PLA - Matte - Preto',
+      weightLabel: '500 g',
+      quantity: '1',
+      manufacturer: 'Bambu Lab',
+      totalValueRaw: '5000',
+    })
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar filamento' }))
+    await fillFilamentItem(user, dialog, 2, {
+      query: 'Silk',
+      optionName: 'PLA - Silk - Dourado',
+      weightLabel: '250 g',
+      quantity: '1',
+      manufacturer: 'Voolt',
+      totalValueRaw: '7500',
+    })
+
+    // toHaveValue compara a string EXATA do atributo value (sem a
+    // normalização de espaço que normalizedBRL faz para getByText) — usa
+    // formatCentsToBRL diretamente, o mesmo formatador real do componente.
+    const row1 = getFilamentItemRow(dialog, 1)
+    const row2 = getFilamentItemRow(dialog, 2)
+    expect(within(row1).getByLabelText('Valor total')).toHaveValue(formatCentsToBRL(5000))
+    expect(within(row2).getByLabelText('Valor total')).toHaveValue(formatCentsToBRL(7500))
+  })
+
+  it('"Valor total" é obrigatório e deve ser maior que zero — não registra a compra com o campo vazio ou zerado', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await selectPurchaseChannel(user, dialog, 'Mercado Livre')
+    await selectFilamentType(user, dialog, 1, 'PLA', 'PLA - Sólida - Preto')
+    const row = getFilamentItemRow(dialog, 1)
+    await user.click(within(row).getByRole('radio', { name: '1.000 g' }))
+    await user.type(within(row).getByLabelText('Quantidade'), '1')
+    await user.type(within(row).getByLabelText('Marca'), 'Bambu Lab')
+
+    // Campo nunca tocado (vazio).
+    await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
+    expect(
+      await within(dialog).findByText('Informe o valor total do item, maior que zero.'),
+    ).toBeInTheDocument()
+    expect(registerFilamentPurchaseMock).not.toHaveBeenCalled()
+
+    // Campo digitado e depois zerado explicitamente.
+    await user.type(within(row).getByLabelText('Valor total'), '500')
+    await user.clear(within(row).getByLabelText('Valor total'))
+    await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
+    expect(
+      await within(dialog).findByText('Informe o valor total do item, maior que zero.'),
+    ).toBeInTheDocument()
+    expect(registerFilamentPurchaseMock).not.toHaveBeenCalled()
+  })
+
+  it('subtotal soma os Valores totais dos itens; frete é somado apenas UMA vez ao Total da compra', async () => {
+    mockFilamentTypes([
+      filamentTypeFixture({
+        filament_type_id: 't1',
+        material: 'PLA',
+        line: 'Matte',
+        commercial_color: 'Preto',
+      }),
+      filamentTypeFixture({
+        filament_type_id: 't2',
+        material: 'PLA',
+        line: 'Silk',
+        commercial_color: 'Dourado',
+      }),
+    ])
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await fillFilamentItem(user, dialog, 1, {
+      query: 'Matte',
+      optionName: 'PLA - Matte - Preto',
+      weightLabel: '1.000 g',
+      quantity: '3',
+      manufacturer: 'Bambu Lab',
+      totalValueRaw: '15000',
+    })
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar filamento' }))
+    await fillFilamentItem(user, dialog, 2, {
+      query: 'Silk',
+      optionName: 'PLA - Silk - Dourado',
+      weightLabel: '1.000 g',
+      quantity: '1',
+      manufacturer: 'Voolt',
+      totalValueRaw: '5000',
+    })
+    await user.type(within(dialog).getByLabelText('Valor do frete'), '1000')
+
+    // Subtotal = 150,00 + 50,00 = 200,00; Frete = 10,00 (uma única vez,
+    // nunca por item); Total da compra = 210,00.
+    expect(within(dialog).getByText(normalizedBRL(21000))).toBeInTheDocument()
+    expect(within(dialog).getByText(normalizedBRL(1000))).toBeInTheDocument()
+  })
+
+  it('quantidade 3 e Valor total R$ 100,00 não alteram o subtotal exibido (sem erro de ponto flutuante ao dividir por 3)', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await fillFilamentItem(user, dialog, 1, {
+      query: 'PLA',
+      optionName: 'PLA - Sólida - Preto',
+      weightLabel: '250 g',
+      quantity: '3',
+      manufacturer: 'Bambu Lab',
+      totalValueRaw: '10000',
+    })
+
+    // Sem frete: Total da compra (= subtotal) continua exatamente
+    // R$ 100,00 — nunca R$ 99,99/R$ 100,01 por arredondamento de
+    // 100/3 = 33,333... O cálculo exibido usa o total em centavos informado
+    // diretamente, nunca quantity × unit_value arredondado.
+    expect(within(dialog).getByText(normalizedBRL(10000))).toBeInTheDocument()
+    expect(within(dialog).queryByText(normalizedBRL(9999))).not.toBeInTheDocument()
+    expect(within(dialog).queryByText(normalizedBRL(10001))).not.toBeInTheDocument()
+  })
+
+  it('payload envia o unit_value calculado (Valor total ÷ quantidade, arredondado ao centavo) mesmo quando a divisão não é exata', async () => {
+    registerFilamentPurchaseMock.mockResolvedValue(filamentPurchaseResultFixture())
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Filamento')
+    await selectPurchaseChannel(user, dialog, 'Mercado Livre')
+    await fillFilamentItem(user, dialog, 1, {
+      query: 'PLA',
+      optionName: 'PLA - Sólida - Preto',
+      weightLabel: '250 g',
+      quantity: '3',
+      manufacturer: 'Bambu Lab',
+      totalValueRaw: '10000',
+    })
+
+    await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
+
+    await waitFor(() => expect(registerFilamentPurchaseMock).toHaveBeenCalledTimes(1))
+    const payload = registerFilamentPurchaseMock.mock.calls[0][0]
+    // 100,00 ÷ 3 = 33,333... -> arredondado ao centavo mais próximo: 33,33.
+    expect(payload.items).toContainEqual(
+      expect.objectContaining({ quantity: 3, unit_value: 33.33 }),
+    )
   })
 
   it('17. quantidade zero (nenhum item preenchido) não produz NaN nem Infinity — mostra R$ 0,00', async () => {
@@ -832,7 +1022,9 @@ describe('PurchaseDialog', () => {
       weightLabel: '1.000 g',
       quantity: '2',
       manufacturer: 'Bambu Lab',
-      unitValueRaw: '9500',
+      // Valor total da linha (2 rolos) = R$ 190,00 -> unit_value = 95
+      // (divide exato — payload.unit_value abaixo continua 95).
+      totalValueRaw: '19000',
     })
     await user.click(within(dialog).getByRole('button', { name: 'Adicionar filamento' }))
     await fillFilamentItem(user, dialog, 2, {
@@ -841,7 +1033,7 @@ describe('PurchaseDialog', () => {
       weightLabel: '1.000 g',
       quantity: '1',
       manufacturer: 'Voolt',
-      unitValueRaw: '11000',
+      totalValueRaw: '11000',
     })
 
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
@@ -851,6 +1043,9 @@ describe('PurchaseDialog', () => {
     expect(payload.freight_value).toBe(30)
     expect(payload.purchase_channel).toBe('MERCADO_LIVRE')
     expect(payload.items).toHaveLength(2)
+    // unit_value é derivado do Valor total ÷ quantidade só no envio — o
+    // contrato do backend (RegisterFilamentPurchaseItemInput.unit_value)
+    // não mudou.
     expect(payload.items).toContainEqual({
       filament_type_id: 't-matte',
       manufacturer: 'Bambu Lab',

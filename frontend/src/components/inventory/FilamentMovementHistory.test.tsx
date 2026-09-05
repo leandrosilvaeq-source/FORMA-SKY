@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { FilamentMovementHistory } from './FilamentMovementHistory'
 import { ApiError } from '@/lib/api/errors'
 import type { FilamentMovement } from '@/types/domain'
@@ -52,7 +52,11 @@ describe('FilamentMovementHistory', () => {
   it('a célula de Data tem truncate — nunca invade a coluna Tipo', () => {
     render(<FilamentMovementHistory movements={[movementFixture()]} isLoading={false} error={null} onRetry={vi.fn()} />)
 
-    const dateCell = screen.getByText(/27\/08\/2026/).closest('td')
+    // Escopado à tabela (desktop) — o mesmo texto de data também aparece no
+    // card mobile equivalente, sempre presente no DOM junto com a tabela
+    // (a alternância é só por CSS/breakpoint, não por montagem condicional).
+    const table = screen.getByRole('table')
+    const dateCell = within(table).getByText(/27\/08\/2026/).closest('td')
     expect(dateCell).not.toBeNull()
     expect(dateCell?.className).toContain('truncate')
   })
@@ -114,9 +118,73 @@ describe('FilamentMovementHistory', () => {
     expect(screen.getByText('-50g').className).toContain('text-destructive')
   })
 
-  it('a tabela tem largura mínima e rolagem horizontal controlada (mesmo padrão das demais tabelas do projeto)', () => {
+  // Achado da validação manual (2026-09-05): um min-w-[700px] antigo
+  // forçava a tabela a ser mais larga que a janela "Histórico do rolo",
+  // fazendo o wrapper `overflow-x-auto` (sempre presente no componente
+  // base `Table`, ui/table.tsx, em toda tabela do projeto) exibir de fato
+  // uma barra de rolagem horizontal. As colunas agora preenchem 100% do
+  // contêiner (table-fixed, sem largura mínima fixa) — a tabela nunca
+  // precisa de mais espaço do que o disponível, então o wrapper nunca
+  // ativa a rolagem na prática.
+  it('a tabela ocupa 100% do contêiner, sem largura mínima fixa', () => {
     render(<FilamentMovementHistory movements={[movementFixture()]} isLoading={false} error={null} onRetry={vi.fn()} />)
     const table = screen.getByRole('table')
-    expect(table.className).toContain('min-w-[700px]')
+    expect(table.className).toContain('w-full')
+    expect(table.className).not.toMatch(/min-w-/)
+  })
+
+  // Requisito 2026-09-05: um motivo longo deve quebrar linha na própria
+  // célula (mesmo tratamento já dado à coluna Tipo), nunca cortado por
+  // truncate/ellipsis — o texto completo precisa ficar visível sem depender
+  // só do tooltip.
+  it('a célula de Motivo/Observação NUNCA usa truncate — permite quebra de linha para um motivo longo', () => {
+    const longReason =
+      'Ajuste registrado após pesagem física detalhada em balança de precisão do laboratório, motivo bastante extenso para testar a quebra de linha'
+    render(
+      <FilamentMovementHistory
+        movements={[movementFixture({ reason: longReason })]}
+        isLoading={false}
+        error={null}
+        onRetry={vi.fn()}
+      />,
+    )
+
+    const table = screen.getByRole('table')
+    const reasonCell = within(table).getByText(longReason).closest('td')
+    expect(reasonCell).not.toBeNull()
+    expect(reasonCell?.className).not.toContain('truncate')
+    expect(reasonCell?.className).toContain('whitespace-normal')
+    expect(reasonCell?.className).toContain('break-words')
+  })
+
+  // Telas estreitas (2026-09-05): as linhas viram cards, preservando todos
+  // os 5 campos exigidos — Data, Tipo, Quantidade, Saldo e
+  // Motivo/Observação — nenhuma informação a menos que a tabela.
+  it('em telas estreitas, cada movimentação vira um card com Data/Tipo/Quantidade/Saldo/Motivo — mesmos dados da tabela', () => {
+    render(
+      <FilamentMovementHistory
+        movements={[
+          movementFixture({
+            movement_type: 'MANUAL_CONSUMPTION',
+            quantity_delta: -50,
+            balance_before: 600,
+            balance_after: 550,
+            reason: 'teste',
+          }),
+        ]}
+        isLoading={false}
+        error={null}
+        onRetry={vi.fn()}
+      />,
+    )
+
+    const cards = document.querySelectorAll('[data-slot="card"]')
+    expect(cards).toHaveLength(1)
+    const card = within(cards[0] as HTMLElement)
+    expect(card.getByText(/27\/08\/2026/)).toBeInTheDocument()
+    expect(card.getByText('Tipo: Consumo manual')).toBeInTheDocument()
+    expect(card.getByText('Quantidade: -50g')).toBeInTheDocument()
+    expect(card.getByText('Saldo: 600g → 550g')).toBeInTheDocument()
+    expect(card.getByText('Motivo/Observação: teste')).toBeInTheDocument()
   })
 })

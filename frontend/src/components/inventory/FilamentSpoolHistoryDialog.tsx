@@ -40,7 +40,13 @@ export interface FilamentSpoolHistoryDialogProps {
 export function FilamentSpoolHistoryDialog({ spool, onClose }: FilamentSpoolHistoryDialogProps) {
   return (
     <Dialog open={spool !== null} onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+      {/* Largura ampliada (2026-09-05, de sm:max-w-2xl para sm:max-w-4xl) —
+          dá espaço real para as 5 colunas da tabela de histórico sem
+          precisar de rolagem horizontal; `max-w-[calc(100%-2rem)]`
+          (DialogContent, ui/dialog.tsx) preserva pelo menos 1rem de margem
+          lateral em qualquer largura de tela. Rolagem VERTICAL preservada
+          (`overflow-y-auto`) para um histórico longo. */}
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>Histórico do rolo</DialogTitle>
           <DialogDescription>{spool?.code}</DialogDescription>

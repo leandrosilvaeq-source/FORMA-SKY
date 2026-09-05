@@ -68,7 +68,7 @@ import type { FilamentTypeSummary, InventoryPurchaseCategory } from '@/types/dom
 // para aceitar VÁRIOS itens/tipos/marcas na mesma compra, e reorganizada
 // numa segunda rodada da mesma data em 5 seções compactas, nesta ordem: 1.
 // Dados Gerais (Data da compra + Local da compra), 2. Itens (uma linha por
-// item no desktop: Tipo | Peso | Quantidade | Marca | Valor unitário |
+// item no desktop: Tipo | Peso | Quantidade | Marca | Valor total |
 // Remover), 3. Frete (campo único), 4. Resumo (Total da compra / Frete /
 // Custo por filamento), 5. Cancelar/Registrar compra). Ao salvar, chama
 // POST /inventory-purchases/filament -> register_filament_purchase, que cria
@@ -179,7 +179,7 @@ function emptyCurrencyField(): CurrencyFieldState {
 // Campo de valor monetário "bancário" (dígito sempre entra pela direita) —
 // mesmo comportamento de ProductPriceForm.tsx/RegisterPaymentForm.tsx,
 // reaproveitado aqui para os campos de valor desta tela (Valor dos itens/
-// Frete de Acessório-Embalagem; Valor unitário por item + Valor do frete de
+// Frete de Acessório-Embalagem; Valor total por item + Valor do frete de
 // Filamento) via um pequeno componente de apresentação, em vez de duplicar
 // os 3 handlers em cada instância. `inputClassName` permite a cada chamador
 // ajustar a largura (w-40 fixo nos usos originais; w-full para preencher a
@@ -499,13 +499,21 @@ function PackagingItemPicker({
 // (crypto.randomUUID()), usado como React key e para escopar erros de campo
 // (fieldErrors), nunca reaproveitado entre itens diferentes mesmo depois de
 // remover/adicionar outros.
+//
+// "Valor total" (2026-09-05, antes "Valor unitário"): o campo pede quanto o
+// usuário pagou por TODOS os rolos daquela linha (ex.: 4 rolos por
+// R$ 320,00), nunca o preço de um rolo só — mais próximo de como uma compra
+// real é lida na nota/recibo. O CONTRATO do backend não muda
+// (RegisterFilamentPurchaseItemInput.unit_value continua sendo o único
+// campo aceito por register_filament_purchase): o valor por rolo
+// (unit_value) é derivado só no envio, ver unitValueFromTotalCents abaixo.
 interface FilamentPurchaseItemState {
   key: string
   filamentTypeId: string | null
   nominalWeightGrams: number | null
   quantity: string
   manufacturer: string
-  unitValueField: CurrencyFieldState
+  totalValueField: CurrencyFieldState
 }
 
 function emptyFilamentItem(): FilamentPurchaseItemState {
@@ -515,14 +523,36 @@ function emptyFilamentItem(): FilamentPurchaseItemState {
     nominalWeightGrams: null,
     quantity: '',
     manufacturer: '',
-    unitValueField: emptyCurrencyField(),
+    totalValueField: emptyCurrencyField(),
   }
 }
 
+// Deriva o unit_value (reais, contrato existente do backend) a partir do
+// Valor total do item (centavos, inteiro — nunca ponto flutuante) e da
+// quantidade de rolos da linha. Arredonda ao CENTAVO mais próximo — quando o
+// total não é múltiplo exato da quantidade em centavos (ex.: R$ 100,00 ÷ 3
+// rolos = R$ 33,333... por rolo), esse arredondamento é inerente a QUALQUER
+// contrato que registre um preço por unidade (a mesma coisa acontece em
+// qualquer nota fiscal com preço unitário); register_filament_purchase
+// recalcula subtotal_value como quantity*unit_value (item_value é coluna
+// GENERATED no banco, migration 20260904130000), então o subtotal
+// PERSISTIDO pode divergir do total informado em até alguns poucos
+// centavos nesse caso — corrigir isso exigiria mudar o contrato para
+// armazenar o total diretamente (aceitar um novo campo/gerar unit_value ao
+// contrário), o que NÃO foi feito nesta rodada (nenhuma migration/RPC/Edge
+// Function tocada, conforme pedido). O RESUMO exibido nesta janela nunca
+// sofre esse arredondamento: ele soma os totais em centavos informados
+// diretamente (ver filamentSubtotalReais), nunca reconstrói a partir de
+// unit_value*quantity.
+function unitValueFromTotalCents(totalCents: number, quantity: number): number {
+  const unitCents = Math.round(totalCents / quantity)
+  return centsToAmount(unitCents)
+}
+
 // Grade compacta de cada linha de item, na ordem pedida — Tipo | Peso |
-// Quantidade | Marca | Valor unitário | Remover. Tipo é a coluna mais larga
+// Quantidade | Marca | Valor total | Remover. Tipo é a coluna mais larga
 // (fr maior); Peso usa "auto" (o próprio conteúdo dos 3 botões decide a
-// largura, sem forçar quebra); Quantidade/Valor unitário têm largura fixa
+// largura, sem forçar quebra); Quantidade/Valor total têm largura fixa
 // compacta; Marca fica intermediária; Remover é só o ícone. Em telas
 // pequenas (abaixo de sm), vira uma única coluna empilhada — nunca corta
 // conteúdo nem impede a rolagem vertical da janela (max-h-[90vh]
@@ -711,16 +741,24 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
   // exibido isoladamente, só usado para compor o Total), Total da compra
   // (subtotal + frete), Custo por filamento (total ÷ quantidade total de
   // rolos — nunca NaN/Infinity quando a quantidade total é 0).
+  //
+  // Subtotal (2026-09-05): soma os CENTAVOS do Valor total de cada item
+  // diretamente — inteiros, soma exata, sem nenhuma divisão por quantidade
+  // no caminho. Nunca reconstrói a partir de quantity*unit_value (que
+  // sofreria o mesmo arredondamento ao centavo mais próximo de
+  // unitValueFromTotalCents) — por isso quantidade 3 + Valor total
+  // R$ 100,00 continua mostrando exatamente R$ 100,00 aqui, mesmo sabendo
+  // que 100,00 não divide em 3 partes exatas de centavo.
   const filamentTotalQuantity = filamentItems.reduce((sum, item) => {
     const itemQuantity = parseNumberField(item.quantity, 'a quantidade', { integer: true }).value
     return sum + (itemQuantity && itemQuantity > 0 ? itemQuantity : 0)
   }, 0)
-  const filamentSubtotalReais = filamentItems.reduce((sum, item) => {
+  const filamentSubtotalCents = filamentItems.reduce((sum, item) => {
     const itemQuantity = parseNumberField(item.quantity, 'a quantidade', { integer: true }).value
     if (!itemQuantity || itemQuantity <= 0) return sum
-    return sum + itemQuantity * centsToAmount(item.unitValueField.cents)
+    return sum + item.totalValueField.cents
   }, 0)
-  const filamentTotalReais = filamentSubtotalReais + freightValueReais
+  const filamentTotalReais = centsToAmount(filamentSubtotalCents + freightValueField.cents)
   const filamentCostPerRoll =
     filamentTotalQuantity > 0 ? filamentTotalReais / filamentTotalQuantity : 0
 
@@ -823,8 +861,11 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
         itemHasError = true
       }
 
-      if (!item.unitValueField.hasEdited) {
-        errors[`item_${item.key}_unit_value`] = 'Informe o valor unitário.'
+      // Valor total do item: obrigatório e maior que zero (cobre tanto o
+      // campo nunca tocado — cents=0 por padrão — quanto um valor
+      // explicitamente zerado pelo usuário).
+      if (item.totalValueField.cents <= 0) {
+        errors[`item_${item.key}_unit_value`] = 'Informe o valor total do item, maior que zero.'
         itemHasError = true
       }
 
@@ -834,7 +875,12 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
           manufacturer,
           nominal_weight_grams: item.nominalWeightGrams as number,
           quantity: quantityResult.value as number,
-          unit_value: centsToAmount(item.unitValueField.cents),
+          // Contrato existente preservado (unit_value) — derivado do Valor
+          // total ÷ quantidade só aqui, no envio (ver unitValueFromTotalCents).
+          unit_value: unitValueFromTotalCents(
+            item.totalValueField.cents,
+            quantityResult.value as number,
+          ),
         })
       }
     }
@@ -1055,7 +1101,7 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
                         <span>Peso</span>
                         <span>Quantidade</span>
                         <span>Marca</span>
-                        <span>Valor unitário</span>
+                        <span>Valor total</span>
                         <span />
                       </div>
 
@@ -1175,12 +1221,12 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
                           </div>
 
                           <CurrencyInput
-                            id={`purchase-item-${item.key}-unit-value`}
-                            label="Valor unitário"
+                            id={`purchase-item-${item.key}-total-value`}
+                            label="Valor total"
                             inputClassName="w-full"
-                            state={item.unitValueField}
+                            state={item.totalValueField}
                             onChange={(next) => {
-                              updateFilamentItem(item.key, { unitValueField: next })
+                              updateFilamentItem(item.key, { totalValueField: next })
                               clearFilamentItemError(item.key, 'unit_value')
                             }}
                             disabled={isSubmitting}

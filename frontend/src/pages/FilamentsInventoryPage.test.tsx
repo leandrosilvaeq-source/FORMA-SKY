@@ -2911,7 +2911,7 @@ describe('FilamentsInventoryPage — atualização automática sem F5', () => {
     await user.click(within(itemRow).getByRole('radio', { name: '1.000 g' }))
     await user.type(within(itemRow).getByLabelText('Quantidade'), '1')
     await user.type(within(itemRow).getByLabelText('Marca'), 'Bambu Lab')
-    await user.type(within(itemRow).getByLabelText('Valor unitário'), '9500')
+    await user.type(within(itemRow).getByLabelText('Valor total'), '9500')
 
     await user.click(within(filamentDialog).getByRole('button', { name: /^registrar compra$/i }))
   }
