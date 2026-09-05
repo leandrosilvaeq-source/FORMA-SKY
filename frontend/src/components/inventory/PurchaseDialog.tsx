@@ -503,10 +503,14 @@ function PackagingItemPicker({
 // "Valor total" (2026-09-05, antes "Valor unitário"): o campo pede quanto o
 // usuário pagou por TODOS os rolos daquela linha (ex.: 4 rolos por
 // R$ 320,00), nunca o preço de um rolo só — mais próximo de como uma compra
-// real é lida na nota/recibo. O CONTRATO do backend não muda
-// (RegisterFilamentPurchaseItemInput.unit_value continua sendo o único
-// campo aceito por register_filament_purchase): o valor por rolo
-// (unit_value) é derivado só no envio, ver unitValueFromTotalCents abaixo.
+// real é lida na nota/recibo. CORREÇÃO (2026-09-05, migration 20260905160000):
+// o contrato do backend passou a aceitar total_value diretamente
+// (RegisterFilamentPurchaseItemInput.total_value) — o frontend nunca mais
+// divide pela quantidade antes de enviar; register_filament_purchase grava
+// o valor exatamente como recebido e deriva o valor por rolo internamente.
+// Isso elimina o arredondamento de centavo que existia quando o frontend
+// convertia para unit_value antes do envio (ex.: quantidade 3 + R$ 100,00
+// persistia como R$ 99,99 no cabeçalho da compra).
 interface FilamentPurchaseItemState {
   key: string
   filamentTypeId: string | null
@@ -525,28 +529,6 @@ function emptyFilamentItem(): FilamentPurchaseItemState {
     manufacturer: '',
     totalValueField: emptyCurrencyField(),
   }
-}
-
-// Deriva o unit_value (reais, contrato existente do backend) a partir do
-// Valor total do item (centavos, inteiro — nunca ponto flutuante) e da
-// quantidade de rolos da linha. Arredonda ao CENTAVO mais próximo — quando o
-// total não é múltiplo exato da quantidade em centavos (ex.: R$ 100,00 ÷ 3
-// rolos = R$ 33,333... por rolo), esse arredondamento é inerente a QUALQUER
-// contrato que registre um preço por unidade (a mesma coisa acontece em
-// qualquer nota fiscal com preço unitário); register_filament_purchase
-// recalcula subtotal_value como quantity*unit_value (item_value é coluna
-// GENERATED no banco, migration 20260904130000), então o subtotal
-// PERSISTIDO pode divergir do total informado em até alguns poucos
-// centavos nesse caso — corrigir isso exigiria mudar o contrato para
-// armazenar o total diretamente (aceitar um novo campo/gerar unit_value ao
-// contrário), o que NÃO foi feito nesta rodada (nenhuma migration/RPC/Edge
-// Function tocada, conforme pedido). O RESUMO exibido nesta janela nunca
-// sofre esse arredondamento: ele soma os totais em centavos informados
-// diretamente (ver filamentSubtotalReais), nunca reconstrói a partir de
-// unit_value*quantity.
-function unitValueFromTotalCents(totalCents: number, quantity: number): number {
-  const unitCents = Math.round(totalCents / quantity)
-  return centsToAmount(unitCents)
 }
 
 // Grade compacta de cada linha de item, na ordem pedida — Tipo | Peso |
@@ -744,11 +726,13 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
   //
   // Subtotal (2026-09-05): soma os CENTAVOS do Valor total de cada item
   // diretamente — inteiros, soma exata, sem nenhuma divisão por quantidade
-  // no caminho. Nunca reconstrói a partir de quantity*unit_value (que
-  // sofreria o mesmo arredondamento ao centavo mais próximo de
-  // unitValueFromTotalCents) — por isso quantidade 3 + Valor total
+  // no caminho (o mesmo total_value exato enviado ao backend, ver
+  // handleFilamentSubmit) — por isso quantidade 3 + Valor total
   // R$ 100,00 continua mostrando exatamente R$ 100,00 aqui, mesmo sabendo
-  // que 100,00 não divide em 3 partes exatas de centavo.
+  // que 100,00 não divide em 3 partes exatas de centavo. O backend
+  // (register_filament_purchase, migration 20260905160000) faz o mesmo:
+  // soma total_value de cada item diretamente, nunca quantity*unit_value —
+  // o subtotal persistido também fica exato.
   const filamentTotalQuantity = filamentItems.reduce((sum, item) => {
     const itemQuantity = parseNumberField(item.quantity, 'a quantidade', { integer: true }).value
     return sum + (itemQuantity && itemQuantity > 0 ? itemQuantity : 0)
@@ -875,12 +859,12 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
           manufacturer,
           nominal_weight_grams: item.nominalWeightGrams as number,
           quantity: quantityResult.value as number,
-          // Contrato existente preservado (unit_value) — derivado do Valor
-          // total ÷ quantidade só aqui, no envio (ver unitValueFromTotalCents).
-          unit_value: unitValueFromTotalCents(
-            item.totalValueField.cents,
-            quantityResult.value as number,
-          ),
+          // Enviado diretamente, em reais, exatamente como informado —
+          // NUNCA dividido pela quantidade aqui (2026-09-05,
+          // migration 20260905160000: o backend passou a aceitar e gravar
+          // total_value tal como recebido, derivando o valor por rolo
+          // internamente).
+          total_value: centsToAmount(item.totalValueField.cents),
         })
       }
     }

@@ -939,7 +939,7 @@ describe('PurchaseDialog', () => {
     expect(within(dialog).queryByText(normalizedBRL(10001))).not.toBeInTheDocument()
   })
 
-  it('payload envia o unit_value calculado (Valor total ÷ quantidade, arredondado ao centavo) mesmo quando a divisão não é exata', async () => {
+  it('payload envia o total_value informado diretamente — nunca dividido pelo frontend, mesmo quando a divisão por quantidade não é exata', async () => {
     registerFilamentPurchaseMock.mockResolvedValue(filamentPurchaseResultFixture())
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()
@@ -959,10 +959,11 @@ describe('PurchaseDialog', () => {
 
     await waitFor(() => expect(registerFilamentPurchaseMock).toHaveBeenCalledTimes(1))
     const payload = registerFilamentPurchaseMock.mock.calls[0][0]
-    // 100,00 ÷ 3 = 33,333... -> arredondado ao centavo mais próximo: 33,33.
-    expect(payload.items).toContainEqual(
-      expect.objectContaining({ quantity: 3, unit_value: 33.33 }),
-    )
+    // 100,00 ÷ 3 não é exato — mas o frontend nunca divide: envia total_value
+    // = 100 tal como digitado. A derivação de unit_value (arredondada ao
+    // centavo) acontece só dentro de register_filament_purchase (backend).
+    expect(payload.items).toContainEqual(expect.objectContaining({ quantity: 3, total_value: 100 }))
+    expect(payload.items[0]).not.toHaveProperty('unit_value')
   })
 
   it('17. quantidade zero (nenhum item preenchido) não produz NaN nem Infinity — mostra R$ 0,00', async () => {
@@ -1022,8 +1023,7 @@ describe('PurchaseDialog', () => {
       weightLabel: '1.000 g',
       quantity: '2',
       manufacturer: 'Bambu Lab',
-      // Valor total da linha (2 rolos) = R$ 190,00 -> unit_value = 95
-      // (divide exato — payload.unit_value abaixo continua 95).
+      // Valor total da linha (2 rolos) = R$ 190,00 — enviado tal como digitado.
       totalValueRaw: '19000',
     })
     await user.click(within(dialog).getByRole('button', { name: 'Adicionar filamento' }))
@@ -1043,22 +1043,23 @@ describe('PurchaseDialog', () => {
     expect(payload.freight_value).toBe(30)
     expect(payload.purchase_channel).toBe('MERCADO_LIVRE')
     expect(payload.items).toHaveLength(2)
-    // unit_value é derivado do Valor total ÷ quantidade só no envio — o
-    // contrato do backend (RegisterFilamentPurchaseItemInput.unit_value)
-    // não mudou.
+    // total_value é enviado diretamente, exatamente como digitado — nunca
+    // dividido pela quantidade no frontend (2026-09-05, migration
+    // 20260905160000: o backend passou a aceitar total_value e derivar
+    // unit_value internamente).
     expect(payload.items).toContainEqual({
       filament_type_id: 't-matte',
       manufacturer: 'Bambu Lab',
       nominal_weight_grams: 1000,
       quantity: 2,
-      unit_value: 95,
+      total_value: 190,
     })
     expect(payload.items).toContainEqual({
       filament_type_id: 't-silk',
       manufacturer: 'Voolt',
       nominal_weight_grams: 1000,
       quantity: 1,
-      unit_value: 110,
+      total_value: 110,
     })
     // Nunca cria/localiza tipo por nome — nenhum campo legado de identidade.
     expect(payload).not.toHaveProperty('category')

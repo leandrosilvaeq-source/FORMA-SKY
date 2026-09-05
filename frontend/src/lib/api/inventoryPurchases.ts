@@ -56,7 +56,7 @@ export type PurchaseChannel =
 // localiza tipo por material/fabricante/linha/cor), a marca (manufacturer)
 // comprada NESTE item (distinta do fabricante interno do tipo, que
 // permanece sempre "Não informado"), o peso líquido de cada rolo, a
-// quantidade de rolos e o valor unitário. O frete é único por compra
+// quantidade de rolos e o valor total do item. O frete é único por compra
 // (freight_value), nunca dividido entre itens/rolos. Sem peso bruto
 // individual por rolo nesta janela.
 export interface RegisterFilamentPurchaseItemInput {
@@ -64,7 +64,12 @@ export interface RegisterFilamentPurchaseItemInput {
   manufacturer: string
   nominal_weight_grams: number
   quantity: number
-  unit_value: number
+  // total_value (2026-09-05, migration 20260905160000, substitui
+  // unit_value neste contrato) — o quanto o usuário pagou por TODOS os
+  // rolos desta linha, exatamente como digitado (em reais). Nunca dividido
+  // pelo frontend antes do envio — register_filament_purchase grava este
+  // valor tal como recebido e deriva o valor por rolo internamente.
+  total_value: number
 }
 
 export interface RegisterFilamentPurchaseInput {
@@ -84,6 +89,11 @@ export interface FilamentPurchaseResultItem {
   manufacturer: string
   nominal_weight_grams: number
   quantity: number
+  // total_value (2026-09-05) é a fonte autoritativa (exatamente o que foi
+  // informado); unit_value/item_value continuam na resposta só por
+  // compatibilidade legada — podem divergir de total_value em até poucos
+  // centavos quando a divisão por quantity não é exata.
+  total_value: number
   unit_value: number
   item_value: number
   spool_ids: string[]

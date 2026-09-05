@@ -37,8 +37,10 @@
 // 20260904140000_add_purchase_channel_to_filament_purchases.sql — local/canal
 // da compra, obrigatório, um de MERCADO_LIVRE/ALIEXPRESS/SHOPEE/PRESENCIAL) +
 // uma lista não vazia de itens (filament_type_id/manufacturer/
-// nominal_weight_grams/quantity/unit_value cada) — tudo que não depende de
-// ler o banco. Regras que dependem do banco (item realmente existe e está
+// nominal_weight_grams/quantity/total_value cada — total_value substitui
+// unit_value a partir de 2026-09-04/migration 20260905160000: o valor pago
+// por TODOS os rolos da linha, nunca dividido pelo frontend) — tudo que não
+// depende de ler o banco. Regras que dependem do banco (item realmente existe e está
 // ativo, tipo de filamento existe/está ativo, tipo inativo correspondente,
 // idempotency_key já usada) continuam exclusivas da RPC, mesmo critério já
 // usado em accessories/handler.ts, stock-movements/handler.ts e
@@ -337,7 +339,9 @@ async function handleRegisterInventoryPurchase(req: Request): Promise<Response> 
 //   MAIS itens (2026-09-04). Cada item exige filament_type_id (tipo já
 //   cadastrado e ATIVO — nunca cria nem localiza por nome), manufacturer
 //   (marca da compra, distinta do fabricante interno do tipo),
-//   nominal_weight_grams, quantity e unit_value. Sem peso bruto individual
+//   nominal_weight_grams, quantity e total_value (2026-09-05, migration
+//   20260905160000 — valor pago por TODOS os rolos da linha; unit_value é
+//   calculado dentro da RPC, nunca aceito aqui). Sem peso bruto individual
 //   por rolo nesta rota (requisito explícito da janela nova) — cada rolo
 //   nasce sem empty_spool_weight_grams/initial_gross_weight_grams,
 //   exatamente como um rolo criado manualmente. purchase_channel (2026-09-04,
@@ -371,7 +375,7 @@ const FILAMENT_PURCHASE_ITEM_KEYS = [
   "manufacturer",
   "nominal_weight_grams",
   "quantity",
-  "unit_value",
+  "total_value",
 ] as const;
 
 export function requirePurchaseChannel(value: unknown): (typeof PURCHASE_CHANNELS)[number] {
@@ -386,9 +390,17 @@ export interface FilamentPurchaseItemParams {
   manufacturer: string;
   nominal_weight_grams: number;
   quantity: number;
-  unit_value: number;
+  total_value: number;
 }
 
+// total_value (2026-09-05, substitui unit_value neste contrato): o quanto o
+// usuário pagou por TODOS os rolos desta linha, exatamente como informado —
+// nunca dividido pelo frontend antes do envio. register_filament_purchase
+// (migration 20260905160000) grava este valor tal como recebido e deriva
+// unit_value internamente (round(total_value/quantity, 2)); o subtotal do
+// cabeçalho soma total_value de cada item diretamente, nunca
+// quantity*unit_value, então não sofre o arredondamento de centavo mesmo
+// quando a divisão não é exata.
 export function validateFilamentPurchaseItem(
   value: unknown,
   index: number,
@@ -399,6 +411,11 @@ export function validateFilamentPurchaseItem(
   const item = value as Record<string, unknown>;
   rejectUnknownKeys(item, FILAMENT_PURCHASE_ITEM_KEYS, `items[${index}]`);
 
+  const totalValue = requireNumber(item.total_value, `items[${index}].total_value`);
+  if (totalValue <= 0) {
+    throw new ValidationError(`Campo inválido: items[${index}].total_value deve ser maior que zero.`);
+  }
+
   return {
     filament_type_id: requireUuid(item.filament_type_id, `items[${index}].filament_type_id`),
     manufacturer: requireTrimmedString(item.manufacturer, `items[${index}].manufacturer`),
@@ -406,7 +423,7 @@ export function validateFilamentPurchaseItem(
       min: 0.01,
     }),
     quantity: requirePositiveIntegerQuantity(item.quantity),
-    unit_value: requireNumber(item.unit_value, `items[${index}].unit_value`, { min: 0 }),
+    total_value: totalValue,
   };
 }
 

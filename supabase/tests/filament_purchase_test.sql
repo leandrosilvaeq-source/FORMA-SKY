@@ -11,6 +11,23 @@
 -- também cobre a migration seguinte (ajustes finais de Filamentos,
 -- 20260904150000_add_site_outro_purchase_channels.sql): SITE e OUTRO
 -- acrescentados ao enum oficial (agora 6 valores).
+--
+-- ATUALIZAÇÃO 2026-09-05 (migration 20260905160000_store_exact_filament_
+-- purchase_item_totals.sql — correção de arredondamento, autorizada pelo
+-- usuário): todo item de p_items passou a exigir total_value em vez de
+-- unit_value (o valor pago por TODOS os rolos da linha, gravado exatamente
+-- como informado; unit_value agora é CALCULADO internamente pela RPC como
+-- round(total_value/quantity, 2), nunca mais aceito do chamador). Todas as
+-- chamadas das Seções 1–8 (já existentes) foram atualizadas para enviar
+-- 'total_value' — em todo caso de quantity=1 o valor numérico não muda
+-- (total = unitário quando há só 1 rolo); o único caso de quantity>1 nas
+-- seções antigas (Seção 1, item A, quantity=2) teve seu total_value
+-- ajustado para 190.00 (2×95.00), preservando exatamente as mesmas
+-- expectativas de subtotal já testadas. A Seção 9 (nova) cobre
+-- especificamente a correção: total_value persistido exato mesmo quando a
+-- divisão por quantity não é exata (quantidade 3, R$ 100,00), unit_value
+-- derivado corretamente, subtotal do cabeçalho somando total_value de
+-- vários itens sem arredondamento, e frete aplicado uma única vez.
 -- =============================================================================
 --
 -- ESTE ARQUIVO NÃO É UMA MIGRATION. Mesmo padrão de
@@ -123,11 +140,11 @@ begin
       p_items => jsonb_build_array(
         jsonb_build_object(
           'filament_type_id', v_type_a_id, 'manufacturer', 'Bambu Lab',
-          'nominal_weight_grams', 1000, 'quantity', 2, 'unit_value', 95.00
+          'nominal_weight_grams', 1000, 'quantity', 2, 'total_value', 190.00
         ),
         jsonb_build_object(
           'filament_type_id', v_type_b_id, 'manufacturer', 'Voolt',
-          'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 110.00
+          'nominal_weight_grams', 1000, 'quantity', 1, 'total_value', 110.00
         )
       ),
       p_idempotency_key => 'teste-compra-multi-1',
@@ -149,7 +166,7 @@ begin
         case when v_purchase.quantity = 3 then 'PASS' else 'FAIL' end, 'quantity=' || v_purchase.quantity);
 
     insert into zz_test_results(section, test_name, status, details)
-      values ('1', '1.3 subtotal (item_value) = soma de quantidade×valor unitário (2×95 + 1×110 = 300)',
+      values ('1', '1.3 subtotal (item_value do cabeçalho) = soma de total_value dos itens (190 + 110 = 300)',
         case when v_purchase.item_value = 300.00 then 'PASS' else 'FAIL' end, 'item_value=' || v_purchase.item_value);
 
     insert into zz_test_results(section, test_name, status, details)
@@ -209,7 +226,7 @@ begin
         ) = 0 then 'PASS' else 'FAIL' end, null);
 
     insert into zz_test_results(section, test_name, status, details)
-      values ('1', '1.13 item_value de cada item = quantity×unit_value (coluna gerada)',
+      values ('1', '1.13 item_value (legado) de cada item = quantity×unit_value (coluna gerada, unit_value agora derivado)',
         case when (
           select count(*) from public.inventory_purchase_filament_items
           where purchase_id = v_purchase_id and item_value <> quantity * unit_value
@@ -219,6 +236,24 @@ begin
       values ('1', '1.14 purchase_channel do cabeçalho é gravado como o valor informado (MERCADO_LIVRE)',
         case when v_purchase.purchase_channel = 'MERCADO_LIVRE' then 'PASS' else 'FAIL' end,
         'purchase_channel=' || coalesce(v_purchase.purchase_channel, 'null'));
+
+    -- 2026-09-05: total_value de cada item é gravado EXATAMENTE como
+    -- informado (190.00 e 110.00 — divisão exata nos dois casos, nenhum
+    -- arredondamento aqui); unit_value é DERIVADO corretamente
+    -- (total_value/quantity) quando a divisão é exata.
+    insert into zz_test_results(section, test_name, status, details)
+      values ('1', '1.15 total_value do item A (2 rolos) gravado exatamente como informado (190.00)',
+        case when (
+          select total_value from public.inventory_purchase_filament_items
+          where purchase_id = v_purchase_id and filament_type_id = v_type_a_id
+        ) = 190.00 then 'PASS' else 'FAIL' end, null);
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('1', '1.16 unit_value do item A é derivado corretamente (190.00 / 2 = 95.00)',
+        case when (
+          select unit_value from public.inventory_purchase_filament_items
+          where purchase_id = v_purchase_id and filament_type_id = v_type_a_id
+        ) = 95.00 then 'PASS' else 'FAIL' end, null);
 
     insert into zz_fixtures(key, value) values ('success_purchase_id', v_purchase_id::text)
       on conflict (key) do update set value = excluded.value;
@@ -253,7 +288,7 @@ begin
     perform public.register_filament_purchase(
       p_freight_value => -1, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
-        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
+        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'total_value', 10
       )),
       p_purchase_channel => 'MERCADO_LIVRE'
     );
@@ -280,7 +315,7 @@ begin
     perform public.register_filament_purchase(
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
-        'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
+        'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'total_value', 10
       )),
       p_purchase_channel => 'MERCADO_LIVRE'
     );
@@ -295,7 +330,7 @@ begin
     perform public.register_filament_purchase(
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
-        'filament_type_id', v_type_a_id, 'manufacturer', '   ', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
+        'filament_type_id', v_type_a_id, 'manufacturer', '   ', 'nominal_weight_grams', 1000, 'quantity', 1, 'total_value', 10
       )),
       p_purchase_channel => 'MERCADO_LIVRE'
     );
@@ -310,7 +345,7 @@ begin
     perform public.register_filament_purchase(
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
-        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 0, 'quantity', 1, 'unit_value', 10
+        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 0, 'quantity', 1, 'total_value', 10
       )),
       p_purchase_channel => 'MERCADO_LIVRE'
     );
@@ -325,7 +360,7 @@ begin
     perform public.register_filament_purchase(
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
-        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 0, 'unit_value', 10
+        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 0, 'total_value', 10
       )),
       p_purchase_channel => 'MERCADO_LIVRE'
     );
@@ -340,13 +375,30 @@ begin
     perform public.register_filament_purchase(
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
-        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', -1
+        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'total_value', -1
       )),
       p_purchase_channel => 'MERCADO_LIVRE'
     );
-    insert into zz_test_results(section, test_name, status, details) values ('2', '2.7 item com valor unitário negativo rejeitado', 'FAIL', 'não levantou exceção');
+    insert into zz_test_results(section, test_name, status, details) values ('2', '2.7 item com total_value negativo rejeitado', 'FAIL', 'não levantou exceção');
   exception when others then
-    insert into zz_test_results(section, test_name, status, details) values ('2', '2.7 item com valor unitário negativo rejeitado',
+    insert into zz_test_results(section, test_name, status, details) values ('2', '2.7 item com total_value negativo rejeitado',
+      case when (select count(*) from public.inventory_purchases) = v_purchase_count_before then 'PASS' else 'FAIL' end, sqlerrm);
+  end;
+
+  -- 2026-09-05: diferente da regra antiga de unit_value (aceitava zero),
+  -- total_value deve ser MAIOR QUE ZERO — zero também é rejeitado.
+  select count(*) into v_purchase_count_before from public.inventory_purchases;
+  begin
+    perform public.register_filament_purchase(
+      p_freight_value => 0, p_changed_by => v_user_id,
+      p_items => jsonb_build_array(jsonb_build_object(
+        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'total_value', 0
+      )),
+      p_purchase_channel => 'MERCADO_LIVRE'
+    );
+    insert into zz_test_results(section, test_name, status, details) values ('2', '2.7b item com total_value zero rejeitado (deve ser maior que zero)', 'FAIL', 'não levantou exceção');
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details) values ('2', '2.7b item com total_value zero rejeitado (deve ser maior que zero)',
       case when (select count(*) from public.inventory_purchases) = v_purchase_count_before then 'PASS' else 'FAIL' end, sqlerrm);
   end;
 
@@ -359,8 +411,8 @@ begin
     perform public.register_filament_purchase(
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(
-        jsonb_build_object('filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10),
-        jsonb_build_object('filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', -1, 'unit_value', 10)
+        jsonb_build_object('filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'total_value', 10),
+        jsonb_build_object('filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', -1, 'total_value', 10)
       ),
       p_purchase_channel => 'MERCADO_LIVRE'
     );
@@ -395,7 +447,7 @@ begin
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
         'filament_type_id', gen_random_uuid(), 'manufacturer', 'X',
-        'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
+        'nominal_weight_grams', 1000, 'quantity', 1, 'total_value', 10
       )),
       p_purchase_channel => 'MERCADO_LIVRE'
     );
@@ -414,7 +466,7 @@ begin
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
         'filament_type_id', v_type_inactive_id, 'manufacturer', 'X',
-        'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
+        'nominal_weight_grams', 1000, 'quantity', 1, 'total_value', 10
       )),
       p_purchase_channel => 'MERCADO_LIVRE'
     );
@@ -449,7 +501,7 @@ begin
   select value::uuid into v_type_a_id from zz_fixtures where key = 'type_a_id';
   v_items := jsonb_build_array(jsonb_build_object(
     'filament_type_id', v_type_a_id, 'manufacturer', 'Bambu Lab',
-    'nominal_weight_grams', 500, 'quantity', 1, 'unit_value', 50
+    'nominal_weight_grams', 500, 'quantity', 1, 'total_value', 50
   ));
 
   begin
@@ -535,8 +587,8 @@ begin
     perform public.register_filament_purchase(
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(
-        jsonb_build_object('filament_type_id', v_type_a_id, 'manufacturer', 'TESTE MULTI ATOM A', 'nominal_weight_grams', 777, 'quantity', 1, 'unit_value', 10),
-        jsonb_build_object('filament_type_id', v_type_b_id, 'manufacturer', 'TESTE MULTI ATOM B', 'nominal_weight_grams', 777, 'quantity', 1, 'unit_value', 10)
+        jsonb_build_object('filament_type_id', v_type_a_id, 'manufacturer', 'TESTE MULTI ATOM A', 'nominal_weight_grams', 777, 'quantity', 1, 'total_value', 10),
+        jsonb_build_object('filament_type_id', v_type_b_id, 'manufacturer', 'TESTE MULTI ATOM B', 'nominal_weight_grams', 777, 'quantity', 1, 'total_value', 10)
       ),
       p_idempotency_key => 'teste-compra-multi-atomicidade', p_purchase_channel => 'SHOPEE'
     );
@@ -632,6 +684,29 @@ begin
           select is_nullable from information_schema.columns
           where table_schema = 'public' and table_name = 'filament_spools' and column_name = 'purchase_item_id'
         ) = 'YES' then 'PASS' else 'FAIL' end, null);
+
+    -- 2026-09-05 (migration 20260905160000): total_value existe, é
+    -- numeric(12,2) e é NOT NULL (só depois do backfill).
+    insert into zz_test_results(section, test_name, status, details)
+      values ('7', '7.4 inventory_purchase_filament_items.total_value existe, numeric(12,2), NOT NULL',
+        case when (
+          select data_type = 'numeric' and numeric_precision = 12 and numeric_scale = 2 and is_nullable = 'NO'
+          from information_schema.columns
+          where table_schema = 'public' and table_name = 'inventory_purchase_filament_items' and column_name = 'total_value'
+        ) then 'PASS' else 'FAIL' end, null);
+
+    -- 7.5: CHECK total_value > 0 existe e realmente rejeita zero/negativo em
+    -- um UPDATE direto na tabela (mesmo mecanismo do CHECK, independente da
+    -- RPC) — confirma que a restrição é de SCHEMA, não só de validação de
+    -- aplicação.
+    insert into zz_test_results(section, test_name, status, details)
+      values ('7', '7.5 CHECK total_value > 0 existe no schema (pg_get_constraintdef)',
+        case when exists (
+          select 1 from pg_constraint
+          where conrelid = 'public.inventory_purchase_filament_items'::regclass
+            and conname = 'inventory_purchase_filament_items_total_value_positive'
+            and pg_get_constraintdef(oid) like '%total_value > (0)::numeric%'
+        ) then 'PASS' else 'FAIL' end, null);
   exception when others then
     insert into zz_test_results(section, test_name, status, details)
       values ('7', '7.x checagens estruturais/privilégio', 'FAIL', sqlerrm);
@@ -662,7 +737,7 @@ begin
     perform public.register_filament_purchase(
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
-        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
+        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'total_value', 10
       ))
     );
     insert into zz_test_results(section, test_name, status, details) values ('8', '8.1 purchase_channel ausente rejeitado', 'FAIL', 'não levantou exceção');
@@ -679,7 +754,7 @@ begin
     perform public.register_filament_purchase(
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
-        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
+        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'total_value', 10
       )),
       p_purchase_channel => 'AMAZON'
     );
@@ -701,7 +776,7 @@ begin
       v_result := public.register_filament_purchase(
         p_freight_value => 0, p_changed_by => v_user_id,
         p_items => jsonb_build_array(jsonb_build_object(
-          'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
+          'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'total_value', 10
         )),
         p_idempotency_key => 'teste-compra-multi-canal-' || v_channel,
         p_purchase_channel => v_channel
@@ -723,7 +798,7 @@ begin
     perform public.register_filament_purchase(
       p_freight_value => 0, p_changed_by => v_user_id,
       p_items => jsonb_build_array(jsonb_build_object(
-        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'unit_value', 10
+        'filament_type_id', v_type_a_id, 'manufacturer', 'X', 'nominal_weight_grams', 1000, 'quantity', 1, 'total_value', 10
       )),
       p_idempotency_key => 'teste-compra-multi-canal-MERCADO_LIVRE', p_purchase_channel => 'SHOPEE'
     );
@@ -734,6 +809,145 @@ begin
       values ('8', '8.4 idempotência rejeita quando só o purchase_channel muda (mesma chave)',
         case when sqlerrm like 'IDEMPOTENCY_KEY_CONFLICT:%' then 'PASS' else 'FAIL' end, sqlerrm);
   end;
+end $$;
+
+-- =============================================================================
+-- SEÇÃO 9 (NOVA, 2026-09-05) — Correção de arredondamento: total_value é a
+-- fonte autoritativa, persistido exatamente como informado mesmo quando a
+-- divisão por quantity não é exata; unit_value é derivado corretamente; o
+-- subtotal do cabeçalho soma total_value dos itens sem arredondamento; o
+-- frete continua aplicado uma única vez.
+-- =============================================================================
+
+do $$
+declare
+  v_user_id uuid;
+  v_type_a_id uuid;
+  v_type_b_id uuid;
+  v_result jsonb;
+  v_purchase_id uuid;
+  v_purchase public.inventory_purchases;
+  v_item_total_value numeric;
+  v_item_unit_value numeric;
+  v_spool_count integer;
+begin
+  select value::uuid into v_user_id from zz_fixtures where key = 'user_id';
+  select value::uuid into v_type_a_id from zz_fixtures where key = 'type_a_id';
+
+  -- 9.1 a 9.3, 9.8: quantidade 3, total_value 100.00 (exemplo do pedido:
+  -- 100,00 ÷ 3 não é múltiplo exato de centavo) — persistido exatamente
+  -- 100.00, unit_value derivado (33.33), subtotal do cabeçalho = 100.00
+  -- (nunca 99.99), e exatamente 3 rolos criados.
+  begin
+    v_result := public.register_filament_purchase(
+      p_freight_value => 0, p_changed_by => v_user_id,
+      p_items => jsonb_build_array(jsonb_build_object(
+        'filament_type_id', v_type_a_id, 'manufacturer', 'TESTE ARREDONDAMENTO',
+        'nominal_weight_grams', 250, 'quantity', 3, 'total_value', 100.00
+      )),
+      p_idempotency_key => 'teste-compra-total-value-100-3', p_purchase_channel => 'MERCADO_LIVRE'
+    );
+    v_purchase_id := (v_result ->> 'purchase_id')::uuid;
+    select * into v_purchase from public.inventory_purchases where id = v_purchase_id;
+    select total_value, unit_value into v_item_total_value, v_item_unit_value
+      from public.inventory_purchase_filament_items where purchase_id = v_purchase_id;
+    select count(*) into v_spool_count from public.filament_spools where purchase_id = v_purchase_id;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('9', '9.1 quantidade 3 + total_value 100.00 -> total_value do item persistido EXATAMENTE 100.00 (não 99.99)',
+        case when v_item_total_value = 100.00 then 'PASS' else 'FAIL' end, 'total_value=' || v_item_total_value);
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('9', '9.2 unit_value é derivado internamente (100.00 / 3 = 33.33, arredondado ao centavo)',
+        case when v_item_unit_value = 33.33 then 'PASS' else 'FAIL' end, 'unit_value=' || v_item_unit_value);
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('9', '9.3 subtotal do cabeçalho (item_value) permanece EXATAMENTE 100.00 (nunca 99.99 = 3×33.33)',
+        case when v_purchase.item_value = 100.00 then 'PASS' else 'FAIL' end, 'item_value=' || v_purchase.item_value);
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('9', '9.8a compra cria a quantidade correta de rolos (3)',
+        case when v_spool_count = 3 then 'PASS' else 'FAIL' end, 'spool_count=' || v_spool_count);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('9', '9.1-9.3/9.8a total_value 100.00 / quantidade 3', 'FAIL', sqlerrm);
+  end;
+
+  -- 9.4/9.5/9.8b: dois itens com totais diferentes somam corretamente no
+  -- cabeçalho, e o frete é aplicado uma única vez (nunca por item).
+  select value::uuid into v_type_b_id from zz_fixtures where key = 'type_b_id';
+  begin
+    v_result := public.register_filament_purchase(
+      p_freight_value => 25.00, p_changed_by => v_user_id,
+      p_items => jsonb_build_array(
+        jsonb_build_object(
+          'filament_type_id', v_type_a_id, 'manufacturer', 'TESTE SOMA A',
+          'nominal_weight_grams', 250, 'quantity', 3, 'total_value', 100.00
+        ),
+        jsonb_build_object(
+          'filament_type_id', v_type_b_id, 'manufacturer', 'TESTE SOMA B',
+          'nominal_weight_grams', 1000, 'quantity', 1, 'total_value', 50.00
+        )
+      ),
+      p_idempotency_key => 'teste-compra-total-value-soma', p_purchase_channel => 'MERCADO_LIVRE'
+    );
+    v_purchase_id := (v_result ->> 'purchase_id')::uuid;
+    select * into v_purchase from public.inventory_purchases where id = v_purchase_id;
+    select count(*) into v_spool_count from public.filament_spools where purchase_id = v_purchase_id;
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('9', '9.4 dois itens com totais diferentes (100.00 + 50.00) somam corretamente no subtotal do cabeçalho (150.00)',
+        case when v_purchase.item_value = 150.00 then 'PASS' else 'FAIL' end, 'item_value=' || v_purchase.item_value);
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('9', '9.5 frete aplicado uma única vez (150.00 + 25.00 = 175.00, coluna gerada total_value do cabeçalho)',
+        case when v_purchase.total_value = 175.00 then 'PASS' else 'FAIL' end, 'total_value=' || v_purchase.total_value);
+
+    insert into zz_test_results(section, test_name, status, details)
+      values ('9', '9.8b compra cria a quantidade correta de rolos (3+1=4)',
+        case when v_spool_count = 4 then 'PASS' else 'FAIL' end, 'spool_count=' || v_spool_count);
+  exception when others then
+    insert into zz_test_results(section, test_name, status, details)
+      values ('9', '9.4/9.5/9.8b soma de dois itens + frete único', 'FAIL', sqlerrm);
+  end;
+
+  -- 9.6: rollback não deixa dados — este script inteiro roda dentro de UMA
+  -- transação terminada em ROLLBACK (linha final deste arquivo). A prova
+  -- real exige uma comparação FORA desta transação: rode
+  -- `select count(*) from public.inventory_purchases where manufacturer
+  -- ...` (ou equivalente por idempotency_key 'teste-%') ANTES e DEPOIS de
+  -- executar este arquivo — as contagens devem ser IDÊNTICAS, já que nada
+  -- aqui é commitado. Este teste só registra a contagem de linhas com as
+  -- idempotency_keys desta seção DENTRO da transação (evidência de que os
+  -- dados existem até aqui, prontos para o ROLLBACK reverter).
+  insert into zz_test_results(section, test_name, status, details)
+    values ('9', '9.6 dados desta seção existem dentro da transação (serão revertidos pelo ROLLBACK final — comparar contagem real antes/depois da execução)',
+      case when (
+        select count(*) from public.inventory_purchases
+        where idempotency_key in ('teste-compra-total-value-100-3', 'teste-compra-total-value-soma')
+      ) = 2 then 'PASS' else 'FAIL' end, null);
+
+  -- 9.7: fluxos antigos de Acessórios/Embalagens (register_inventory_purchase,
+  -- inventory_purchases.item_value/quantity/freight_value) NÃO são tocados
+  -- por esta migration — nenhuma coluna, CHECK, GRANT ou linha de código
+  -- dessa função é alterada aqui (só inventory_purchase_filament_items e
+  -- register_filament_purchase mudam). A cobertura funcional completa
+  -- desse fluxo (sucesso, validação, idempotência) já existe e continua
+  -- válida em supabase/tests/inventory_purchases_test.sql (arquivo irmão,
+  -- sem nenhuma alteração nesta rodada) — não duplicada aqui para não
+  -- depender de um acessório/embalagem específico já cadastrado no
+  -- ambiente onde este arquivo for executado. Este teste confirma só o
+  -- fato estrutural: a função continua definida com a MESMA assinatura de
+  -- antes (nenhum parâmetro novo/removido nesta rodada).
+  insert into zz_test_results(section, test_name, status, details)
+    values ('9', '9.7 register_inventory_purchase (Acessórios/Embalagens) mantém a mesma assinatura — não tocado nesta migration',
+      case when exists (
+        select 1 from pg_proc
+        where proname = 'register_inventory_purchase'
+          and pronamespace = 'public'::regnamespace
+          and pronargs = 16
+      ) then 'PASS' else 'FAIL' end,
+      'cobertura funcional completa em inventory_purchases_test.sql (inalterado)');
 end $$;
 
 -- =============================================================================

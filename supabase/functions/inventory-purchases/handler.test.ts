@@ -484,7 +484,7 @@ const VALID_ITEM = {
   manufacturer: "Bambu Lab",
   nominal_weight_grams: 1000,
   quantity: 2,
-  unit_value: 95,
+  total_value: 190,
 };
 
 Deno.test("validateFilamentPurchaseItem aceita um item mínimo válido e trima a marca", () => {
@@ -514,9 +514,18 @@ Deno.test("validateFilamentPurchaseItem rejeita quantidade zero/negativa/fracion
   assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, quantity: 1.5 }, 0));
 });
 
-Deno.test("validateFilamentPurchaseItem rejeita valor unitário negativo, aceita zero", () => {
-  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, unit_value: -1 }, 0));
-  assertEquals(validateFilamentPurchaseItem({ ...VALID_ITEM, unit_value: 0 }, 0).unit_value, 0);
+// 2026-09-05: total_value substitui unit_value neste contrato — deve ser
+// MAIOR QUE ZERO (diferente da regra antiga de unit_value, que aceitava
+// zero); register_filament_purchase deriva unit_value internamente.
+Deno.test("validateFilamentPurchaseItem rejeita total_value negativo ou zero", () => {
+  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, total_value: -1 }, 0));
+  assertThrows(() => validateFilamentPurchaseItem({ ...VALID_ITEM, total_value: 0 }, 0));
+});
+
+Deno.test("validateFilamentPurchaseItem aceita total_value que não divide exatamente pela quantidade (arredondamento fica por conta da RPC)", () => {
+  const result = validateFilamentPurchaseItem({ ...VALID_ITEM, quantity: 3, total_value: 100 }, 0);
+  assertEquals(result.total_value, 100);
+  assertEquals(result.quantity, 3);
 });
 
 Deno.test("validateFilamentPurchaseItem rejeita campo desconhecido dentro do item", () => {
@@ -550,7 +559,7 @@ Deno.test("validateRegisterFilamentPurchasePayload aceita vários itens (tipos/m
     manufacturer: "Voolt",
     nominal_weight_grams: 1000,
     quantity: 1,
-    unit_value: 110,
+    total_value: 110,
   };
   const result = validateRegisterFilamentPurchasePayload({
     freight_value: 30,
