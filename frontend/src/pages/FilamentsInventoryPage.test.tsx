@@ -10,20 +10,24 @@ const {
   useFilamentSpoolCountsMock,
   useFilamentMovementsMock,
   useAuthMock,
+  useAccessoriesMock,
+  usePackagingMock,
   toastMock,
-  registerFilamentPurchaseMock,
+  registerMixedInventoryPurchaseMock,
 } = vi.hoisted(() => ({
   useFilamentTypesMock: vi.fn(),
   useFilamentSpoolsMock: vi.fn(),
   useFilamentSpoolCountsMock: vi.fn(),
   useFilamentMovementsMock: vi.fn(),
   useAuthMock: vi.fn(),
+  useAccessoriesMock: vi.fn(),
+  usePackagingMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
-  // Só para o describe "atualização automática sem F5" no fim deste arquivo
-  // (2026-09-04) — registra uma compra de verdade pela janela real de
-  // Compras, renderizada de dentro de InventoryPageShell (nunca mockada),
-  // para provar a sincronização entre os dois diálogos.
-  registerFilamentPurchaseMock: vi.fn(),
+  // Só para o describe "atualização automática sem F5" — registra uma compra
+  // MISTA de verdade pela janela real de Compras (PurchaseDialog, via
+  // InventoryPageShell, NUNCA mockada) para provar a sincronização entre os
+  // dois diálogos de nível de página.
+  registerMixedInventoryPurchaseMock: vi.fn(),
 }))
 
 vi.mock('@/hooks/useFilamentTypes', () => ({ useFilamentTypes: useFilamentTypesMock }))
@@ -33,10 +37,13 @@ vi.mock('@/hooks/useFilamentSpoolCounts', () => ({
 }))
 vi.mock('@/hooks/useFilamentMovements', () => ({ useFilamentMovements: useFilamentMovementsMock }))
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
+// A janela "Compras" (compra mista) consome useAccessories/usePackaging no
+// topo — mockados com listas vazias aqui (esta suíte é de Filamentos).
+vi.mock('@/hooks/useAccessories', () => ({ useAccessories: useAccessoriesMock }))
+vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
 vi.mock('sonner', () => ({ toast: toastMock }))
 vi.mock('@/lib/api/inventoryPurchases', () => ({
-  registerFilamentPurchase: registerFilamentPurchaseMock,
-  registerInventoryPurchase: vi.fn(),
+  registerMixedInventoryPurchase: registerMixedInventoryPurchaseMock,
 }))
 
 import { FilamentsInventoryPage } from './FilamentsInventoryPage'
@@ -213,8 +220,25 @@ function mockSpoolCounts(
   })
 }
 
+function mockEmptyCatalogHook(list: unknown[]) {
+  return {
+    accessories: list,
+    packaging: list,
+    isLoading: false,
+    error: null,
+    refetch: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    setLocalStock: vi.fn(),
+    setLocalImage: vi.fn(),
+  }
+}
+
 function renderPage() {
   useAuthMock.mockReturnValue({ session: { user: { email: 'op@formasky.com' } }, signOut: vi.fn() })
+  useAccessoriesMock.mockReturnValue(mockEmptyCatalogHook([]))
+  usePackagingMock.mockReturnValue(mockEmptyCatalogHook([]))
   return render(<FilamentsInventoryPage />, { wrapper: MemoryRouter })
 }
 
@@ -3238,34 +3262,33 @@ describe('FilamentsInventoryPage — atualização automática sem F5', () => {
   beforeEach(() => {
     toastMock.success.mockReset()
     toastMock.error.mockReset()
-    registerFilamentPurchaseMock.mockReset()
+    registerMixedInventoryPurchaseMock.mockReset()
     mockMovements()
     mockSpoolCounts()
   })
 
-  // Preenche e envia uma compra de Filamento pela janela REAL de Compras,
-  // já aberta e com a categoria "Filamento" selecionada — mesmos passos que
-  // um usuário faria, usados só neste describe (o fluxo completo da janela
-  // já tem cobertura própria e exaustiva em PurchaseDialog.test.tsx).
+  // Preenche e envia uma compra MISTA (só com uma linha de Filamento) pela
+  // janela REAL de Compras — mesmos passos que um usuário faria. O fluxo
+  // completo da janela já tem cobertura própria em PurchaseDialog.test.tsx;
+  // aqui só provamos a sincronização com "Ver rolos".
   async function submitRealFilamentPurchase(
     user: ReturnType<typeof userEvent.setup>,
     typeOptionName: string,
   ) {
     await user.click(screen.getByRole('button', { name: 'Compras' }))
-    const purchaseDialog = screen.getByRole('dialog', { name: 'Registrar compra' })
-    await user.click(within(purchaseDialog).getByRole('radio', { name: 'Filamento' }))
+    const dialog = screen.getByRole('dialog', { name: 'Registrar compra' })
+    await user.click(within(dialog).getByRole('radio', { name: 'Mercado Livre' }))
 
-    const filamentDialog = screen.getByRole('dialog', { name: 'Compra de filamentos' })
-    await user.click(within(filamentDialog).getByRole('radio', { name: 'Mercado Livre' }))
-    const itemRow = within(filamentDialog).getByRole('group', { name: 'Item 1' })
-    await user.type(within(itemRow).getByRole('combobox', { name: 'Tipo — item 1' }), 'PLA')
+    const itemRow = within(dialog).getByRole('group', { name: 'Item 1' })
+    // a área é "filamentos" -> a 1a linha já nasce como Filamento
+    await user.type(within(itemRow).getByRole('combobox', { name: 'Tipo de filamento — item 1' }), 'PLA')
     await user.click(await within(itemRow).findByRole('option', { name: typeOptionName }))
     await user.click(within(itemRow).getByRole('radio', { name: '1.000 g' }))
-    await user.type(within(itemRow).getByLabelText('Quantidade'), '1')
-    await user.type(within(itemRow).getByLabelText('Marca'), 'Bambu Lab')
-    await user.type(within(itemRow).getByLabelText('Valor total'), '9500')
+    await user.type(within(itemRow).getByLabelText('Fabricante — item 1'), 'Bambu Lab')
+    await user.type(within(itemRow).getByLabelText('Quantidade — item 1'), '1')
+    await user.type(within(itemRow).getByLabelText('Valor total — item 1'), '9500')
 
-    await user.click(within(filamentDialog).getByRole('button', { name: /^registrar compra$/i }))
+    await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
   }
 
   it('5./6. registrar uma compra e reabrir "Ver rolos" mostra o número de rolos e a Marca atualizados — nunca exige F5', async () => {
@@ -3313,13 +3336,15 @@ describe('FilamentsInventoryPage — atualização automática sem F5', () => {
         delete: vi.fn(),
         setLocalSpoolState: vi.fn(),
       })
-    registerFilamentPurchaseMock.mockResolvedValue({
+    registerMixedInventoryPurchaseMock.mockResolvedValue({
       purchase_id: 'p1',
-      occurred_at: '2026-09-04',
-      notes: null,
+      category: 'MIXED',
+      occurred_at: '2026-09-04T15:00:00Z',
       purchase_channel: 'MERCADO_LIVRE',
-      freight_value: 0,
+      supplier_name: null,
+      quantity: 1,
       subtotal_value: 95,
+      freight_value: 0,
       total_value: 95,
       created_at: '2026-09-04T00:00:00Z',
       items: [],
@@ -3333,11 +3358,11 @@ describe('FilamentsInventoryPage — atualização automática sem F5', () => {
     expect(screen.queryByRole('dialog', { name: 'PLA - Sólido - Preto' })).not.toBeInTheDocument()
 
     await submitRealFilamentPurchase(user, 'PLA - Sólida - Preto')
-    await waitFor(() => expect(registerFilamentPurchaseMock).toHaveBeenCalledTimes(1))
-    // handleFilamentSubmit fecha "Compra de filamentos" (e "Registrar
-    // compra") sozinho ao suceder — confirma antes de reabrir "Ver rolos".
+    await waitFor(() => expect(registerMixedInventoryPurchaseMock).toHaveBeenCalledTimes(1))
+    // A janela "Registrar compra" fecha sozinha ao suceder — confirma antes
+    // de reabrir "Ver rolos".
     await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: 'Compra de filamentos' })).not.toBeInTheDocument(),
+      expect(screen.queryByRole('dialog', { name: 'Registrar compra' })).not.toBeInTheDocument(),
     )
 
     const reopenedDrawer = await openDrawer(user, getGroupRow('PLA', 'Sólido', 'Preto'))

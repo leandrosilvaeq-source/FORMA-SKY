@@ -1298,6 +1298,77 @@ migration `20260828120000`), `inventory_purchase_filament_items` (itens de compr
   `unit_cost`, `freight_allocated` nem saldos — o handler rejeita chave desconhecida. As rotas
   base (Embalagem/legado) e `/filament` permanecem **inalteradas**.
 
+### 15.3.1 Compra MISTA unificada — migration `20260906150000` (ainda NÃO aplicada)
+
+Configuração aprovada 2026-09-06: o botão **Compras** abre **uma janela** ("Registrar compra")
+que registra, no mesmo pedido, linhas de **Filamento + Acessório + Embalagem** misturadas em
+qualquer ordem, com **um cabeçalho**, **um frete** (rateado entre TODAS as linhas das três
+categorias) e **uma `idempotency_key`**. Migration **APPEND-ONLY** — as três RPCs antigas
+(`register_inventory_purchase`, `register_filament_purchase`, `register_accessory_purchase`) e as
+rotas `/`, `/filament`, `/accessory` ficam **intactas**; nenhum registro/valor legado é alterado.
+
+- **`inventory_purchases.category`** ganha o valor **`'MIXED'`** (CHECK estendido; coluna segue
+  `NOT NULL`). Cabeçalho MIXED: `item_id NULL`, `quantity`/`item_value` = totais agregados
+  (`item_value` = Σ exata dos `total_value` das linhas), `freight_value` = frete único,
+  `purchase_channel` **obrigatório**, `supplier_name` só quando o canal é `OUTRO_SITE`/`PRESENCIAL`
+  (complemento — nome do site / nome da loja), `notes` = `NULL`. Duas CHECKs novas
+  (`inventory_purchases_mixed_channel_required`, `inventory_purchases_mixed_supplier_rule`) —
+  ambas na forma `category <> 'MIXED' OR …`, triviais para todo cabeçalho legado.
+- **`inventory_purchases.purchase_channel`** ganha **`'OUTRO_SITE'`** (menor ajuste compatível;
+  `SITE`/`OUTRO` legados preservados). O fluxo MIXED usa
+  `MERCADO_LIVRE`/`SHOPEE`/`ALIEXPRESS`/`OUTRO_SITE`/`PRESENCIAL`.
+- Nova tabela **`inventory_purchase_packaging_items`** — espelho exato de
+  `inventory_purchase_accessory_items` (`packaging_id` FK `ON DELETE RESTRICT`, `line_number`
+  **global** > 0, `quantity` > 0, `total_value` **autoritativo** > 0, `freight_allocated` ≥ 0,
+  `landed_total_value` **gerada** = `total_value + freight_allocated`, `balance_before/after` com
+  CHECK de progressão, `unit_cost_before` nullable / `unit_cost_after` NOT NULL,
+  `UNIQUE(purchase_id, packaging_id)` e `UNIQUE(purchase_id, line_number)`, RLS `SELECT` só a
+  `authenticated` ativo, **nenhum** write de sessão). **É esta rodada que torna
+  `packaging.unit_cost` CALCULADO** por média ponderada móvel.
+- **`inventory_purchase_filament_items`** ganha `freight_allocated numeric(12,2) NOT NULL
+  DEFAULT 0` (legado fica 0 — semântica idêntica à de hoje), `landed_total_value` **gerada** e
+  `line_number integer` nullable (NULL para itens de `register_filament_purchase`; preenchido só
+  pela RPC mista) + índice único parcial `(purchase_id, line_number) WHERE line_number IS NOT
+  NULL`.
+- **`register_mixed_inventory_purchase(p_items jsonb, p_freight_value, p_purchase_channel,
+  p_occurred_on date, p_changed_by, p_supplier_name, p_idempotency_key)`** — RPC única,
+  `SECURITY DEFINER`, `search_path` fixo, `EXECUTE` só `service_role`. Numa **única transação**:
+  valida 1..50 itens discriminados por `category` (acessório/embalagem nunca repetidos; tipo de
+  filamento pode repetir com marca/peso diferentes); converte `p_occurred_on` (DATA de negócio,
+  sem hora/fuso) em `occurred_at` ancorando **meio-dia `America/Sao_Paulo`** (a data-calendário
+  nunca "anda" um dia); rateia o frete **uma vez** sobre todas as linhas
+  (`_mixed_allocate_freight_cents`, maior resto em centavos inteiros, Σ = `freight_value`,
+  desempate por posição global, frete 0 → tudo 0); trava `filament_types` → `accessories` →
+  `packaging` ascendente por `id` (`FOR UPDATE`; bloqueia inexistente/inativo com
+  `INVENTORY_PURCHASE_ITEM_INACTIVE:`); cria **um** cabeçalho MIXED; cria um item por linha na
+  tabela da sua categoria com `line_number` = **posição global**; cria N `filament_spools` +
+  `register_filament_movement` por rolo; chama `register_stock_movement` (`PURCHASE`,
+  `reference_type='PURCHASE'`, `reference_id` = cabeçalho) por acessório/embalagem; atualiza
+  `accessories.unit_cost` **e** `packaging.unit_cost` por média ponderada móvel (saldo 0 ou custo
+  `NULL` → a compra define o custo sem diluir). `total_value`/`freight_allocated`/
+  `landed_total_value` ficam **exatos** no ledger; `unit_cost` é derivado e arredondado a 2
+  casas. Atômica por construção. **Idempotente** por `p_idempotency_key`: canônico = `category` +
+  `freight` + `canal` + `complemento` + itens na **ordem global**; `p_occurred_on` fica **de
+  fora** da comparação — mesma convenção das três RPCs existentes (uma repetição legítima após o
+  relógio virar não vira conflito); qualquer outra diferença → `IDEMPOTENCY_KEY_CONFLICT:`.
+  Captura a corrida de `unique_violation` em `ux_inventory_purchases_idempotency_key`. Devolve o
+  `jsonb` de `_build_mixed_purchase_summary` (cabeçalho + `items[]` em ordem global; linhas de
+  Filamento trazem `spool_ids`).
+- Helpers internos (zero grants): `_mixed_allocate_freight_cents(numeric[], numeric)`,
+  `_mixed_purchase_items_canonical(uuid)`, `_build_mixed_purchase_summary(uuid)`. As três RPCs
+  antigas **não** são refatoradas para reusar esses helpers.
+- Edge Function `inventory-purchases`: rota nova **`POST /inventory-purchases/mixed`**
+  (`inventory-purchases` **não republicada** nesta rodada). Valida canal, complemento
+  condicional, data `YYYY-MM-DD` real, 1..50 itens discriminados, quantidade/dinheiro,
+  duplicidade de `accessory_id`/`packaging_id`; **nunca** aceita do cliente `unit_cost`,
+  `freight_allocated`, `landed_total_value`, `balance_*`, `unit_cost_*` nem `spool_ids`. As rotas
+  `/`, `/filament` e `/accessory` permanecem **inalteradas**.
+- **Compatibilidade**: nenhum cabeçalho legado é reclassificado; único "backfill" é
+  `freight_allocated DEFAULT 0` nos itens de filamento (semântica de no-op). Produtos, Ficha
+  Técnica, listagens, históricos e as referências dos movimentos (`reference_type='PURCHASE'` +
+  `reference_id` = id do cabeçalho MIXED) seguem legíveis sem mudança. **Não há tela geral de
+  histórico de compras nesta rodada.**
+
 ---
 
 # 16. Grupo: Inventário

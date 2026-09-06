@@ -192,3 +192,129 @@ export async function registerAccessoryPurchase(
 ): Promise<AccessoryPurchaseResult> {
   return callEdgeFunction<AccessoryPurchaseResult>('inventory-purchases', '/accessory', 'POST', input)
 }
+
+// ---------------------------------------------------------------------------
+// COMPRA MISTA (2026-09-06, migration 20260906150000). Uma única compra pode
+// conter, no mesmo pedido, linhas de Filamento + Acessório + Embalagem
+// misturadas em qualquer ordem, com UM cabeçalho (category='MIXED'), UM
+// frete (rateado no backend proporcionalmente ao total de CADA linha das
+// três categorias) e UMA idempotency_key. A janela "Registrar compra" usa
+// exclusivamente este caminho a partir desta rodada — os fluxos /,
+// /filament e /accessory continuam existindo para compatibilidade.
+//
+// O frontend NUNCA envia unit_cost, freight_allocated, landed_total_value,
+// saldos nem spool_ids — tudo é derivado no PostgreSQL, sob lock, numa
+// única transação. `occurred_on` é a DATA de negócio (YYYY-MM-DD, sem hora
+// nem fuso); a RPC ancora o meio-dia America/Sao_Paulo ao gravar
+// occurred_at, então a data-calendário nunca "anda" um dia.
+// ---------------------------------------------------------------------------
+
+// Canal do local da compra na janela mista. OUTRO_SITE / PRESENCIAL exigem
+// um complemento (nome do site / nome da loja) em `supplier_name`; os três
+// primeiros nunca carregam complemento.
+export type MixedPurchaseChannel =
+  | 'MERCADO_LIVRE'
+  | 'SHOPEE'
+  | 'ALIEXPRESS'
+  | 'OUTRO_SITE'
+  | 'PRESENCIAL'
+
+// Item de compra mista, DISCRIMINADO por `category`. `total_value` é sempre
+// o valor pago por TODOS os itens da linha, exatamente como digitado (2
+// casas) — nunca dividido pelo frontend.
+export interface MixedFilamentPurchaseItem {
+  category: 'FILAMENT'
+  filament_type_id: string
+  manufacturer: string
+  nominal_weight_grams: number
+  quantity: number
+  total_value: number
+}
+export interface MixedAccessoryPurchaseItem {
+  category: 'ACCESSORY'
+  accessory_id: string
+  quantity: number
+  total_value: number
+}
+export interface MixedPackagingPurchaseItem {
+  category: 'PACKAGING'
+  packaging_id: string
+  quantity: number
+  total_value: number
+}
+export type MixedPurchaseItemInput =
+  | MixedFilamentPurchaseItem
+  | MixedAccessoryPurchaseItem
+  | MixedPackagingPurchaseItem
+
+export interface RegisterMixedPurchaseInput {
+  // Ordem GLOBAL preservada — line_number no ledger segue esta ordem.
+  items: MixedPurchaseItemInput[]
+  freight_value?: number
+  purchase_channel: MixedPurchaseChannel
+  // Complemento do local: obrigatório e não vazio para OUTRO_SITE
+  // (nome do site) e PRESENCIAL (nome da loja); ignorado (envie null / omita)
+  // para os canais padronizados.
+  supplier_name?: string | null
+  // DATA de negócio no formato YYYY-MM-DD.
+  occurred_on: string
+  idempotency_key?: string
+}
+
+// Cada linha do resultado carrega a categoria + os campos derivados pelo
+// backend (autoritativos). Filamento não tem média ponderada por tipo —
+// não traz balance_*/unit_cost_*, e traz spool_ids.
+export interface MixedPurchaseResultFilamentItem {
+  category: 'FILAMENT'
+  line_number: number
+  filament_type_id: string
+  manufacturer: string
+  nominal_weight_grams: number
+  quantity: number
+  unit_value: number
+  total_value: number
+  freight_allocated: number
+  landed_total_value: number
+  spool_ids: string[]
+}
+export interface MixedPurchaseResultStockItem {
+  category: 'ACCESSORY' | 'PACKAGING'
+  line_number: number
+  accessory_id?: string
+  packaging_id?: string
+  quantity: number
+  total_value: number
+  freight_allocated: number
+  landed_total_value: number
+  balance_before: number
+  balance_after: number
+  unit_cost_before: number | null
+  unit_cost_after: number
+}
+export type MixedPurchaseResultItem = MixedPurchaseResultFilamentItem | MixedPurchaseResultStockItem
+
+export interface MixedPurchaseResult {
+  purchase_id: string
+  category: 'MIXED'
+  occurred_at: string
+  purchase_channel: MixedPurchaseChannel | null
+  supplier_name: string | null
+  quantity: number
+  subtotal_value: number
+  freight_value: number
+  total_value: number
+  created_at: string
+  items: MixedPurchaseResultItem[]
+}
+
+// POST /inventory-purchases/mixed -> register_mixed_inventory_purchase. Uma
+// única transação: cria o cabeçalho MIXED, cada item na tabela da sua
+// categoria (line_number = posição global), todos os rolos de filamento e
+// todos os movimentos PURCHASE, e atualiza accessories.unit_cost /
+// packaging.unit_cost por média ponderada móvel — falha em qualquer ponto
+// reverte TUDO.
+export async function registerMixedInventoryPurchase(
+  input: RegisterMixedPurchaseInput,
+): Promise<MixedPurchaseResult> {
+  return callEdgeFunction<MixedPurchaseResult>('inventory-purchases', '/mixed', 'POST', input)
+}

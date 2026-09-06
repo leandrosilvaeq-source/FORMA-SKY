@@ -49,6 +49,8 @@ import {
   rejectUnknownKeys,
   requireFilamentMaterial,
   requireGrossWeightsGrams,
+  requireIsoDate,
+  requireMixedPurchaseChannel,
   requirePositiveIntegerQuantity,
   requirePurchaseCategory,
   requirePurchaseChannel,
@@ -56,9 +58,11 @@ import {
   requireUuid,
   validateAccessoryPurchaseItem,
   validateFilamentPurchaseItem,
+  validateMixedPurchaseItem,
   validateRegisterAccessoryPurchasePayload,
   validateRegisterFilamentPurchasePayload,
   validateRegisterInventoryPurchasePayload,
+  validateRegisterMixedPurchasePayload,
 } from "./handler.ts";
 
 function assertEquals(actual: unknown, expected: unknown, msg?: string): void {
@@ -894,4 +898,234 @@ Deno.test("handleRequest preserva as rotas antigas: base (Embalagem/legado) e /f
   assertEquals(base.status, 401);
   const filament = await handleRequest(makeRequest("POST", "/filament", { items: [VALID_ITEM] }));
   assertEquals(filament.status, 401);
+});
+
+// ---------------------------------------------------------------------------
+// COMPRA MISTA — POST /inventory-purchases/mixed (register_mixed_inventory_purchase)
+// migration 20260906150000. Escritos, NAO executados — deno ausente nesta
+// maquina (mesma limitacao ja registrada no cabecalho deste arquivo).
+// ---------------------------------------------------------------------------
+
+const MIXED_FIL_ITEM = {
+  category: "FILAMENT",
+  filament_type_id: VALID_UUID,
+  manufacturer: "Voolt",
+  nominal_weight_grams: 1000,
+  quantity: 2,
+  total_value: 100.0,
+};
+const MIXED_ACC_ITEM = { category: "ACCESSORY", accessory_id: VALID_UUID, quantity: 3, total_value: 15.0 };
+const MIXED_PKG_ITEM = {
+  category: "PACKAGING",
+  packaging_id: "223e4567-e89b-42d3-a456-426614174000",
+  quantity: 4,
+  total_value: 20.0,
+};
+
+function mixedBody(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    items: [{ ...MIXED_FIL_ITEM }, { ...MIXED_ACC_ITEM }, { ...MIXED_PKG_ITEM }],
+    freight_value: 10,
+    purchase_channel: "MERCADO_LIVRE",
+    occurred_on: "2026-09-06",
+    ...over,
+  };
+}
+
+Deno.test("requireMixedPurchaseChannel aceita os 5 canais; rejeita SITE/OUTRO/valor fora", () => {
+  for (const c of ["MERCADO_LIVRE", "SHOPEE", "ALIEXPRESS", "OUTRO_SITE", "PRESENCIAL"]) {
+    assertEquals(requireMixedPurchaseChannel(c), c);
+  }
+  assertThrows(() => requireMixedPurchaseChannel("SITE"));
+  assertThrows(() => requireMixedPurchaseChannel("OUTRO"));
+  assertThrows(() => requireMixedPurchaseChannel("FACEBOOK"));
+});
+
+Deno.test("requireIsoDate aceita YYYY-MM-DD real; rejeita formato/data inexistente/tipo", () => {
+  assertEquals(requireIsoDate("2026-09-06", "occurred_on"), "2026-09-06");
+  assertThrows(() => requireIsoDate("06/09/2026", "occurred_on"));
+  assertThrows(() => requireIsoDate("2026-9-6", "occurred_on"));
+  assertThrows(() => requireIsoDate("2026-02-30", "occurred_on"));
+  assertThrows(() => requireIsoDate("", "occurred_on"));
+  assertThrows(() => requireIsoDate(20260906, "occurred_on"));
+});
+
+Deno.test("validateMixedPurchaseItem: FILAMENT valido trima a marca e devolve os campos", () => {
+  const it = validateMixedPurchaseItem({ ...MIXED_FIL_ITEM, manufacturer: "  Bambu Lab  " }, 0);
+  assertEquals(it.category, "FILAMENT");
+  assertEquals(it.manufacturer, "Bambu Lab");
+  assertEquals(it.nominal_weight_grams, 1000);
+  assertEquals(it.quantity, 2);
+  assertEquals(it.total_value, 100.0);
+});
+
+Deno.test("validateMixedPurchaseItem: ACCESSORY / PACKAGING validos", () => {
+  const a = validateMixedPurchaseItem({ ...MIXED_ACC_ITEM }, 0);
+  assertEquals(a.category, "ACCESSORY");
+  assertEquals(a.accessory_id, VALID_UUID);
+  const p = validateMixedPurchaseItem({ ...MIXED_PKG_ITEM }, 1);
+  assertEquals(p.category, "PACKAGING");
+  assertEquals(p.packaging_id, "223e4567-e89b-42d3-a456-426614174000");
+});
+
+Deno.test("validateMixedPurchaseItem rejeita category ausente/invalida (MIXED nao e categoria de item)", () => {
+  assertThrows(() => validateMixedPurchaseItem({ accessory_id: VALID_UUID, quantity: 1, total_value: 1 }, 0));
+  assertThrows(() => validateMixedPurchaseItem({ category: "MIXED", quantity: 1, total_value: 1 }, 0));
+});
+
+Deno.test("validateMixedPurchaseItem rejeita campo de OUTRA categoria dentro do item (schema discriminado)", () => {
+  assertThrows(() => validateMixedPurchaseItem({ ...MIXED_ACC_ITEM, filament_type_id: VALID_UUID }, 0));
+  assertThrows(() => validateMixedPurchaseItem({ ...MIXED_FIL_ITEM, accessory_id: VALID_UUID }, 0));
+});
+
+Deno.test("validateMixedPurchaseItem rejeita quantity 0/fracao e total_value 0/negativo/>2 casas", () => {
+  assertThrows(() => validateMixedPurchaseItem({ ...MIXED_ACC_ITEM, quantity: 0 }, 0));
+  assertThrows(() => validateMixedPurchaseItem({ ...MIXED_ACC_ITEM, quantity: 1.5 }, 0));
+  assertThrows(() => validateMixedPurchaseItem({ ...MIXED_ACC_ITEM, total_value: 0 }, 0));
+  assertThrows(() => validateMixedPurchaseItem({ ...MIXED_ACC_ITEM, total_value: -5 }, 0));
+  assertThrows(() => validateMixedPurchaseItem({ ...MIXED_ACC_ITEM, total_value: 10.999 }, 0));
+});
+
+Deno.test("validateMixedPurchaseItem NUNCA aceita campos calculados no item", () => {
+  const calc = [
+    "unit_cost",
+    "freight_allocated",
+    "landed_total_value",
+    "balance_before",
+    "balance_after",
+    "unit_cost_before",
+    "unit_cost_after",
+    "spool_ids",
+    "line_number",
+  ];
+  for (const k of calc) {
+    assertThrows(() => validateMixedPurchaseItem({ ...MIXED_ACC_ITEM, [k]: 1 }, 0));
+  }
+});
+
+Deno.test("validateRegisterMixedPurchasePayload aceita um payload misto valido (3 categorias) e preserva a ordem", () => {
+  const ok = validateRegisterMixedPurchasePayload(mixedBody());
+  const items = ok.p_items as Array<{ category: string }>;
+  assertEquals(items.length, 3);
+  assertEquals([items[0].category, items[1].category, items[2].category], ["FILAMENT", "ACCESSORY", "PACKAGING"]);
+  assertEquals(ok.p_freight_value, 10);
+  assertEquals(ok.p_purchase_channel, "MERCADO_LIVRE");
+  assertEquals(ok.p_occurred_on, "2026-09-06");
+  assertEquals(ok.p_supplier_name, null);
+});
+
+Deno.test("validateRegisterMixedPurchasePayload aceita cada categoria isoladamente", () => {
+  assertEquals(
+    (validateRegisterMixedPurchasePayload(mixedBody({ items: [{ ...MIXED_FIL_ITEM }] })).p_items as unknown[]).length,
+    1,
+  );
+  assertEquals(
+    (validateRegisterMixedPurchasePayload(mixedBody({ items: [{ ...MIXED_ACC_ITEM }] })).p_items as unknown[]).length,
+    1,
+  );
+  assertEquals(
+    (validateRegisterMixedPurchasePayload(mixedBody({ items: [{ ...MIXED_PKG_ITEM }] })).p_items as unknown[]).length,
+    1,
+  );
+});
+
+Deno.test("validateRegisterMixedPurchasePayload aplica freight_value=0 quando omitido; rejeita negativo/>2 casas", () => {
+  assertEquals(validateRegisterMixedPurchasePayload(mixedBody({ freight_value: undefined })).p_freight_value, 0);
+  assertThrows(() => validateRegisterMixedPurchasePayload(mixedBody({ freight_value: -1 })));
+  assertThrows(() => validateRegisterMixedPurchasePayload(mixedBody({ freight_value: 1.005 })));
+});
+
+Deno.test("validateRegisterMixedPurchasePayload: OUTRO_SITE exige nome do site; PRESENCIAL exige nome da loja", () => {
+  assertThrows(() => validateRegisterMixedPurchasePayload(mixedBody({ purchase_channel: "OUTRO_SITE" })));
+  assertThrows(() => validateRegisterMixedPurchasePayload(mixedBody({ purchase_channel: "PRESENCIAL" })));
+  assertEquals(
+    validateRegisterMixedPurchasePayload(mixedBody({ purchase_channel: "OUTRO_SITE", supplier_name: "loja.com" }))
+      .p_supplier_name,
+    "loja.com",
+  );
+  assertEquals(
+    validateRegisterMixedPurchasePayload(mixedBody({ purchase_channel: "PRESENCIAL", supplier_name: "  Loja do Ze  " }))
+      .p_supplier_name,
+    "Loja do Ze",
+  );
+});
+
+Deno.test("validateRegisterMixedPurchasePayload: canal padronizado IGNORA o complemento (supplier_name -> null)", () => {
+  assertEquals(
+    validateRegisterMixedPurchasePayload(mixedBody({ purchase_channel: "SHOPEE", supplier_name: "nao usar" }))
+      .p_supplier_name,
+    null,
+  );
+});
+
+Deno.test("validateRegisterMixedPurchasePayload exige occurred_on YYYY-MM-DD valido (nunca occurred_at)", () => {
+  assertThrows(() => validateRegisterMixedPurchasePayload(mixedBody({ occurred_on: "06/09/2026" })));
+  assertThrows(() => validateRegisterMixedPurchasePayload(mixedBody({ occurred_on: undefined })));
+  assertThrows(() => validateRegisterMixedPurchasePayload(mixedBody({ occurred_at: "2026-09-06T00:00:00Z" })));
+});
+
+Deno.test("validateRegisterMixedPurchasePayload rejeita items vazio / nao-array / > 50", () => {
+  assertThrows(() => validateRegisterMixedPurchasePayload(mixedBody({ items: [] })));
+  assertThrows(() => validateRegisterMixedPurchasePayload(mixedBody({ items: "x" })));
+  assertThrows(() =>
+    validateRegisterMixedPurchasePayload(mixedBody({ items: Array.from({ length: 51 }, () => ({ ...MIXED_ACC_ITEM })) }))
+  );
+});
+
+Deno.test("validateRegisterMixedPurchasePayload rejeita accessory_id / packaging_id duplicados; filament_type_id pode repetir", () => {
+  assertThrows(() =>
+    validateRegisterMixedPurchasePayload(mixedBody({ items: [{ ...MIXED_ACC_ITEM }, { ...MIXED_ACC_ITEM }] }))
+  );
+  assertThrows(() =>
+    validateRegisterMixedPurchasePayload(mixedBody({ items: [{ ...MIXED_PKG_ITEM }, { ...MIXED_PKG_ITEM }] }))
+  );
+  const ok = validateRegisterMixedPurchasePayload(
+    mixedBody({
+      items: [
+        { ...MIXED_FIL_ITEM, manufacturer: "Voolt", nominal_weight_grams: 1000 },
+        { ...MIXED_FIL_ITEM, manufacturer: "Bambu Lab", nominal_weight_grams: 500 },
+      ],
+    }),
+  );
+  assertEquals((ok.p_items as unknown[]).length, 2);
+});
+
+Deno.test("validateRegisterMixedPurchasePayload rejeita chave desconhecida no corpo (notes, category, freight_allocated)", () => {
+  assertThrows(() => validateRegisterMixedPurchasePayload(mixedBody({ notes: "x" })));
+  assertThrows(() => validateRegisterMixedPurchasePayload(mixedBody({ category: "MIXED" })));
+  assertThrows(() => validateRegisterMixedPurchasePayload(mixedBody({ freight_allocated: 1 })));
+});
+
+Deno.test("handleRequest responde preflight CORS (OPTIONS) em /inventory-purchases/mixed", async () => {
+  const res = await handleRequest(
+    new Request("https://x/inventory-purchases/mixed", {
+      method: "OPTIONS",
+      headers: { origin: "https://app", "access-control-request-method": "POST" },
+    }),
+  );
+  assertEquals(res.status === 204 || res.status === 200, true);
+});
+
+Deno.test("handleRequest rejeita POST em /inventory-purchases/mixed sem Authorization com 401 (sem tocar rede)", async () => {
+  const res = await handleRequest(makeRequest("POST", "/mixed", mixedBody()));
+  assertEquals(res.status, 401);
+});
+
+Deno.test("handleRequest devolve 405 para GET em /inventory-purchases/mixed (sem exigir autenticacao)", () =>
+  handleRequest(makeRequest("GET", "/mixed")).then((res) => assertEquals(res.status, 405)));
+
+Deno.test("handleRequest devolve 404 para sub-rota de /inventory-purchases/mixed", async () => {
+  const res = await handleRequest(makeRequest("GET", "/mixed/algum-id"));
+  assertEquals(res.status, 404);
+});
+
+Deno.test("handleRequest preserva /, /filament e /accessory apos adicionar /mixed", async () => {
+  assertEquals(
+    (await handleRequest(
+      makeRequest("POST", "", { category: "PACKAGING", quantity: 1, item_value: 1, item_id: VALID_UUID }),
+    )).status,
+    401,
+  );
+  assertEquals((await handleRequest(makeRequest("POST", "/filament", { items: [VALID_ITEM] }))).status, 401);
+  assertEquals((await handleRequest(makeRequest("POST", "/accessory", { items: [VALID_ACCESSORY_ITEM] }))).status, 401);
 });

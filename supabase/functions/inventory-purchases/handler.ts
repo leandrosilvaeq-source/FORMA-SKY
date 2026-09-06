@@ -129,6 +129,15 @@ export async function handleRequest(req: Request): Promise<Response> {
       );
     }
 
+    if (route.length === 1 && route[0] === "mixed") {
+      if (req.method === "POST") return await handleRegisterMixedInventoryPurchase(req);
+      throw new AppError(
+        "validation",
+        405,
+        `Método ${req.method} não permitido em /inventory-purchases/mixed.`,
+      );
+    }
+
     throw new NotFoundError("Rota não encontrada.");
   } catch (err) {
     return errorResponse(req, err);
@@ -623,6 +632,244 @@ async function handleRegisterAccessoryPurchase(req: Request): Promise<Response> 
 
   const admin = getAdminClient();
   const { data, error } = await admin.rpc("register_accessory_purchase", {
+    ...params,
+    p_changed_by: operator.userId,
+  });
+
+  if (error) throw mapPgError(error);
+
+  return jsonResponse(req, data, 201);
+}
+
+// ---------------------------------------------------------------------------
+// POST /inventory-purchases/mixed -> register_mixed_inventory_purchase
+//   (p_items, p_freight_value, p_purchase_channel, p_occurred_on, p_changed_by,
+//   p_supplier_name, p_idempotency_key) — COMPRA MISTA (2026-09-06, migration
+//   20260906150000). Uma unica compra com linhas de Filamento + Acessorio +
+//   Embalagem misturadas, um cabecalho MIXED, um frete rateado sobre TODAS as
+//   linhas, uma idempotency_key. Cada item e discriminado por `category`:
+//     FILAMENT  -> filament_type_id, manufacturer, nominal_weight_grams,
+//                  quantity, total_value
+//     ACCESSORY -> accessory_id, quantity, total_value
+//     PACKAGING -> packaging_id, quantity, total_value
+//   O frontend NUNCA envia unit_cost / freight_allocated / landed_total_value /
+//   balance_before/after / unit_cost_before/after / spool_ids — tudo e
+//   derivado no backend, sob lock, numa unica transacao. purchase_channel e
+//   obrigatorio (5 valores); supplier_name (o "complemento" do local) e
+//   obrigatorio e nao vazio SO para OUTRO_SITE e PRESENCIAL — canais
+//   padronizados (Mercado Livre / Shopee / AliExpress) nao carregam
+//   complemento. occurred_on e a DATA de negocio (YYYY-MM-DD, sem hora, sem
+//   fuso — a RPC converte para occurred_at ancorando meio-dia
+//   America/Sao_Paulo).
+// ---------------------------------------------------------------------------
+const MIXED_PURCHASE_CHANNELS = [
+  "MERCADO_LIVRE",
+  "SHOPEE",
+  "ALIEXPRESS",
+  "OUTRO_SITE",
+  "PRESENCIAL",
+] as const;
+type MixedPurchaseChannel = (typeof MIXED_PURCHASE_CHANNELS)[number];
+
+const MIXED_PURCHASE_KEYS = [
+  "items",
+  "freight_value",
+  "purchase_channel",
+  "supplier_name",
+  "occurred_on",
+  "idempotency_key",
+] as const;
+
+const MIXED_ITEM_KEYS_FILAMENT = [
+  "category",
+  "filament_type_id",
+  "manufacturer",
+  "nominal_weight_grams",
+  "quantity",
+  "total_value",
+] as const;
+const MIXED_ITEM_KEYS_ACCESSORY = ["category", "accessory_id", "quantity", "total_value"] as const;
+const MIXED_ITEM_KEYS_PACKAGING = ["category", "packaging_id", "quantity", "total_value"] as const;
+
+const MIXED_PURCHASE_MAX_ITEMS = 50;
+const MIXED_SUPPLIER_NAME_MAX = 200;
+
+export function requireMixedPurchaseChannel(value: unknown): MixedPurchaseChannel {
+  if (typeof value !== "string" || !(MIXED_PURCHASE_CHANNELS as readonly string[]).includes(value)) {
+    throw new ValidationError(
+      `Campo inválido: purchase_channel deve ser um de: ${MIXED_PURCHASE_CHANNELS.join(", ")}.`,
+    );
+  }
+  return value as MixedPurchaseChannel;
+}
+
+// YYYY-MM-DD estrita + data-calendário REAL (rejeita 2026-02-30 etc.).
+// Nunca faz Date.parse de string localizada — monta pelos componentes.
+export function requireIsoDate(value: unknown, field: string): string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new ValidationError(`Campo inválido: ${field} deve ser uma data no formato YYYY-MM-DD.`);
+  }
+  const [y, m, d] = value.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) {
+    throw new ValidationError(`Campo inválido: ${field} não é uma data válida.`);
+  }
+  return value;
+}
+
+export interface MixedPurchaseItemParams {
+  category: PurchaseCategory;
+  quantity: number;
+  total_value: number;
+  filament_type_id?: string;
+  manufacturer?: string;
+  nominal_weight_grams?: number;
+  accessory_id?: string;
+  packaging_id?: string;
+}
+
+export function validateMixedPurchaseItem(value: unknown, index: number): MixedPurchaseItemParams {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ValidationError(`Campo inválido: items[${index}] deve ser um objeto.`);
+  }
+  const item = value as Record<string, unknown>;
+  const category = requirePurchaseCategory(item.category);
+
+  const allowed =
+    category === "FILAMENT"
+      ? MIXED_ITEM_KEYS_FILAMENT
+      : category === "ACCESSORY"
+        ? MIXED_ITEM_KEYS_ACCESSORY
+        : MIXED_ITEM_KEYS_PACKAGING;
+  rejectUnknownKeys(item, allowed, `items[${index}]`);
+
+  const quantity = requirePositiveIntegerQuantity(item.quantity);
+  const totalValue = requireNumber(item.total_value, `items[${index}].total_value`);
+  if (totalValue <= 0) {
+    throw new ValidationError(`Campo inválido: items[${index}].total_value deve ser maior que zero.`);
+  }
+  if (Number(totalValue.toFixed(2)) !== totalValue) {
+    throw new ValidationError(
+      `Campo inválido: items[${index}].total_value deve ter no máximo 2 casas decimais.`,
+    );
+  }
+
+  if (category === "FILAMENT") {
+    return {
+      category,
+      quantity,
+      total_value: totalValue,
+      filament_type_id: requireUuid(item.filament_type_id, `items[${index}].filament_type_id`),
+      manufacturer: requireTrimmedString(item.manufacturer, `items[${index}].manufacturer`),
+      nominal_weight_grams: requireNumber(
+        item.nominal_weight_grams,
+        `items[${index}].nominal_weight_grams`,
+        { min: 0.01 },
+      ),
+    };
+  }
+  if (category === "ACCESSORY") {
+    return {
+      category,
+      quantity,
+      total_value: totalValue,
+      accessory_id: requireUuid(item.accessory_id, `items[${index}].accessory_id`),
+    };
+  }
+  return {
+    category,
+    quantity,
+    total_value: totalValue,
+    packaging_id: requireUuid(item.packaging_id, `items[${index}].packaging_id`),
+  };
+}
+
+export function validateRegisterMixedPurchasePayload(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  rejectUnknownKeys(body, MIXED_PURCHASE_KEYS, "corpo da requisição");
+
+  const freightValue = optionalNumber(body.freight_value, "freight_value", { min: 0 }) ?? 0;
+  if (Number(freightValue.toFixed(2)) !== freightValue) {
+    throw new ValidationError("Campo inválido: freight_value deve ter no máximo 2 casas decimais.");
+  }
+
+  const channel = requireMixedPurchaseChannel(body.purchase_channel);
+  const occurredOn = requireIsoDate(body.occurred_on, "occurred_on");
+  const idempotencyKey = optionalNonEmptyString(body.idempotency_key, "idempotency_key");
+
+  let supplierName = optionalNonEmptyString(body.supplier_name, "supplier_name");
+  if (supplierName !== null && supplierName.length > MIXED_SUPPLIER_NAME_MAX) {
+    throw new ValidationError(
+      `Campo inválido: supplier_name deve ter no máximo ${MIXED_SUPPLIER_NAME_MAX} caracteres.`,
+    );
+  }
+  if ((channel === "OUTRO_SITE" || channel === "PRESENCIAL") && supplierName === null) {
+    throw new ValidationError(
+      channel === "OUTRO_SITE"
+        ? "Campo obrigatório: informe o nome do site (supplier_name) para o canal Outro Site."
+        : "Campo obrigatório: informe o nome da loja (supplier_name) para o canal Presencial.",
+    );
+  }
+  if (channel !== "OUTRO_SITE" && channel !== "PRESENCIAL") {
+    // canal padronizado nunca carrega complemento (a RPC também ignora)
+    supplierName = null;
+  }
+
+  if (!Array.isArray(body.items) || body.items.length === 0) {
+    throw new ValidationError(
+      "Campo inválido: items deve ser uma lista com ao menos um item de compra.",
+    );
+  }
+  if (body.items.length > MIXED_PURCHASE_MAX_ITEMS) {
+    throw new ValidationError(
+      `Campo inválido: items deve ter no máximo ${MIXED_PURCHASE_MAX_ITEMS} itens.`,
+    );
+  }
+
+  const items = body.items.map((raw, index) => validateMixedPurchaseItem(raw, index));
+
+  const seenAccessory = new Set<string>();
+  const seenPackaging = new Set<string>();
+  for (const item of items) {
+    if (item.category === "ACCESSORY" && item.accessory_id) {
+      if (seenAccessory.has(item.accessory_id)) {
+        throw new ValidationError(
+          "Campo inválido: o mesmo acessório não pode aparecer em duas linhas da mesma compra.",
+        );
+      }
+      seenAccessory.add(item.accessory_id);
+    }
+    if (item.category === "PACKAGING" && item.packaging_id) {
+      if (seenPackaging.has(item.packaging_id)) {
+        throw new ValidationError(
+          "Campo inválido: a mesma embalagem não pode aparecer em duas linhas da mesma compra.",
+        );
+      }
+      seenPackaging.add(item.packaging_id);
+    }
+  }
+
+  return {
+    p_items: items,
+    p_freight_value: freightValue,
+    p_purchase_channel: channel,
+    p_occurred_on: occurredOn,
+    p_supplier_name: supplierName,
+    p_idempotency_key: idempotencyKey,
+  };
+}
+
+async function handleRegisterMixedInventoryPurchase(req: Request): Promise<Response> {
+  const operator = await resolveOperator(req);
+
+  const rawBody = await req.text();
+  rejectIdentityFields(rawBody);
+  const body = parseJsonBody(rawBody);
+  const params = validateRegisterMixedPurchasePayload(body);
+
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("register_mixed_inventory_purchase", {
     ...params,
     p_changed_by: operator.userId,
   });

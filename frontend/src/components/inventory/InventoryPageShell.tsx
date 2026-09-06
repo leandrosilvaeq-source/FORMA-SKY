@@ -73,7 +73,7 @@ export function InventoryPageShell({
     <AppLayout>
       <div className="flex items-center justify-between">
         <h1 className="font-heading text-2xl font-medium">Estoque</h1>
-        <PurchaseDialog onPurchaseCompleted={onPurchaseCompleted ?? (() => {})} />
+        <PurchaseDialog area={area} onPurchaseCompleted={onPurchaseCompleted ?? (() => {})} />
       </div>
       <p className="text-muted-foreground mt-1 text-sm">
         Consulte os cadastros mestre de acessórios, embalagens e filamentos usados na composição de produtos.

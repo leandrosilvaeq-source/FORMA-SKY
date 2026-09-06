@@ -270,6 +270,12 @@ describe('InventoryPage', () => {
   beforeEach(() => {
     toastMock.success.mockReset()
     toastMock.error.mockReset()
+    // A janela "Compras" (PurchaseDialog, compra mista 2026-09-06) é
+    // renderizada de dentro de InventoryPageShell e consome os três hooks de
+    // catálogo no topo — defaults seguros para os testes que não montam
+    // dados de propósito.
+    mockAccessories([])
+    mockPackaging([])
   })
 
   it('mostra o título "Estoque" e uma descrição curta', () => {
