@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
@@ -3454,6 +3454,23 @@ describe('InventoryPage — Acessórios: pop-up de foto ampliada (2026-09-06)', 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
+  it('Enter e Espaço com foco na miniatura abrem o pop-up modal (fallback de teclado)', async () => {
+    mockAccessories([withPhoto({ id: 'a1', name: 'Ímã 6x2' })])
+    renderPage('acessorios')
+
+    const zoom = await findZoomButton('Ímã 6x2')
+
+    zoom.focus()
+    await userEvent.keyboard('{Enter}')
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    zoom.focus()
+    await userEvent.keyboard(' ')
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+  })
+
   it('assina o ORIGINAL (image_path) somente após o clique — nunca com a listagem', async () => {
     mockAccessories([withPhoto({ id: 'a1', name: 'Ímã 6x2' })])
     renderPage('acessorios')
@@ -3581,5 +3598,242 @@ describe('InventoryPage — Acessórios: pop-up de foto ampliada (2026-09-06)', 
     expect(within(dialog).getByText('Caixa M')).toBeInTheDocument()
     // clicar na miniatura não abre a edição da embalagem
     expect(within(dialog).queryByText('Editar embalagem')).not.toBeInTheDocument()
+  })
+})
+
+// ===========================================================================
+// Pré-visualização ampliada por HOVER das miniaturas (2026-09-06) —
+// EntityImageHoverPreview, compartilhada por Acessórios e Embalagens (vive
+// dentro de InventoryRowThumbnail). Os detalhes finos de tempo/loading/erro
+// moram em EntityImageHoverPreview.test.tsx; aqui só a integração com a
+// página: as duas áreas usam o mesmo comportamento, o clique/teclado seguem
+// abrindo o pop-up MODAL, e o placeholder sem foto não abre nada.
+// ===========================================================================
+describe('InventoryPage — pré-visualização de foto por hover (2026-09-06)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+    signEntityImageUrlsMock.mockReset()
+    signEntityImageUrlsMock.mockImplementation((paths: string[]) =>
+      Promise.resolve({
+        urls: Object.fromEntries(paths.map((p) => [p, `https://signed/${p}`])),
+        expires_in: 3600,
+      }),
+    )
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const flush = () => act(async () => {})
+  const advance = (ms: number) => act(async () => void vi.advanceTimersByTime(ms))
+
+  async function renderWithThumbs(area: 'acessorios' | 'embalagens') {
+    renderPage(area)
+    // deixa a assinatura EM LOTE das miniaturas resolver (a miniatura só
+    // vira botão "Ampliar foto" depois que a URL do thumb chega)
+    await flush()
+    await flush()
+  }
+
+  function hoverCard() {
+    return screen.queryByTestId('entity-image-hover-preview')
+  }
+
+  it('Acessórios: 499 ms de hover não abre; 500 ms abre a prévia NÃO-MODAL e só então assina o ORIGINAL', async () => {
+    mockAccessories([
+      accessoryFixture({
+        id: 'a1',
+        name: 'Ímã 6x2',
+        image_path: 'accessories/a1/o.webp',
+        image_thumb_path: 'accessories/a1/t.webp',
+      }),
+    ])
+    await renderWithThumbs('acessorios')
+
+    const trigger = screen.getByRole('button', { name: 'Ampliar foto de Ímã 6x2' })
+    fireEvent.mouseEnter(trigger.parentElement as HTMLElement)
+
+    await advance(499)
+    expect(hoverCard()).not.toBeInTheDocument()
+    expect(signEntityImageUrlsMock).not.toHaveBeenCalledWith(['accessories/a1/o.webp'])
+
+    await advance(1)
+    await flush()
+    expect(hoverCard()).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument() // não-modal
+    expect(signEntityImageUrlsMock).toHaveBeenCalledWith(['accessories/a1/o.webp'])
+    const img = within(hoverCard() as HTMLElement).getByRole('img')
+    expect(img).toHaveAttribute('src', 'https://signed/accessories/a1/o.webp')
+    expect(img).toHaveAttribute('alt', 'Foto de Ímã 6x2')
+    expect(img.className).toContain('object-contain')
+    expect(img.className).toContain('max-w-[80vw]')
+    expect(img.className).toContain('max-h-[80vh]')
+  })
+
+  it('Embalagens: o hover de 500 ms abre a MESMA prévia (comportamento idêntico ao de Acessórios)', async () => {
+    mockPackaging([
+      packagingFixture({
+        id: 'k1',
+        name: 'Caixa M',
+        image_path: 'packaging/k1/o.webp',
+        image_thumb_path: 'packaging/k1/t.webp',
+      }),
+    ])
+    await renderWithThumbs('embalagens')
+
+    const trigger = screen.getByRole('button', { name: 'Ampliar foto de Caixa M' })
+    fireEvent.mouseEnter(trigger.parentElement as HTMLElement)
+    await advance(500)
+    await flush()
+
+    expect(hoverCard()).toBeInTheDocument()
+    expect(signEntityImageUrlsMock).toHaveBeenCalledWith(['packaging/k1/o.webp'])
+    expect(within(hoverCard() as HTMLElement).getByRole('img')).toHaveAttribute(
+      'src',
+      'https://signed/packaging/k1/o.webp',
+    )
+  })
+
+  it('sair da miniatura antes dos 500 ms cancela — nada abre, o ORIGINAL nunca é assinado', async () => {
+    mockAccessories([
+      accessoryFixture({
+        id: 'a1',
+        name: 'Ímã 6x2',
+        image_path: 'accessories/a1/o.webp',
+        image_thumb_path: 'accessories/a1/t.webp',
+      }),
+    ])
+    await renderWithThumbs('acessorios')
+
+    const anchor = screen.getByRole('button', { name: 'Ampliar foto de Ímã 6x2' }).parentElement as HTMLElement
+    fireEvent.mouseEnter(anchor)
+    await advance(300)
+    fireEvent.mouseLeave(anchor)
+    await advance(1000)
+    await flush()
+
+    expect(hoverCard()).not.toBeInTheDocument()
+    expect(signEntityImageUrlsMock).not.toHaveBeenCalledWith(['accessories/a1/o.webp'])
+  })
+
+  it('Escape fecha a prévia de hover', async () => {
+    mockAccessories([
+      accessoryFixture({
+        id: 'a1',
+        name: 'Ímã 6x2',
+        image_path: 'accessories/a1/o.webp',
+        image_thumb_path: 'accessories/a1/t.webp',
+      }),
+    ])
+    await renderWithThumbs('acessorios')
+
+    const anchor = screen.getByRole('button', { name: 'Ampliar foto de Ímã 6x2' }).parentElement as HTMLElement
+    fireEvent.mouseEnter(anchor)
+    await advance(500)
+    await flush()
+    expect(hoverCard()).toBeInTheDocument()
+
+    await act(async () => void fireEvent.keyDown(document, { key: 'Escape' }))
+    expect(hoverCard()).not.toBeInTheDocument()
+  })
+
+  it('miniatura placeholder (sem foto) não tem botão de ampliar nem abre prévia no hover', async () => {
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Sem foto' })])
+    await renderWithThumbs('acessorios')
+
+    const row = within(getTableBody()).getByText('Sem foto').closest('tr') as HTMLElement
+    expect(within(row).queryByRole('button', { name: /Ampliar foto/ })).not.toBeInTheDocument()
+
+    // passar o mouse na célula do nome (onde ficaria a miniatura) não abre nada
+    fireEvent.mouseEnter(within(row).getByText('Sem foto').parentElement as HTMLElement)
+    await advance(1000)
+    await flush()
+    expect(hoverCard()).not.toBeInTheDocument()
+  })
+
+  it('o clique continua abrindo o pop-up MODAL imediatamente, sem depender do hover', async () => {
+    mockAccessories([
+      accessoryFixture({
+        id: 'a1',
+        name: 'Ímã 6x2',
+        image_path: 'accessories/a1/o.webp',
+        image_thumb_path: 'accessories/a1/t.webp',
+      }),
+    ])
+    await renderWithThumbs('acessorios')
+
+    await act(async () => void fireEvent.click(screen.getByRole('button', { name: 'Ampliar foto de Ímã 6x2' })))
+    await flush()
+
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Ímã 6x2')).toBeInTheDocument()
+    // é o modal, não o cartão de hover
+    expect(hoverCard()).not.toBeInTheDocument()
+  })
+
+  it('só focar a miniatura (tabular até ela) não abre nem a prévia de hover nem o modal', async () => {
+    mockAccessories([
+      accessoryFixture({
+        id: 'a1',
+        name: 'Ímã 6x2',
+        image_path: 'accessories/a1/o.webp',
+        image_thumb_path: 'accessories/a1/t.webp',
+      }),
+    ])
+    await renderWithThumbs('acessorios')
+
+    await act(async () => screen.getByRole('button', { name: 'Ampliar foto de Ímã 6x2' }).focus())
+    await advance(1000)
+    await flush()
+    expect(hoverCard()).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('trocar a foto invalida a visualização anterior: o hover assina o NOVO original', async () => {
+    mockAccessories([
+      accessoryFixture({
+        id: 'a1',
+        name: 'Ímã 6x2',
+        image_path: 'accessories/a1/o.webp',
+        image_thumb_path: 'accessories/a1/t.webp',
+      }),
+    ])
+    const { rerender } = render(<InventoryPage area="acessorios" />, { wrapper: MemoryRouter })
+    await flush()
+    await flush()
+
+    const anchor1 = screen.getByRole('button', { name: 'Ampliar foto de Ímã 6x2' }).parentElement as HTMLElement
+    fireEvent.mouseEnter(anchor1)
+    await advance(500)
+    await flush()
+    expect(signEntityImageUrlsMock).toHaveBeenCalledWith(['accessories/a1/o.webp'])
+    fireEvent.mouseLeave(anchor1)
+    await advance(300)
+
+    // a foto do acessório muda (nova versão) — key={image_path} remonta a prévia
+    mockAccessories([
+      accessoryFixture({
+        id: 'a1',
+        name: 'Ímã 6x2',
+        image_path: 'accessories/a1/o-v2.webp',
+        image_thumb_path: 'accessories/a1/t-v2.webp',
+      }),
+    ])
+    rerender(<InventoryPage area="acessorios" />)
+    await flush()
+    await flush()
+
+    const anchor2 = screen.getByRole('button', { name: 'Ampliar foto de Ímã 6x2' }).parentElement as HTMLElement
+    fireEvent.mouseEnter(anchor2)
+    await advance(500)
+    await flush()
+
+    expect(signEntityImageUrlsMock).toHaveBeenCalledWith(['accessories/a1/o-v2.webp'])
+    expect(within(hoverCard() as HTMLElement).getByRole('img')).toHaveAttribute(
+      'src',
+      'https://signed/accessories/a1/o-v2.webp',
+    )
   })
 })

@@ -14,6 +14,7 @@ import { StockItemAdjustDialog } from '@/components/inventory/StockItemAdjustDia
 import { StockItemHistoryDialog } from '@/components/inventory/StockItemHistoryDialog'
 import { EntityImageUploadField } from '@/components/inventory/EntityImageUploadField'
 import { EntityImagePreviewDialog } from '@/components/inventory/EntityImagePreviewDialog'
+import { EntityImageHoverPreview } from '@/components/inventory/EntityImageHoverPreview'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
@@ -127,18 +128,25 @@ function formatMinimumStock(value: number | null): string {
 // abre o pop-up de foto ampliada (EntityImagePreviewDialog). O placeholder
 // (sem foto) e os estados de carregamento/erro NUNCA são clicáveis. O clique
 // para a propagação para não disparar nenhuma ação da linha.
+//
+// Quando, além disso, `fullImagePath` (o image_path do ORIGINAL) é
+// fornecido, a miniatura é envolvida por EntityImageHoverPreview: manter o
+// ponteiro sobre ela por 500 ms abre a prévia ampliada NÃO-MODAL (o clique/
+// Enter/Espaço continuam abrindo o mesmo pop-up modal de antes).
 function InventoryRowThumbnail({
   name,
   thumbPath,
   url,
   loading,
   onZoom,
+  fullImagePath,
 }: {
   name: string
   thumbPath: string | null | undefined
   url: string | null | undefined
   loading: boolean
   onZoom?: () => void
+  fullImagePath?: string | null
 }) {
   if (!thumbPath) {
     return (
@@ -173,7 +181,7 @@ function InventoryRowThumbnail({
       />
     )
   }
-  return (
+  const trigger = (
     <button
       type="button"
       onClick={(event) => {
@@ -192,6 +200,16 @@ function InventoryRowThumbnail({
         <ZoomInIcon className="size-2.5" />
       </span>
     </button>
+  )
+
+  // Prévia ampliada por hover (500 ms) — não-modal, compartilhada com
+  // Embalagens. O clique/Enter/Espaço seguem abrindo o pop-up modal (onZoom).
+  return fullImagePath ? (
+    <EntityImageHoverPreview key={fullImagePath} imagePath={fullImagePath} name={name}>
+      {trigger}
+    </EntityImageHoverPreview>
+  ) : (
+    trigger
   )
 }
 
@@ -517,6 +535,7 @@ function InventoryAreaPanel({
                             url={item.image_thumb_path ? thumbnailUrls?.[item.image_thumb_path] : null}
                             loading={thumbnailsLoading}
                             onZoom={item.image_path ? () => onPreviewImage(item) : undefined}
+                            fullImagePath={item.image_path ?? null}
                           />
                           <span className="truncate">{item.name}</span>
                         </div>
