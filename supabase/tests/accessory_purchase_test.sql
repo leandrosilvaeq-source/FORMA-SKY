@@ -329,15 +329,28 @@ exception when others then
 end $$;
 
 -- =============================================================================
--- SEÇÃO 6 — 3 unidades por R$ 10,00, frete zero: total EXATO 10,00, custo 3,33.
+-- SEÇÃO 6 — Total EXATO por item mesmo quando o custo derivado dá dízima.
+--
+-- 6.1 usa um acessório FRESCO com estado semeado explicitamente (saldo 15,
+-- unit_cost 1,47) — NUNCA um fixture reaproveitado por outras seções, para a
+-- expectativa ser determinística e legível. (Versão anterior reusava acc_c,
+-- que já passava pelas Seções 3 e 5.1: por 6.1 acc_c estava em saldo 16 /
+-- custo 2,02, não 15 / 1,47 — a asserção 6.1 falhou por essa premissa errada
+-- de estado acumulado, nunca por bug da implementação.)
 -- =============================================================================
 do $$
 declare
   v_user uuid; v_acc uuid; v_res jsonb; v_item jsonb; v_cost numeric;
 begin
   select value::uuid into v_user from zz_fixtures where key = 'user_id';
-  select value::uuid into v_acc  from zz_fixtures where key = 'acc_c';
+  v_acc := (public.create_accessory('TESTE COMPRAS ACESSÓRIO E', null, null, null, true, v_user)).id;
+  perform public.register_stock_movement('ACCESSORY', v_acc, 'INITIAL_BALANCE', 15::numeric, v_user);
+  update public.accessories set unit_cost = 1.47 where id = v_acc;
 
+  -- 3 un por R$ 10,00, frete 0, sobre saldo 15 × 1,47 ->
+  -- (15*1,47 + 10,00) / (15+3) = 32,05 / 18 = 1,780555… -> round(,2) = 1,78.
+  -- O ledger mantém total_value/item_value EXATOS em 10,00 (nunca 9,99/10,02);
+  -- só o unit_cost derivado é arredondado.
   v_res := public.register_accessory_purchase(
     p_items => jsonb_build_array(jsonb_build_object('accessory_id', v_acc::text, 'quantity', 3, 'total_value', 10.00)),
     p_freight_value => 0,
@@ -345,20 +358,20 @@ begin
     p_changed_by => v_user, p_idempotency_key => null
   );
   v_item := v_res -> 'items' -> 0;
-  -- acc_c já veio da Seção 3 com saldo 15 e unit_cost 1,47 ->
-  -- (15*1,47 + 10,00) / (15+3) = 32,05/18 = 1,7805… -> 1,78
   select unit_cost into v_cost from public.accessories where id = v_acc;
 
   insert into zz_test_results(section, test_name, status, details)
   values ('6',
-    '6.1 total_value do item preservado EXATO em 10,00 (nunca 9,99/10,02); custo derivado arredondado = 1,78',
+    '6.1 total_value do item preservado EXATO em 10,00 (nunca 9,99/10,02); média ponderada sobre saldo 15×1,47 -> unit_cost 1,78',
     case when (v_item ->> 'total_value')::numeric = 10.00
           and (v_res ->> 'item_value')::numeric = 10.00
           and (v_res ->> 'total_value')::numeric = 10.00
           and v_cost = 1.78
           and (v_item ->> 'unit_cost_before')::numeric = 1.47
+          and (v_item ->> 'unit_cost_after')::numeric = 1.78
          then 'PASS' else 'FAIL' end,
-    format('item.total_value=%s header.item_value=%s cost=%s', v_item ->> 'total_value', v_res ->> 'item_value', v_cost));
+    format('item.total_value=%s header.item_value=%s cost_before=%s cost_after=%s',
+      v_item ->> 'total_value', v_res ->> 'item_value', v_item ->> 'unit_cost_before', v_cost));
 exception when others then
   insert into zz_test_results(section, test_name, status, details) values ('6', '6.1 total exato', 'FAIL', sqlerrm);
 end $$;
