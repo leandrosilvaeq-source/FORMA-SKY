@@ -5,16 +5,32 @@ import { MemoryRouter } from 'react-router-dom'
 import { ApiError } from '@/lib/api/errors'
 import type { Accessory, Packaging } from '@/types/domain'
 
-const { useAccessoriesMock, usePackagingMock, useStockMovementsMock, useAuthMock, toastMock } = vi.hoisted(() => ({
+const {
+  useAccessoriesMock,
+  usePackagingMock,
+  useStockMovementsMock,
+  useAuthMock,
+  toastMock,
+  getAccessoryCurrentStockMock,
+} = vi.hoisted(() => ({
   useAccessoriesMock: vi.fn(),
   usePackagingMock: vi.fn(),
   useStockMovementsMock: vi.fn(),
   useAuthMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
+  getAccessoryCurrentStockMock: vi.fn(),
 }))
 
 vi.mock('@/hooks/useAccessories', () => ({ useAccessories: useAccessoriesMock }))
 vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
+// Só getAccessoryCurrentStock é mockado — a releitura pré-envio do ajuste
+// por quantidade absoluta (AccessoryStockAdjustDialog). O resto do módulo
+// não é usado por InventoryPage (o hook useAccessories, totalmente mockado,
+// cobre create/update/delete).
+vi.mock('@/lib/api/accessories', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/accessories')>()
+  return { ...actual, getAccessoryCurrentStock: getAccessoryCurrentStockMock }
+})
 // StockMovementPanel (Módulo 3, Incremento 2) usa useStockMovements
 // internamente — mockado aqui para que abrir "Movimentar estoque" nesta
 // suíte nunca dependa de rede real. Default: histórico vazio, sem
@@ -145,6 +161,18 @@ async function applySort(
   await user.click(await screen.findByRole('menuitem', { name: option }))
 }
 
+// Acessórios (2026-09-06): "Editar" / "Ativar-Desativar" / "Excluir" vivem
+// dentro do menu de três pontos de cada linha. Abre pelo nome acessível do
+// gatilho e clica o item pedido.
+async function clickAccessoryRowAction(
+  user: ReturnType<typeof userEvent.setup>,
+  accessoryName: string,
+  action: 'Editar' | 'Ativar' | 'Desativar' | 'Excluir',
+): Promise<void> {
+  await user.click(screen.getByRole('button', { name: `Mais ações — acessório ${accessoryName}` }))
+  await user.click(await screen.findByRole('menuitem', { name: action }))
+}
+
 function getVisibleNamesInOrder(): string[] {
   const dataRows = within(getTable())
     .getAllByRole('row')
@@ -232,16 +260,36 @@ describe('InventoryPage', () => {
     expect(screen.queryByText('Nenhum acessório cadastrado.')).not.toBeInTheDocument()
   })
 
-  it('renderiza as 6 colunas esperadas — com "Acessório" e "Custo/un." nos cabeçalhos renomeados', () => {
+  it('Acessórios: colunas na ordem Acessório · Tamanho · Variante · Estoque mínimo · Disponível · Custo unitário · Ações (sem "Ativo")', () => {
     mockAccessories([accessoryFixture()])
     renderPage('acessorios')
 
-    for (const label of ['Acessório', 'Tamanho', 'Variante', 'Custo/un.', 'Estoque mínimo', 'Ativo']) {
+    const headerRow = within(getTable()).getAllByRole('row')[0]
+    const headerLabels = within(headerRow)
+      .getAllByRole('columnheader')
+      .map((th) => (th.textContent ?? '').replace(/Redimensionar coluna.*/i, '').trim())
+    expect(headerLabels).toEqual([
+      'Acessório',
+      'Tamanho',
+      'Variante',
+      'Estoque mínimo',
+      'Disponível',
+      'Custo unitário',
+      '', // "Ações" — o <th> não tem texto visível próprio (só a alça)
+    ])
+    expect(screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })).toBeInTheDocument()
+
+    // as 6 colunas de dados são ordenáveis pelos rótulos novos
+    for (const label of ['Acessório', 'Tamanho', 'Variante', 'Estoque mínimo', 'Disponível', 'Custo unitário']) {
       expect(screen.getByRole('button', { name: `Ordenar coluna ${label}` })).toBeInTheDocument()
     }
-    // os rótulos antigos não aparecem mais como nome de coluna
+    // os rótulos antigos não aparecem mais como coluna
     expect(screen.queryByRole('button', { name: 'Ordenar coluna Nome' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Ordenar coluna Custo' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ordenar coluna Custo/un.' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ordenar coluna Saldo atual' })).not.toBeInTheDocument()
+    // a coluna "Ativo" foi ocultada só em Acessórios
+    expect(screen.queryByRole('button', { name: 'Ordenar coluna Ativo' })).not.toBeInTheDocument()
   })
 
   it('size nulo é exibido como "Não se aplica"', () => {
@@ -273,25 +321,31 @@ describe('InventoryPage', () => {
     expect(within(getTable()).getByText(formatBRL(12.5))).toBeInTheDocument()
   })
 
-  it('Ativo é um Switch funcional (não mais um badge de texto), sem botões de ativar/desativar', () => {
-    mockAccessories([accessoryFixture({ is_active: true }), accessoryFixture({ id: 'a2', name: 'Parafuso', is_active: false })])
+  it('Acessórios: a linha não tem Switch nem coluna "Ativo" — Ativar/Desativar está no menu de três pontos', async () => {
+    const user = userEvent.setup()
+    mockAccessories([
+      accessoryFixture({ is_active: true }),
+      accessoryFixture({ id: 'a2', name: 'Parafuso', is_active: false }),
+    ])
     renderPage('acessorios')
 
-    expect(within(getTableBody()).getByRole('switch', { name: 'Desativar acessório Ímã 6x2' })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    )
-    expect(within(getTableBody()).getByRole('switch', { name: 'Ativar acessório Parafuso' })).toHaveAttribute(
-      'aria-checked',
-      'false',
-    )
+    expect(within(getTableBody()).queryByRole('switch')).not.toBeInTheDocument()
     expect(within(getTableBody()).queryByText('Ativo')).not.toBeInTheDocument()
     expect(within(getTableBody()).queryByText('Inativo')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^ativar/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /desativar/i })).not.toBeInTheDocument()
-    // "Excluir" existe como ação por linha (coberto em detalhe na suíte de
-    // exclusão abaixo) — aqui só confirmamos que está presente.
-    expect(within(getTableBody()).getByRole('button', { name: 'Excluir acessório Ímã 6x2' })).toBeInTheDocument()
+    // nenhum botão de texto "Movimentar estoque"/"Gerenciar"
+    expect(screen.queryByRole('button', { name: /Movimentar estoque/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Gerenciar/i })).not.toBeInTheDocument()
+
+    // acessório ATIVO -> menu oferece "Desativar"
+    await user.click(screen.getByRole('button', { name: 'Mais ações — acessório Ímã 6x2' }))
+    expect(await screen.findByRole('menuitem', { name: 'Editar' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Desativar' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Excluir' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+
+    // acessório INATIVO -> menu oferece "Ativar"
+    await user.click(screen.getByRole('button', { name: 'Mais ações — acessório Parafuso' }))
+    expect(await screen.findByRole('menuitem', { name: 'Ativar' })).toBeInTheDocument()
   })
 
   it('busca por nome filtra a listagem, ignorando maiúsculas/minúsculas e espaços de borda', async () => {
@@ -366,15 +420,10 @@ describe('InventoryPage', () => {
     // a listagem se comporta como o antigo estado "Todos": mostra os dois
     expect(within(getTable()).getByText('Ímã ativo')).toBeInTheDocument()
     expect(within(getTable()).getByText('Ímã inativo')).toBeInTheDocument()
-    // a coluna que identifica a situação de cada registro (Switch "Ativo")
-    // continua presente
-    expect(screen.getByRole('button', { name: 'Ordenar coluna Ativo' })).toBeInTheDocument()
-    expect(
-      within(getTableBody()).getByRole('switch', { name: 'Desativar acessório Ímã ativo' }),
-    ).toBeInTheDocument()
-    expect(
-      within(getTableBody()).getByRole('switch', { name: 'Ativar acessório Ímã inativo' }),
-    ).toBeInTheDocument()
+    // a situação de cada registro continua acessível pelo menu de três
+    // pontos (Ativar/Desativar) — o Switch/coluna "Ativo" foi ocultado
+    expect(screen.getByRole('button', { name: 'Mais ações — acessório Ímã ativo' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Mais ações — acessório Ímã inativo' })).toBeInTheDocument()
   })
 
   it('a busca de Acessórios continua funcionando por si só (não há filtro de status para combinar)', async () => {
@@ -426,7 +475,7 @@ describe('InventoryPage', () => {
     expect(screen.getByText('1 resultado')).toBeInTheDocument()
   })
 
-  it('ordenação pelo cabeçalho renomeado "Custo/un." trata valores nulos de forma determinística (sempre ao final)', async () => {
+  it('ordenação pelo cabeçalho renomeado "Custo unitário" trata valores nulos de forma determinística (sempre ao final)', async () => {
     const user = userEvent.setup()
     mockAccessories([
       accessoryFixture({ id: 'a1', name: 'Sem custo', unit_cost: null }),
@@ -435,10 +484,10 @@ describe('InventoryPage', () => {
     ])
     renderPage('acessorios')
 
-    await applySort(user, 'Custo/un.', 'Ordenar crescente')
+    await applySort(user, 'Custo unitário', 'Ordenar crescente')
     expect(getVisibleNamesInOrder()).toEqual(['Custo baixo', 'Custo alto', 'Sem custo'])
 
-    await applySort(user, 'Custo/un.', 'Ordenar decrescente')
+    await applySort(user, 'Custo unitário', 'Ordenar decrescente')
     expect(getVisibleNamesInOrder()).toEqual(['Custo alto', 'Custo baixo', 'Sem custo'])
   })
 
@@ -877,7 +926,7 @@ describe('InventoryPage — edição de itens existentes', () => {
     renderPage('acessorios')
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
 
     expect(screen.getByRole('dialog', { name: 'Editar acessório' })).toBeInTheDocument()
     expect(screen.getByLabelText('Nome')).toHaveValue('Ímã 6x2')
@@ -892,7 +941,7 @@ describe('InventoryPage — edição de itens existentes', () => {
     mockAccessories([accessoryFixture()], { update })
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
     await user.clear(screen.getByLabelText('Nome'))
     await user.type(screen.getByLabelText('Nome'), 'Não deve ser salvo')
     await user.click(screen.getByRole('button', { name: 'Cancelar' }))
@@ -909,12 +958,11 @@ describe('InventoryPage — edição de itens existentes', () => {
     ])
     renderPage('acessorios')
 
-    const rows = within(getTableBody()).getAllByRole('row')
-    await user.click(within(rows[0]).getByRole('button', { name: 'Editar' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
     expect(screen.getByLabelText('Nome')).toHaveValue('Ímã 6x2')
     await user.click(screen.getByRole('button', { name: 'Cancelar' }))
 
-    await user.click(within(rows[1]).getByRole('button', { name: 'Editar' }))
+    await clickAccessoryRowAction(user, 'Parafuso', 'Editar')
     expect(screen.getByLabelText('Nome')).toHaveValue('Parafuso')
     expect(screen.getByLabelText('Variante')).toHaveValue('prata')
     expect(screen.getByLabelText('Estoque mínimo')).toHaveValue('3')
@@ -926,7 +974,7 @@ describe('InventoryPage — edição de itens existentes', () => {
     mockAccessories([accessoryFixture()], { update })
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
     await user.clear(screen.getByLabelText('Nome'))
     await user.type(screen.getByLabelText('Nome'), '  Ímã atualizado  ')
     await user.clear(screen.getByLabelText('Variante'))
@@ -952,7 +1000,7 @@ describe('InventoryPage — edição de itens existentes', () => {
     mockAccessories([accessoryFixture({ size: 'M' })], { update })
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
     await user.click(screen.getByRole('radio', { name: 'Não se aplica' }))
     await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
 
@@ -965,7 +1013,7 @@ describe('InventoryPage — edição de itens existentes', () => {
     mockAccessories([accessoryFixture({ size: 'M3' })], { update })
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
     expect(screen.getByRole('radio', { name: 'M3' })).toHaveAttribute('aria-checked', 'true')
     await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
 
@@ -978,7 +1026,7 @@ describe('InventoryPage — edição de itens existentes', () => {
     mockAccessories([accessoryFixture({ size: 'M3' })], { update })
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
     await user.click(screen.getByRole('radio', { name: 'GG' }))
     await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
 
@@ -991,7 +1039,7 @@ describe('InventoryPage — edição de itens existentes', () => {
     mockAccessories([accessoryFixture()], { update })
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
     await user.clear(screen.getByLabelText('Nome'))
     await user.type(screen.getByLabelText('Nome'), 'Ímã atualizado')
     await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
@@ -1006,7 +1054,7 @@ describe('InventoryPage — edição de itens existentes', () => {
     mockAccessories([accessoryFixture()], { update })
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
     await user.clear(screen.getByLabelText('Nome'))
     await user.type(screen.getByLabelText('Nome'), 'Nome inválido')
     await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
@@ -1023,7 +1071,7 @@ describe('InventoryPage — edição de itens existentes', () => {
     mockAccessories([accessoryFixture()], { update })
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
     await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
 
     await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Sessão expirada. Faça login novamente.'))
@@ -1042,7 +1090,7 @@ describe('InventoryPage — edição de itens existentes', () => {
     mockAccessories([accessoryFixture()], { update })
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
     await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
 
     const savingButton = await screen.findByRole('button', { name: 'Salvando...' })
@@ -1068,7 +1116,7 @@ describe('InventoryPage — edição de itens existentes', () => {
     const searchInput = screen.getByRole('combobox', { name: 'Buscar acessórios' })
     await user.type(searchInput, 'Ímã')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
     await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
 
@@ -1081,7 +1129,8 @@ describe('InventoryPage — edição de itens existentes', () => {
     mockPackaging([packagingFixture()], { update })
     renderPage('embalagens')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
+    // Embalagens mantém o botão de texto "Editar" na coluna Ações (inalterado)
+    await user.click(within(getTableBody()).getByRole('button', { name: /^editar$/i }))
     expect(screen.getByRole('dialog', { name: 'Editar embalagem' })).toBeInTheDocument()
     expect(screen.getByLabelText('Nome')).toHaveValue('Caixa M')
 
@@ -1118,15 +1167,22 @@ describe('InventoryPage — ativação e desativação', () => {
     toastMock.error.mockReset()
   })
 
-  it('os switches refletem o estado atual de cada item (ativo = marcado, inativo = desmarcado)', () => {
+  it('o menu de cada acessório oferece "Desativar" quando ativo e "Ativar" quando inativo', async () => {
+    const user = userEvent.setup()
     mockAccessories([
       accessoryFixture({ id: 'a1', name: 'Ímã 6x2', is_active: true }),
       accessoryFixture({ id: 'a2', name: 'Parafuso', is_active: false }),
     ])
     renderPage('acessorios')
 
-    expect(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' })).toHaveAttribute('aria-checked', 'true')
-    expect(screen.getByRole('switch', { name: 'Ativar acessório Parafuso' })).toHaveAttribute('aria-checked', 'false')
+    await user.click(screen.getByRole('button', { name: 'Mais ações — acessório Ímã 6x2' }))
+    expect(await screen.findByRole('menuitem', { name: 'Desativar' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Ativar' })).not.toBeInTheDocument()
+    await user.keyboard('{Escape}')
+
+    await user.click(screen.getByRole('button', { name: 'Mais ações — acessório Parafuso' }))
+    expect(await screen.findByRole('menuitem', { name: 'Ativar' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Desativar' })).not.toBeInTheDocument()
   })
 
   it('clicar no switch abre um diálogo de confirmação com nome acessível, sem chamar a API ainda', async () => {
@@ -1136,7 +1192,7 @@ describe('InventoryPage — ativação e desativação', () => {
     renderPage('acessorios')
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Desativar')
 
     const dialog = screen.getByRole('dialog', { name: 'Desativar acessório' })
     expect(dialog).toBeInTheDocument()
@@ -1152,7 +1208,7 @@ describe('InventoryPage — ativação e desativação', () => {
     mockAccessories([accessoryFixture({ is_active: true })], { update })
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Desativar')
     await user.click(screen.getByRole('button', { name: 'Cancelar' }))
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
@@ -1165,7 +1221,7 @@ describe('InventoryPage — ativação e desativação', () => {
     mockAccessories([accessoryFixture({ is_active: false })], { update })
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('switch', { name: 'Ativar acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Ativar')
     expect(screen.getByRole('dialog', { name: 'Ativar acessório' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Ativar' }))
 
@@ -1180,7 +1236,7 @@ describe('InventoryPage — ativação e desativação', () => {
     mockAccessories([accessoryFixture({ is_active: true })], { update })
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Desativar')
     await user.click(screen.getByRole('button', { name: 'Desativar' }))
 
     await waitFor(() => expect(update).toHaveBeenCalledWith('a1', { is_active: false }))
@@ -1218,7 +1274,7 @@ describe('InventoryPage — ativação e desativação', () => {
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Parafuso', is_active: false })], { update })
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('switch', { name: 'Ativar acessório Parafuso' }))
+    await clickAccessoryRowAction(user, 'Parafuso', 'Ativar')
     expect(screen.getByRole('dialog', { name: 'Ativar acessório' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Ativar' }))
 
@@ -1233,7 +1289,7 @@ describe('InventoryPage — ativação e desativação', () => {
     mockAccessories([accessoryFixture({ is_active: true })], { update })
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Desativar')
     await user.click(screen.getByRole('button', { name: 'Desativar' }))
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -1252,7 +1308,7 @@ describe('InventoryPage — ativação e desativação', () => {
     mockAccessories([accessoryFixture({ is_active: true })], { update })
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Desativar')
     await user.click(screen.getByRole('button', { name: 'Desativar' }))
 
     const processingButton = await screen.findByRole('button', { name: 'Desativando...' })
@@ -1266,43 +1322,13 @@ describe('InventoryPage — ativação e desativação', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
-  it('o switch do item fica desabilitado só durante a requisição de fato (depois de confirmar)', async () => {
-    const user = userEvent.setup()
-    let resolveUpdate: (value: Accessory) => void = () => {}
-    const update = vi.fn(
-      () =>
-        new Promise<Accessory>((resolve) => {
-          resolveUpdate = resolve
-        }),
-    )
-    mockAccessories(
-      [
-        accessoryFixture({ id: 'a1', name: 'Ímã 6x2', is_active: true }),
-        accessoryFixture({ id: 'a2', name: 'Parafuso', is_active: true }),
-      ],
-      { update },
-    )
-    renderPage('acessorios')
-
-    const firstToggle = screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' })
-    const secondToggle = screen.getByRole('switch', { name: 'Desativar acessório Parafuso' })
-    await user.click(firstToggle)
-    await user.click(screen.getByRole('button', { name: 'Desativar' }))
-
-    expect(firstToggle).toHaveAttribute('aria-disabled', 'true')
-    expect(secondToggle).not.toHaveAttribute('aria-disabled', 'true')
-
-    resolveUpdate(accessoryFixture({ is_active: false }))
-    await waitFor(() => expect(firstToggle).not.toHaveAttribute('aria-disabled', 'true'))
-  })
-
   it('erro na mutation mantém o diálogo aberto e funcional, com mensagem clara (nunca toast)', async () => {
     const user = userEvent.setup()
     const update = vi.fn().mockRejectedValue(new ApiError('database', 500, 'Falha ao atualizar acessório.'))
     mockAccessories([accessoryFixture({ is_active: true })], { update })
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Desativar')
     await user.click(screen.getByRole('button', { name: 'Desativar' }))
 
     expect(await screen.findByText('Falha ao atualizar acessório.')).toBeInTheDocument()
@@ -1330,7 +1356,7 @@ describe('InventoryPage — ativação e desativação', () => {
     const searchInput = screen.getByRole('combobox', { name: 'Buscar acessórios' })
     await user.type(searchInput, 'Ímã')
 
-    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Desativar')
     await user.click(screen.getByRole('button', { name: 'Desativar' }))
     await waitFor(() => expect(update).toHaveBeenCalled())
 
@@ -1343,7 +1369,7 @@ describe('InventoryPage — ativação e desativação', () => {
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', is_active: true })], { update })
     const { rerender } = renderPage('acessorios')
 
-    await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Desativar')
     await user.click(screen.getByRole('button', { name: 'Desativar' }))
     await waitFor(() => expect(update).toHaveBeenCalledWith('a1', { is_active: false }))
 
@@ -1351,24 +1377,24 @@ describe('InventoryPage — ativação e desativação', () => {
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', is_active: false })], { update })
     rerender(<InventoryPage area="acessorios" />)
 
-    // Continua na listagem — só o Switch reflete a inatividade.
+    // Continua na listagem — e o menu agora oferece "Ativar".
     expect(within(getTableBody()).getByText('Ímã 6x2')).toBeInTheDocument()
-    expect(
-      within(getTableBody()).getByRole('switch', { name: 'Ativar acessório Ímã 6x2' }),
-    ).toHaveAttribute('aria-checked', 'false')
+    await user.click(screen.getByRole('button', { name: 'Mais ações — acessório Ímã 6x2' }))
+    expect(await screen.findByRole('menuitem', { name: 'Ativar' })).toBeInTheDocument()
   })
 
-  it('nome acessível do switch identifica a ação e o item; switch e diálogo são operáveis por teclado', async () => {
+  it('o menu de três pontos e o diálogo de confirmação são operáveis por teclado', async () => {
     const user = userEvent.setup()
     const update = vi.fn().mockResolvedValue(accessoryFixture({ is_active: false }))
     mockAccessories([accessoryFixture({ is_active: true })], { update })
     renderPage('acessorios')
 
-    const toggle = screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' })
-    toggle.focus()
-    expect(toggle).toHaveFocus()
+    const trigger = screen.getByRole('button', { name: 'Mais ações — acessório Ímã 6x2' })
+    trigger.focus()
+    expect(trigger).toHaveFocus()
+    await user.keyboard('{Enter}')
 
-    await user.keyboard(' ')
+    await user.click(await screen.findByRole('menuitem', { name: 'Desativar' }))
     expect(screen.getByRole('dialog', { name: 'Desativar acessório' })).toBeInTheDocument()
 
     const confirmButton = screen.getByRole('button', { name: 'Desativar' })
@@ -1400,7 +1426,7 @@ describe('InventoryPage — exclusão física segura', () => {
     renderPage('acessorios')
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Excluir')
 
     const dialog = screen.getByRole('dialog', { name: 'Excluir acessório' })
     expect(dialog).toBeInTheDocument()
@@ -1416,7 +1442,7 @@ describe('InventoryPage — exclusão física segura', () => {
     mockAccessories([accessoryFixture()], { delete: deleteFn })
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Excluir')
     await user.click(screen.getByRole('button', { name: 'Cancelar' }))
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
@@ -1429,7 +1455,7 @@ describe('InventoryPage — exclusão física segura', () => {
     mockAccessories([accessoryFixture()], { delete: deleteFn })
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Excluir')
     await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
 
     await waitFor(() => expect(deleteFn).toHaveBeenCalledTimes(1))
@@ -1447,7 +1473,7 @@ describe('InventoryPage — exclusão física segura', () => {
     const searchInput = screen.getByRole('combobox', { name: 'Buscar acessórios' })
     await user.type(searchInput, 'Parafuso')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Excluir acessório Parafuso' }))
+    await clickAccessoryRowAction(user, 'Parafuso', 'Excluir')
     await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -1463,7 +1489,7 @@ describe('InventoryPage — exclusão física segura', () => {
     })
     const { rerender } = renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Excluir')
     await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
     await waitFor(() => expect(deleteFn).toHaveBeenCalledWith('a1'))
 
@@ -1489,7 +1515,7 @@ describe('InventoryPage — exclusão física segura', () => {
     mockAccessories([accessoryFixture()], { delete: deleteFn })
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Excluir')
     await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
 
     const processingButton = await screen.findByRole('button', { name: 'Excluindo...' })
@@ -1517,7 +1543,7 @@ describe('InventoryPage — exclusão física segura', () => {
     mockAccessories([accessoryFixture()], { delete: deleteFn })
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Excluir')
     await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
 
     expect(
@@ -1557,7 +1583,7 @@ describe('InventoryPage — exclusão física segura', () => {
     mockAccessories([accessoryFixture()], { delete: deleteFn })
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Excluir')
     await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
 
     expect(
@@ -1576,7 +1602,7 @@ describe('InventoryPage — exclusão física segura', () => {
     mockAccessories([accessoryFixture()], { delete: deleteFn })
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Excluir')
     await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
 
     expect(await screen.findByText('Falha ao excluir acessório.')).toBeInTheDocument()
@@ -1592,7 +1618,7 @@ describe('InventoryPage — exclusão física segura', () => {
     mockAccessories([accessoryFixture()])
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Excluir')
     const cancelButton = screen.getByRole('button', { name: 'Cancelar' })
     cancelButton.focus()
     expect(cancelButton).toHaveFocus()
@@ -1672,7 +1698,7 @@ describe('InventoryPage — exclusão física segura', () => {
     const user = userEvent.setup()
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2' })])
     const { unmount } = renderPage('acessorios')
-    await user.click(screen.getByRole('button', { name: 'Excluir acessório Ímã 6x2' }))
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Excluir')
     await user.click(screen.getByRole('button', { name: 'Cancelar' }))
     unmount()
 
@@ -1689,7 +1715,7 @@ describe('InventoryPage — exclusão física segura', () => {
 // mockado no topo do arquivo).
 // =============================================================================
 
-describe('InventoryPage — coluna Saldo atual e situação de estoque', () => {
+describe('InventoryPage — coluna Disponível e situação de estoque (Acessórios)', () => {
   it('exibe o saldo atual numérico na coluna correspondente', () => {
     mockAccessories([accessoryFixture({ current_stock: 42 })])
     renderPage('acessorios')
@@ -1733,7 +1759,7 @@ describe('InventoryPage — coluna Saldo atual e situação de estoque', () => {
     expect(screen.getByText('Estoque normal')).toBeInTheDocument()
   })
 
-  it('permite ordenar a listagem por Saldo atual', async () => {
+  it('permite ordenar a listagem pelo cabeçalho renomeado "Disponível"', async () => {
     const user = userEvent.setup()
     mockAccessories([
       accessoryFixture({ id: 'a1', name: 'Baixo saldo', current_stock: 2 }),
@@ -1741,74 +1767,98 @@ describe('InventoryPage — coluna Saldo atual e situação de estoque', () => {
     ])
     renderPage('acessorios')
 
-    await applySort(user, 'Saldo atual', 'Ordenar crescente')
+    await applySort(user, 'Disponível', 'Ordenar crescente')
     expect(getVisibleNamesInOrder()).toEqual(['Baixo saldo', 'Alto saldo'])
 
-    await applySort(user, 'Saldo atual', 'Ordenar decrescente')
+    await applySort(user, 'Disponível', 'Ordenar decrescente')
     expect(getVisibleNamesInOrder()).toEqual(['Alto saldo', 'Baixo saldo'])
   })
 })
 
-describe('InventoryPage — painel "Movimentar estoque" (StockMovementPanel)', () => {
+// ---------------------------------------------------------------------------
+// Fixture de uma linha de stock_movements (o que register/listStockMovements
+// devolvem) — só os campos que a UI lê.
+// ---------------------------------------------------------------------------
+type StockMovementRow = {
+  id: string
+  item_type: 'ACCESSORY' | 'PACKAGING'
+  item_id: string
+  movement_type: string
+  quantity_delta: number
+  balance_before: number
+  balance_after: number
+  reason: string | null
+  reference_type: string | null
+  reference_id: string | null
+  idempotency_key: string | null
+  occurred_at: string
+  created_by: string
+  created_at: string
+}
+
+function stockMovementRow(overrides: Partial<StockMovementRow> = {}): StockMovementRow {
+  return {
+    id: 'm1',
+    item_type: 'ACCESSORY',
+    item_id: 'a1',
+    movement_type: 'POSITIVE_ADJUSTMENT',
+    quantity_delta: 7,
+    balance_before: 18,
+    balance_after: 25,
+    reason: 'Ajuste de saldo por contagem',
+    reference_type: null,
+    reference_id: null,
+    idempotency_key: 'key-1',
+    occurred_at: '2026-09-06T12:00:00Z',
+    created_by: 'u1',
+    created_at: '2026-09-06T12:00:00Z',
+    ...overrides,
+  }
+}
+
+// register mock que devolve uma linha com o balance_after coerente com o
+// delta pedido (o padrão "sem concorrência": balance_after == quantidade
+// pretendida).
+function mockStockMovements(
+  overrides: Partial<{
+    movements: StockMovementRow[]
+    isLoading: boolean
+    loadError: unknown
+    refetch: ReturnType<typeof vi.fn>
+    isRegistering: boolean
+    register: ReturnType<typeof vi.fn>
+  }> = {},
+) {
+  useStockMovementsMock.mockReturnValue({
+    movements: overrides.movements ?? [],
+    isLoading: overrides.isLoading ?? false,
+    loadError: overrides.loadError ?? null,
+    refetch: overrides.refetch ?? vi.fn(),
+    isRegistering: overrides.isRegistering ?? false,
+    register:
+      overrides.register ??
+      vi.fn(async ({ movement_type, quantity }: { movement_type: string; quantity: number }) => {
+        const before = getAccessoryCurrentStockMock.mock.results.at(-1)?.value ?? 0
+        const resolvedBefore = typeof before === 'number' ? before : await before
+        const delta = movement_type === 'POSITIVE_ADJUSTMENT' ? quantity : -quantity
+        return stockMovementRow({
+          movement_type,
+          quantity_delta: delta,
+          balance_before: resolvedBefore,
+          balance_after: resolvedBefore + delta,
+        })
+      }),
+  })
+}
+
+describe('InventoryPage — Embalagens: painel "Movimentar estoque" (inalterado)', () => {
   beforeEach(() => {
     toastMock.success.mockReset()
     toastMock.error.mockReset()
-    useStockMovementsMock.mockReturnValue({
-      movements: [],
-      isLoading: false,
-      loadError: null,
-      refetch: vi.fn(),
-      isRegistering: false,
-      register: vi.fn().mockResolvedValue({
-        id: 'm1',
-        item_type: 'ACCESSORY',
-        item_id: 'a1',
-        movement_type: 'PURCHASE',
-        quantity_delta: 10,
-        balance_before: 0,
-        balance_after: 10,
-        reason: null,
-        reference_type: null,
-        reference_id: null,
-        idempotency_key: 'key-1',
-        occurred_at: '2026-08-27T12:00:00Z',
-        created_by: 'u1',
-        created_at: '2026-08-27T12:00:00Z',
-      }),
-    })
+    mockStockMovements()
   })
 
-  it('um único botão "Movimentar estoque" por linha abre o painel', async () => {
-    const user = userEvent.setup()
-    mockAccessories([accessoryFixture({ current_stock: 10 })])
-    renderPage('acessorios')
-
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — acessório Ímã 6x2' }))
-
-    const dialog = screen.getByRole('dialog', { name: 'Movimentar estoque' })
-    expect(dialog).toBeInTheDocument()
-    // "Ímã 6x2" aparece duas vezes dentro do diálogo (DialogDescription +
-    // resumo do próprio StockMovementPanel) — nunca ambíguo para o usuário
-    // (são duas exibições legítimas do mesmo nome), mas exige getAllByText
-    // aqui em vez de getByText.
-    expect(within(dialog).getAllByText('Ímã 6x2').length).toBeGreaterThanOrEqual(1)
-  })
-
-  it('o painel mostra o resumo correto: categoria, saldo atual e estoque mínimo', async () => {
-    const user = userEvent.setup()
-    mockAccessories([accessoryFixture({ current_stock: 15, minimum_stock: 5 })])
-    renderPage('acessorios')
-
-    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — acessório Ímã 6x2' }))
-
-    const dialog = screen.getByRole('dialog', { name: 'Movimentar estoque' })
-    expect(within(dialog).getByText('Acessório')).toBeInTheDocument()
-    expect(within(dialog).getByText('15')).toBeInTheDocument()
-    expect(within(dialog).getByText('5')).toBeInTheDocument()
-  })
-
-  it('embalagens abrem o painel com itemType/categoria corretos (independência entre áreas)', async () => {
+  it('Embalagens abrem o painel completo com o formulário de movimentação e a categoria correta', async () => {
     const user = userEvent.setup()
     mockPackaging([packagingFixture({ current_stock: 8 })])
     renderPage('embalagens')
@@ -1817,98 +1867,447 @@ describe('InventoryPage — painel "Movimentar estoque" (StockMovementPanel)', (
 
     const dialog = screen.getByRole('dialog', { name: 'Movimentar estoque' })
     expect(within(dialog).getByText('Embalagem')).toBeInTheDocument()
-  })
-
-  it('registrar uma movimentação com sucesso: toast, atualização local do saldo (setLocalStock) e fechamento do painel', async () => {
-    const setLocalStock = vi.fn()
-    mockAccessories([accessoryFixture({ id: 'a1', current_stock: 0 })], { setLocalStock })
-    const user = userEvent.setup()
-    renderPage('acessorios')
-
-    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — acessório Ímã 6x2' }))
-    await user.click(screen.getByRole('radio', { name: 'Entrada' }))
-    await user.click(screen.getByRole('radio', { name: 'Compra' }))
-    await user.type(screen.getByLabelText('Quantidade'), '10')
-    await user.click(screen.getByRole('button', { name: /^registrar movimentação$/i }))
-
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    expect(toastMock.success).toHaveBeenCalledWith('Movimentação registrada.')
-    expect(setLocalStock).toHaveBeenCalledWith('a1', 10)
-  })
-
-  it('erro real do backend mantém o painel aberto com a mensagem exibida', async () => {
-    useStockMovementsMock.mockReturnValue({
-      movements: [],
-      isLoading: false,
-      loadError: null,
-      refetch: vi.fn(),
-      isRegistering: false,
-      register: vi.fn().mockRejectedValue(new ApiError('business_rule', 409, 'saldo insuficiente para esta operação')),
-    })
-    mockAccessories([accessoryFixture({ current_stock: 2 })])
-    const user = userEvent.setup()
-    renderPage('acessorios')
-
-    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — acessório Ímã 6x2' }))
-    await user.click(screen.getByRole('radio', { name: 'Saída' }))
-    await user.click(screen.getByRole('radio', { name: 'Uso interno' }))
-    await user.type(screen.getByLabelText('Quantidade'), '1')
-    await user.type(screen.getByLabelText(/motivo\/observação/i), 'teste')
-    await user.click(screen.getByRole('button', { name: /^registrar movimentação$/i }))
-
-    expect(await screen.findByText('saldo insuficiente para esta operação')).toBeInTheDocument()
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
-  })
-
-  it('item inativo: painel abre normalmente e sinaliza "Inativo"', async () => {
-    const user = userEvent.setup()
-    mockAccessories([accessoryFixture({ is_active: false })])
-    renderPage('acessorios')
-
-    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — acessório Ímã 6x2' }))
-    const dialog = screen.getByRole('dialog', { name: 'Movimentar estoque' })
-    expect(within(dialog).getByText('Inativo')).toBeInTheDocument()
+    // o formulário genérico de movimentação CONTINUA em Embalagens
     expect(within(dialog).getByRole('radiogroup', { name: 'Movimentação' })).toBeInTheDocument()
   })
+})
 
-  it('histórico carregando é exibido dentro do painel', async () => {
-    useStockMovementsMock.mockReturnValue({
-      movements: [],
-      isLoading: true,
-      loadError: null,
-      refetch: vi.fn(),
-      isRegistering: false,
-      register: vi.fn(),
-    })
-    const user = userEvent.setup()
-    mockAccessories([accessoryFixture()])
-    renderPage('acessorios')
+// ---------------------------------------------------------------------------
+// Acessórios (2026-09-06): "Movimentar estoque" foi substituído por "Ajuste"
+// (quantidade absoluta -> diferença -> register_stock_movement) + "Histórico"
+// (janela só de consulta). Não existe formulário genérico de movimentação em
+// Acessórios.
+// ---------------------------------------------------------------------------
 
-    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — acessório Ímã 6x2' }))
-    expect(screen.getAllByRole('status').length).toBeGreaterThan(0)
+describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+    getAccessoryCurrentStockMock.mockReset()
+    mockStockMovements()
   })
 
-  it('fechar o painel sem salvar (Cancelar) não chama register nem setLocalStock', async () => {
-    const register = vi.fn()
-    const setLocalStock = vi.fn()
-    useStockMovementsMock.mockReturnValue({
-      movements: [],
-      isLoading: false,
-      loadError: null,
-      refetch: vi.fn(),
-      isRegistering: false,
-      register,
-    })
-    mockAccessories([accessoryFixture()], { setLocalStock })
+  it('não há botão "Movimentar estoque"/"Gerenciar" em Acessórios — o botão "Ajuste" abre a janela do acessório correto, com a quantidade atual', async () => {
     const user = userEvent.setup()
+    getAccessoryCurrentStockMock.mockResolvedValue(25)
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 25 }),
+      accessoryFixture({ id: 'a2', name: 'Parafuso', current_stock: 3 }),
+    ])
     renderPage('acessorios')
 
-    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — acessório Ímã 6x2' }))
-    await user.click(screen.getByRole('button', { name: /^cancelar$/i }))
+    expect(screen.queryByRole('button', { name: /Movimentar estoque/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Gerenciar/i })).not.toBeInTheDocument()
 
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    const row = within(getTableBody())
+      .getByText('Ímã 6x2')
+      .closest('tr') as HTMLElement
+    await user.click(within(row).getByRole('button', { name: 'Ajuste' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Ajustar quantidade' })
+    expect(within(dialog).getAllByText('Ímã 6x2').length).toBeGreaterThanOrEqual(1)
+    expect(within(dialog).getByText('Quantidade atual')).toBeInTheDocument()
+    expect(within(dialog).getByText('25')).toBeInTheDocument()
+    // nunca a quantidade do OUTRO acessório
+    expect(within(dialog).queryByText('Parafuso')).not.toBeInTheDocument()
+  })
+
+  it('trata a nova quantidade como valor ABSOLUTO — aumento: registra POSITIVE_ADJUSTMENT com |diferença|', async () => {
+    const user = userEvent.setup()
+    getAccessoryCurrentStockMock.mockResolvedValue(10)
+    const register = vi.fn().mockResolvedValue(stockMovementRow({ balance_before: 10, balance_after: 15, quantity_delta: 5 }))
+    mockStockMovements({ register })
+    const setLocalStock = vi.fn()
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10 })], { setLocalStock })
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '15')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    await waitFor(() => expect(register).toHaveBeenCalledTimes(1))
+    expect(register.mock.calls[0][0]).toMatchObject({
+      movement_type: 'POSITIVE_ADJUSTMENT',
+      quantity: 5,
+      reason: 'Ajuste de saldo por contagem',
+    })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Ajustar quantidade' })).not.toBeInTheDocument())
+    expect(toastMock.success).toHaveBeenCalledWith('Ajuste registrado.')
+    expect(setLocalStock).toHaveBeenCalledWith('a1', 15)
+  })
+
+  it('redução: registra NEGATIVE_ADJUSTMENT com |diferença| (exemplo do pedido: 25 -> 18 => -7)', async () => {
+    const user = userEvent.setup()
+    getAccessoryCurrentStockMock.mockResolvedValue(25)
+    const register = vi
+      .fn()
+      .mockResolvedValue(stockMovementRow({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity_delta: -7, balance_before: 25, balance_after: 18 }))
+    mockStockMovements({ register })
+    const setLocalStock = vi.fn()
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 25 })], { setLocalStock })
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '18')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    await waitFor(() => expect(register).toHaveBeenCalledTimes(1))
+    expect(register.mock.calls[0][0]).toMatchObject({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity: 7 })
+    expect(setLocalStock).toHaveBeenCalledWith('a1', 18)
+  })
+
+  it('aceita zero como nova quantidade (25 -> 0 => NEGATIVE_ADJUSTMENT de 25)', async () => {
+    const user = userEvent.setup()
+    getAccessoryCurrentStockMock.mockResolvedValue(25)
+    const register = vi
+      .fn()
+      .mockResolvedValue(stockMovementRow({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity_delta: -25, balance_before: 25, balance_after: 0 }))
+    mockStockMovements({ register })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 25 })])
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '0')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    await waitFor(() => expect(register).toHaveBeenCalledWith(expect.objectContaining({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity: 25 })))
+  })
+
+  it('recusa valor negativo — nenhuma releitura, nenhum register', async () => {
+    const user = userEvent.setup()
+    const register = vi.fn()
+    mockStockMovements({ register })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10 })])
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '-3')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
     expect(register).not.toHaveBeenCalled()
-    expect(setLocalStock).not.toHaveBeenCalled()
+    expect(getAccessoryCurrentStockMock).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Ajustar quantidade' })).toBeInTheDocument()
+  })
+
+  it('recusa valor fracionado — nenhum register', async () => {
+    const user = userEvent.setup()
+    const register = vi.fn()
+    mockStockMovements({ register })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10 })])
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '10,5')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    expect(register).not.toHaveBeenCalled()
+  })
+
+  it('nova quantidade igual à atual: não cria movimentação e informa que não houve alteração', async () => {
+    const user = userEvent.setup()
+    getAccessoryCurrentStockMock.mockResolvedValue(10)
+    const register = vi.fn()
+    mockStockMovements({ register })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10 })])
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '10')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    await waitFor(() => expect(getAccessoryCurrentStockMock).toHaveBeenCalled())
+    expect(register).not.toHaveBeenCalled()
+    expect(await screen.findByText(/nenhum ajuste foi registrado/i)).toBeInTheDocument()
+    expect(toastMock.success).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Ajustar quantidade' })).toBeInTheDocument()
+  })
+
+  it('observação vazia envia o motivo padrão "Ajuste de saldo por contagem"; observação preenchida usa o texto do usuário', async () => {
+    const user = userEvent.setup()
+    getAccessoryCurrentStockMock.mockResolvedValue(10)
+    const register = vi.fn().mockResolvedValue(stockMovementRow({ balance_before: 10, balance_after: 12, quantity_delta: 2 }))
+    mockStockMovements({ register })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10 })])
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '12')
+    await user.type(screen.getByLabelText('Observação (opcional)'), 'contagem do dia 06')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    await waitFor(() => expect(register).toHaveBeenCalledWith(expect.objectContaining({ reason: 'contagem do dia 06' })))
+  })
+
+  it('consulta o saldo novamente ANTES de enviar e recalcula a diferença sobre o valor mais recente', async () => {
+    const user = userEvent.setup()
+    // a tela mostra 25, mas o backend já está em 20 (mudança concorrente)
+    getAccessoryCurrentStockMock.mockResolvedValue(20)
+    const register = vi
+      .fn()
+      .mockResolvedValue(stockMovementRow({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity_delta: -2, balance_before: 20, balance_after: 18 }))
+    mockStockMovements({ register })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 25 })])
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '18')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    await waitFor(() => expect(getAccessoryCurrentStockMock).toHaveBeenCalledWith('a1'))
+    // diferença calculada sobre 20 (releitura), não sobre 25 (tela): 18 - 20 = -2
+    expect(register.mock.calls[0][0]).toMatchObject({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity: 2 })
+  })
+
+  it('resultado simultâneo divergente (balance_after != pretendido): não mostra sucesso, atualiza o saldo retornado e avisa o usuário', async () => {
+    const user = userEvent.setup()
+    getAccessoryCurrentStockMock.mockResolvedValue(25)
+    // usuário pretende 18; releitura diz 25; delta -7; mas o backend aplica
+    // sobre um valor já diferente e devolve balance_after = 20 (!= 18)
+    const register = vi
+      .fn()
+      .mockResolvedValue(stockMovementRow({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity_delta: -7, balance_before: 27, balance_after: 20 }))
+    mockStockMovements({ register })
+    const setLocalStock = vi.fn()
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 25 })], { setLocalStock })
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '18')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    await waitFor(() => expect(register).toHaveBeenCalled())
+    expect(toastMock.success).not.toHaveBeenCalled()
+    // tela atualizada com o saldo REAL retornado
+    expect(setLocalStock).toHaveBeenCalledWith('a1', 20)
+    expect(await screen.findByText(/alterado por outra pessoa/i)).toBeInTheDocument()
+    // a janela permanece aberta para o usuário revisar
+    expect(screen.getByRole('dialog', { name: 'Ajustar quantidade' })).toBeInTheDocument()
+  })
+
+  it('bloqueia envio duplicado durante o salvamento', async () => {
+    const user = userEvent.setup()
+    getAccessoryCurrentStockMock.mockResolvedValue(10)
+    let resolveRegister: (v: StockMovementRow) => void = () => {}
+    const register = vi.fn(
+      () =>
+        new Promise<StockMovementRow>((resolve) => {
+          resolveRegister = resolve
+        }),
+    )
+    mockStockMovements({ register })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10 })])
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '15')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    const savingButton = await screen.findByRole('button', { name: 'Salvando...' })
+    expect(savingButton).toBeDisabled()
+    await user.click(savingButton)
+    expect(register).toHaveBeenCalledTimes(1)
+
+    resolveRegister(stockMovementRow({ balance_before: 10, balance_after: 15, quantity_delta: 5 }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Ajustar quantidade' })).not.toBeInTheDocument())
+  })
+
+  it('o ajuste NUNCA altera o Custo unitário exibido na listagem', async () => {
+    const user = userEvent.setup()
+    getAccessoryCurrentStockMock.mockResolvedValue(10)
+    mockStockMovements({
+      register: vi.fn().mockResolvedValue(stockMovementRow({ balance_before: 10, balance_after: 15, quantity_delta: 5 })),
+    })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10, unit_cost: 12.5 })])
+    renderPage('acessorios')
+
+    expect(within(getTableBody()).getByText(formatBRL(12.5))).toBeInTheDocument()
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '15')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Ajustar quantidade' })).not.toBeInTheDocument())
+
+    // custo intacto (nenhuma chamada a update/registro tocou unit_cost)
+    expect(within(getTableBody()).getByText(formatBRL(12.5))).toBeInTheDocument()
+  })
+
+  it('Cancelar fecha a janela sem consultar saldo nem registrar', async () => {
+    const user = userEvent.setup()
+    const register = vi.fn()
+    mockStockMovements({ register })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10 })])
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '15')
+    await user.click(screen.getByRole('button', { name: 'Cancelar' }))
+
+    expect(screen.queryByRole('dialog', { name: 'Ajustar quantidade' })).not.toBeInTheDocument()
+    expect(register).not.toHaveBeenCalled()
+    expect(getAccessoryCurrentStockMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('InventoryPage — Acessórios: janela "Histórico"', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+    getAccessoryCurrentStockMock.mockReset()
+  })
+
+  it('o botão de Histórico é só ícone, com tooltip e aria-label "Histórico", e abre o acessório correto', async () => {
+    const user = userEvent.setup()
+    mockStockMovements({ movements: [] })
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 4, minimum_stock: 10 }),
+      accessoryFixture({ id: 'a2', name: 'Parafuso', current_stock: 30 }),
+    ])
+    renderPage('acessorios')
+
+    const row = within(getTableBody())
+      .getByText('Ímã 6x2')
+      .closest('tr') as HTMLElement
+    const historyButton = within(row).getByRole('button', { name: 'Histórico' })
+    expect(historyButton).toHaveAttribute('title', 'Histórico')
+    // só ícone: sem texto visível "Histórico" dentro do botão
+    expect(historyButton).toHaveTextContent('')
+
+    await user.click(historyButton)
+    const dialog = screen.getByRole('dialog', { name: 'Histórico do acessório' })
+    expect(within(dialog).getAllByText('Ímã 6x2').length).toBeGreaterThanOrEqual(1)
+    expect(within(dialog).queryByText('Parafuso')).not.toBeInTheDocument()
+  })
+
+  it('mostra o resumo Disponível / Estoque mínimo / Situação e NÃO tem formulário de movimentação', async () => {
+    const user = userEvent.setup()
+    mockStockMovements({ movements: [] })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 4, minimum_stock: 10 })])
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Histórico' }))
+    const dialog = screen.getByRole('dialog', { name: 'Histórico do acessório' })
+
+    expect(within(dialog).getByText('Disponível')).toBeInTheDocument()
+    expect(within(dialog).getByText('Estoque mínimo')).toBeInTheDocument()
+    expect(within(dialog).getByText('Situação')).toBeInTheDocument()
+    expect(within(dialog).getByText('Estoque baixo')).toBeInTheDocument()
+
+    // nunca o formulário de movimentação
+    expect(within(dialog).queryByRole('radiogroup', { name: 'Movimentação' })).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: /registrar movimenta/i })).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('Quantidade')).not.toBeInTheDocument()
+  })
+
+  it('estados: carregando, vazio e erro', async () => {
+    const user = userEvent.setup()
+
+    // carregando
+    mockStockMovements({ isLoading: true })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2' })])
+    const { unmount } = renderPage('acessorios')
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Histórico' }))
+    expect(screen.getAllByRole('status').length).toBeGreaterThan(0)
+    unmount()
+
+    // vazio
+    mockStockMovements({ movements: [] })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2' })])
+    const second = renderPage('acessorios')
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Histórico' }))
+    expect(screen.getByText('Nenhuma movimentação registrada.')).toBeInTheDocument()
+    second.unmount()
+
+    // erro
+    mockStockMovements({ loadError: new ApiError('database', 500, 'Falha ao carregar o histórico.') })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2' })])
+    renderPage('acessorios')
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Histórico' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Falha ao carregar o histórico.')
+  })
+
+  it('lista as movimentações mais recentes primeiro, sem rolagem horizontal e com quebra de linha em textos longos', async () => {
+    const user = userEvent.setup()
+    const longReason =
+      'Contagem de inventário periódico realizada pela equipe da manhã com conferência dupla item a item na prateleira'
+    mockStockMovements({
+      movements: [
+        stockMovementRow({
+          id: 'm2',
+          movement_type: 'NEGATIVE_ADJUSTMENT',
+          quantity_delta: -3,
+          balance_before: 25,
+          balance_after: 22,
+          reason: longReason,
+          occurred_at: '2026-09-06T15:00:00Z',
+        }),
+        stockMovementRow({
+          id: 'm1',
+          movement_type: 'POSITIVE_ADJUSTMENT',
+          quantity_delta: 5,
+          balance_before: 20,
+          balance_after: 25,
+          occurred_at: '2026-09-06T09:00:00Z',
+        }),
+      ],
+    })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 22 })])
+    renderPage('acessorios')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Histórico' }))
+    const dialog = screen.getByRole('dialog', { name: 'Histórico do acessório' })
+
+    // desktop: a tabela ocupa 100% da largura do contêiner (w-full table-fixed)
+    // e nada força mais largura que o contêiner — nenhum min-w, nenhum
+    // style min-width — então nunca há barra de rolagem horizontal própria.
+    const historyTable = within(dialog).getByRole('table')
+    expect(historyTable.className).toMatch(/\bw-full\b/)
+    expect(historyTable.className).toMatch(/\btable-fixed\b/)
+    expect(historyTable.className).not.toMatch(/\bmin-w/)
+    expect(historyTable.style.minWidth).toBe('')
+    const tableContainer = historyTable.closest('[data-slot="table-container"]') as HTMLElement
+    expect(tableContainer.className).not.toMatch(/\bmin-w/)
+    // sem a coluna "Referência" (sempre "—" nesta etapa)
+    expect(within(historyTable).queryByText('Referência')).not.toBeInTheDocument()
+
+    // texto longo quebra linha (whitespace-normal break-words), nunca truncado
+    const reasonCell = within(historyTable).getByText(longReason)
+    expect(reasonCell.className).toMatch(/break-words/)
+    expect(reasonCell.className).not.toMatch(/\btruncate\b/)
+
+    // ordem: mais recente (15:00) antes da mais antiga (09:00)
+    const rowsText = within(historyTable)
+      .getAllByRole('row')
+      .slice(1)
+      .map((r) => r.textContent ?? '')
+    expect(rowsText[0]).toContain('-3')
+    expect(rowsText[1]).toContain('+5')
+
+    // tela estreita: cards (sm:hidden) com os mesmos campos rotulados —
+    // Data, Tipo, Quantidade, Saldo, Motivo/Observação (JSDOM não aplica o
+    // CSS responsivo, então os dois layouts coexistem no DOM).
+    expect(within(dialog).getAllByText(/^Tipo:/).length).toBe(2)
+    expect(within(dialog).getAllByText(/^Motivo\/Observação:/).length).toBe(2)
+  })
+
+  it('nunca mistura o histórico de acessórios diferentes: reabrir para outro acessório remonta a consulta', async () => {
+    const user = userEvent.setup()
+    mockStockMovements({ movements: [] })
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 4 }),
+      accessoryFixture({ id: 'a2', name: 'Parafuso', current_stock: 30 }),
+    ])
+    renderPage('acessorios')
+
+    const imaRow = within(getTableBody()).getByText('Ímã 6x2').closest('tr') as HTMLElement
+    await user.click(within(imaRow).getByRole('button', { name: 'Histórico' }))
+    expect(within(screen.getByRole('dialog')).getByText('Ímã 6x2')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Fechar' }))
+
+    const parafusoRow = within(getTableBody()).getByText('Parafuso').closest('tr') as HTMLElement
+    await user.click(within(parafusoRow).getByRole('button', { name: 'Histórico' }))
+    const dialog = screen.getByRole('dialog', { name: 'Histórico do acessório' })
+    expect(within(dialog).getByText('Parafuso')).toBeInTheDocument()
+    expect(within(dialog).queryByText('Ímã 6x2')).not.toBeInTheDocument()
   })
 })
 
@@ -1972,13 +2371,13 @@ describe('InventoryPage — colunas redimensionáveis e persistidas (padronizaç
     expect(screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })).toBeInTheDocument()
   })
 
-  it('identificadores de coluna: 8 colunas viram 8 <col> no colgroup', () => {
+  it('identificadores de coluna (Acessórios): 7 colunas viram 7 <col> no colgroup (sem "Ativo")', () => {
     mockAccessories([accessoryFixture()])
     renderPage('acessorios')
-    expect(document.querySelectorAll('col')).toHaveLength(8)
+    expect(document.querySelectorAll('col')).toHaveLength(7)
   })
 
-  it('a coluna Ações nunca pode ser reduzida abaixo do mínimo necessário para "Editar" + "Movimentar estoque" + "Excluir" (300px)', () => {
+  it('a coluna Ações de Acessórios não pode ser reduzida abaixo do mínimo da barra compacta (170px)', () => {
     mockAccessories([accessoryFixture()])
     renderPage('acessorios')
     const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })
@@ -1986,8 +2385,8 @@ describe('InventoryPage — colunas redimensionáveis e persistidas (padronizaç
     fireEvent.pointerDown(handle, { clientX: 500, pointerId: 1 })
     fireEvent.pointerMove(handle, { clientX: -9999, pointerId: 1 })
 
-    const actionsCol = document.querySelectorAll('col')[7] as HTMLElement
-    expect(Number.parseInt(actionsCol.style.width, 10)).toBe(300)
+    const actionsCol = document.querySelectorAll('col')[6] as HTMLElement
+    expect(Number.parseInt(actionsCol.style.width, 10)).toBe(170)
   })
 
   it('redimensionar uma coluna por teclado altera só aquela coluna, nunca as demais', () => {
@@ -2053,17 +2452,21 @@ describe('InventoryPage — colunas redimensionáveis e persistidas (padronizaç
     expect(scrollContainer).toBeInTheDocument()
   })
 
-  it('regressão: as ações "Editar", "Movimentar estoque" e "Excluir" continuam em uma única linha, sem quebra', () => {
+  it('regressão (Acessórios): "Ajuste" + Histórico (ícone) + menu de três pontos em uma única linha, sem "Movimentar estoque"', () => {
     mockAccessories([accessoryFixture()])
     renderPage('acessorios')
-    const actionsCell = within(getTable()).getByRole('button', { name: 'Editar' }).closest('div')
+
+    const adjustButton = within(getTable()).getByRole('button', { name: 'Ajuste' })
+    const actionsCell = adjustButton.closest('div')
     expect(actionsCell).toHaveClass('flex-nowrap')
     expect(actionsCell).not.toHaveClass('flex-wrap')
-    expect(within(getTable()).getByRole('button', { name: 'Editar' })).toBeInTheDocument()
+
+    expect(within(getTable()).getByRole('button', { name: 'Histórico' })).toBeInTheDocument()
     expect(
-      within(getTable()).getByRole('button', { name: /^Movimentar estoque/ }),
+      within(getTable()).getByRole('button', { name: 'Mais ações — acessório Ímã 6x2' }),
     ).toBeInTheDocument()
-    expect(within(getTable()).getByRole('button', { name: /^Excluir/ })).toBeInTheDocument()
+    expect(within(getTable()).queryByRole('button', { name: /Movimentar estoque/i })).not.toBeInTheDocument()
+    expect(within(getTable()).queryByRole('button', { name: /^Editar$/ })).not.toBeInTheDocument()
   })
 
   it('regressão: busca e ordenação continuam funcionando após o redimensionamento', async () => {

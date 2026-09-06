@@ -21,6 +21,23 @@ export async function listAccessories(): Promise<Accessory[]> {
   return data as Accessory[]
 }
 
+// Releitura pontual só do saldo materializado de UM acessório — usada pelo
+// ajuste por quantidade absoluta (AccessoryStockAdjustDialog) logo antes de
+// enviar a movimentação, para recalcular a diferença sobre o valor mais
+// recente e estreitar a janela de corrida com uma alteração concorrente de
+// outro usuário. Leitura direta (SELECT já concedido a authenticated, RLS
+// is_active_user()), nunca uma escrita.
+export async function getAccessoryCurrentStock(id: string): Promise<number> {
+  const { data, error } = await supabase
+    .from('accessories')
+    .select('current_stock')
+    .eq('id', id)
+    .single()
+
+  if (error) throw mapSupabaseError(error)
+  return (data as { current_stock: number }).current_stock
+}
+
 // material/unit_cost/current_stock nunca fazem parte deste contrato —
 // decisão aprovada em docs/03_MODELO_BANCO_DADOS.md §13.3 (material fora da
 // interface; unit_cost somente leitura; current_stock sem edição direta

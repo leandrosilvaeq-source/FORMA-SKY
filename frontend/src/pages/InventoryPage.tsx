@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { EllipsisIcon, HistoryIcon } from 'lucide-react'
 import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
 import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
@@ -12,8 +13,16 @@ import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { InventoryItemForm, type InventoryItemFormValues } from '@/components/inventory/InventoryItemForm'
 import { InventoryPageShell, type InventoryArea } from '@/components/inventory/InventoryPageShell'
 import { StockMovementPanel, StockLevelBadge, getStockLevel } from '@/components/inventory/StockMovementPanel'
+import { AccessoryStockAdjustDialog } from '@/components/inventory/AccessoryStockAdjustDialog'
+import { AccessoryHistoryDialog } from '@/components/inventory/AccessoryHistoryDialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table'
@@ -43,6 +52,24 @@ const INVENTORY_COLUMN_SPECS: ColumnWidthSpec[] = [
   { id: 'current_stock', defaultWidth: 150, minWidth: 100, maxWidth: 280 },
   { id: 'is_active', defaultWidth: 90, minWidth: 75, maxWidth: 180 },
   { id: 'actions', defaultWidth: 340, minWidth: 300, maxWidth: 500 },
+]
+
+// Acessórios (2026-09-06): ordem própria (Acessório · Tamanho · Variante ·
+// Estoque mínimo · Disponível · Custo unitário · Ações), SEM a coluna
+// "Ativo" (o Switch saiu — Ativar/Desativar vive no menu de três pontos) e
+// com "Ações" mais estreita (só "Ajuste" + 2 botões-ícone, nunca mais 3
+// botões de texto). Larguras persistidas continuam por id (tableId
+// 'inventory-accessories') — a largura antiga de 'is_active' é descartada
+// por normalizeColumnWidths, as demais são preservadas. Embalagens seguem
+// usando INVENTORY_COLUMN_SPECS acima, intactas.
+const ACCESSORY_COLUMN_SPECS: ColumnWidthSpec[] = [
+  { id: 'name', defaultWidth: 175, minWidth: 100, maxWidth: 400 },
+  { id: 'size', defaultWidth: 95, minWidth: 75, maxWidth: 180 },
+  { id: 'variant', defaultWidth: 140, minWidth: 90, maxWidth: 320 },
+  { id: 'minimum_stock', defaultWidth: 115, minWidth: 85, maxWidth: 220 },
+  { id: 'current_stock', defaultWidth: 150, minWidth: 100, maxWidth: 280 },
+  { id: 'unit_cost', defaultWidth: 130, minWidth: 90, maxWidth: 240 },
+  { id: 'actions', defaultWidth: 210, minWidth: 170, maxWidth: 380 },
 ]
 
 // Módulo 3 (Estoque). Incremento 4: consulta e navegação. Incremento 5:
@@ -225,12 +252,21 @@ interface InventoryAreaPanelProps {
   // filtro é exibido.
   showStatusFilter?: boolean
   statusFilterAriaLabel?: string
-  // Rótulos das colunas que Acessórios renomeia (2026-09-06): "Nome" ->
-  // "Acessório", "Custo" -> "Custo/un.". Embalagens mantém os padrões.
-  // NUNCA muda a chave de ordenação (column="name"/"unit_cost") nem nada no
-  // banco/API — só o texto do cabeçalho.
+  // Rótulos das colunas que Acessórios renomeia: "Nome" -> "Acessório",
+  // "Custo" -> "Custo unitário", "Saldo atual" -> "Disponível". Embalagens
+  // mantém os padrões. NUNCA muda a chave de ordenação
+  // (column="name"/"unit_cost"/"current_stock") nem nada no banco/API — só o
+  // texto do cabeçalho.
   nameColumnLabel?: string
   costColumnLabel?: string
+  currentStockColumnLabel?: string
+  // 'accessory' (2026-09-06): ordem de colunas própria, SEM a coluna
+  // "Ativo", e coluna "Ações" compacta ("Ajuste" + Histórico só-ícone +
+  // menu de três pontos com Editar / Ativar-Desativar / Excluir). 'default'
+  // (Embalagens) permanece exatamente como antes: 7 colunas + coluna
+  // "Ativo" (Switch) + 3 botões de texto (Editar / Movimentar estoque /
+  // Excluir).
+  variant?: 'default' | 'accessory'
   createButtonLabel: string
   onOpenCreateDialog: () => void
   onEditItem: (item: InventoryItem) => void
@@ -248,9 +284,15 @@ interface InventoryAreaPanelProps {
   // definitivamente" no diálogo (ver AccessoriesInventoryPage/
   // PackagingInventoryPage).
   onDeleteItem: (item: InventoryItem) => void
-  // Abre o painel de movimentação de estoque (Módulo 3, Incremento 2) — um
-  // único botão por linha, nunca uma ação direta na tabela.
-  onManageStock: (item: InventoryItem) => void
+  // Abre o painel de movimentação de estoque (Embalagens) — um único botão
+  // por linha, nunca uma ação direta na tabela. Opcional: a variante
+  // 'accessory' não usa ("Movimentar estoque" foi substituído por "Ajuste"
+  // + "Histórico").
+  onManageStock?: (item: InventoryItem) => void
+  // Variante 'accessory' (2026-09-06): abre a janela de ajuste por
+  // quantidade absoluta / a janela dedicada de histórico.
+  onAdjustStock?: (item: InventoryItem) => void
+  onOpenHistory?: (item: InventoryItem) => void
 }
 
 // Painel completo de uma área (busca + filtro + ordenação + tabela +
@@ -276,6 +318,8 @@ function InventoryAreaPanel({
   statusFilterAriaLabel,
   nameColumnLabel = 'Nome',
   costColumnLabel = 'Custo',
+  currentStockColumnLabel = 'Saldo atual',
+  variant = 'default',
   createButtonLabel,
   onOpenCreateDialog,
   onEditItem,
@@ -284,13 +328,35 @@ function InventoryAreaPanel({
   pendingToggleId,
   onDeleteItem,
   onManageStock,
+  onAdjustStock,
+  onOpenHistory,
 }: InventoryAreaPanelProps) {
+  const isAccessoryVariant = variant === 'accessory'
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all')
   const [sort, setSort] = useState<SortState<InventorySortColumn> | null>(null)
   const { session } = useAuth()
   const userId = session?.user.id ?? null
-  const columnWidths = usePersistentColumnWidths(tableId, userId, INVENTORY_COLUMN_SPECS)
+  const columnSpecs = isAccessoryVariant ? ACCESSORY_COLUMN_SPECS : INVENTORY_COLUMN_SPECS
+  const columnWidths = usePersistentColumnWidths(tableId, userId, columnSpecs)
+
+  // Cabeçalho ordenável reutilizável — evita repetir o bloco `resize={{…}}`
+  // por coluna, e mantém as duas variantes (default/accessory) montando a
+  // mesma peça, só em ordem diferente.
+  const sortableHeader = (column: InventorySortColumn, label: string) => (
+    <SortableColumnHeader
+      column={column}
+      label={label}
+      sort={sort}
+      onSortChange={setSort}
+      resize={{
+        width: columnWidths.getWidth(column),
+        onResize: columnWidths.setColumnWidth,
+        onCommit: columnWidths.commitWidths,
+        onKeyboardResize: columnWidths.adjustByKeyboard,
+      }}
+    />
+  )
 
   // Busca e filtro combinados: primeiro busca, depois filtro de status —
   // ordem não importa matematicamente (é um AND lógico), mas mantém a
@@ -417,96 +483,32 @@ function InventoryAreaPanel({
               style={{ minWidth: columnWidths.totalWidthPx }}
             >
               <colgroup>
-                {INVENTORY_COLUMN_SPECS.map((spec) => (
+                {columnSpecs.map((spec) => (
                   <col key={spec.id} style={{ width: columnWidths.getWidth(spec.id) }} />
                 ))}
               </colgroup>
               <TableHeader>
                 <TableRow>
-                  <SortableColumnHeader
-                    column="name"
-                    label={nameColumnLabel}
-                    sort={sort}
-                    onSortChange={setSort}
-                    resize={{
-                      width: columnWidths.getWidth('name'),
-                      onResize: columnWidths.setColumnWidth,
-                      onCommit: columnWidths.commitWidths,
-                      onKeyboardResize: columnWidths.adjustByKeyboard,
-                    }}
-                  />
-                  <SortableColumnHeader
-                    column="size"
-                    label="Tamanho"
-                    sort={sort}
-                    onSortChange={setSort}
-                    resize={{
-                      width: columnWidths.getWidth('size'),
-                      onResize: columnWidths.setColumnWidth,
-                      onCommit: columnWidths.commitWidths,
-                      onKeyboardResize: columnWidths.adjustByKeyboard,
-                    }}
-                  />
-                  <SortableColumnHeader
-                    column="variant"
-                    label="Variante"
-                    sort={sort}
-                    onSortChange={setSort}
-                    resize={{
-                      width: columnWidths.getWidth('variant'),
-                      onResize: columnWidths.setColumnWidth,
-                      onCommit: columnWidths.commitWidths,
-                      onKeyboardResize: columnWidths.adjustByKeyboard,
-                    }}
-                  />
-                  <SortableColumnHeader
-                    column="unit_cost"
-                    label={costColumnLabel}
-                    sort={sort}
-                    onSortChange={setSort}
-                    resize={{
-                      width: columnWidths.getWidth('unit_cost'),
-                      onResize: columnWidths.setColumnWidth,
-                      onCommit: columnWidths.commitWidths,
-                      onKeyboardResize: columnWidths.adjustByKeyboard,
-                    }}
-                  />
-                  <SortableColumnHeader
-                    column="minimum_stock"
-                    label="Estoque mínimo"
-                    sort={sort}
-                    onSortChange={setSort}
-                    resize={{
-                      width: columnWidths.getWidth('minimum_stock'),
-                      onResize: columnWidths.setColumnWidth,
-                      onCommit: columnWidths.commitWidths,
-                      onKeyboardResize: columnWidths.adjustByKeyboard,
-                    }}
-                  />
-                  <SortableColumnHeader
-                    column="current_stock"
-                    label="Saldo atual"
-                    sort={sort}
-                    onSortChange={setSort}
-                    resize={{
-                      width: columnWidths.getWidth('current_stock'),
-                      onResize: columnWidths.setColumnWidth,
-                      onCommit: columnWidths.commitWidths,
-                      onKeyboardResize: columnWidths.adjustByKeyboard,
-                    }}
-                  />
-                  <SortableColumnHeader
-                    column="is_active"
-                    label="Ativo"
-                    sort={sort}
-                    onSortChange={setSort}
-                    resize={{
-                      width: columnWidths.getWidth('is_active'),
-                      onResize: columnWidths.setColumnWidth,
-                      onCommit: columnWidths.commitWidths,
-                      onKeyboardResize: columnWidths.adjustByKeyboard,
-                    }}
-                  />
+                  {isAccessoryVariant ? (
+                    <>
+                      {sortableHeader('name', nameColumnLabel)}
+                      {sortableHeader('size', 'Tamanho')}
+                      {sortableHeader('variant', 'Variante')}
+                      {sortableHeader('minimum_stock', 'Estoque mínimo')}
+                      {sortableHeader('current_stock', currentStockColumnLabel)}
+                      {sortableHeader('unit_cost', costColumnLabel)}
+                    </>
+                  ) : (
+                    <>
+                      {sortableHeader('name', nameColumnLabel)}
+                      {sortableHeader('size', 'Tamanho')}
+                      {sortableHeader('variant', 'Variante')}
+                      {sortableHeader('unit_cost', costColumnLabel)}
+                      {sortableHeader('minimum_stock', 'Estoque mínimo')}
+                      {sortableHeader('current_stock', currentStockColumnLabel)}
+                      {sortableHeader('is_active', 'Ativo')}
+                    </>
+                  )}
                   <ResizableTableHead
                     columnId="actions"
                     columnLabel="Ações"
@@ -524,6 +526,37 @@ function InventoryAreaPanel({
                   const sizeText = formatSize(item.size)
                   const costText = formatCost(item.unit_cost)
                   const stockLevel = getStockLevel(item.current_stock, item.minimum_stock)
+
+                  const nameCell = (
+                    <TableCell className="truncate" title={item.name}>
+                      {item.name}
+                    </TableCell>
+                  )
+                  const sizeCell = (
+                    <TableCell className="truncate" title={sizeText}>
+                      {sizeText}
+                    </TableCell>
+                  )
+                  const variantCell = (
+                    <TableCell className="truncate" title={item.variant ?? undefined}>
+                      {item.variant ?? '—'}
+                    </TableCell>
+                  )
+                  const costCell = (
+                    <TableCell className="truncate" title={costText}>
+                      {costText}
+                    </TableCell>
+                  )
+                  const minimumStockCell = <TableCell>{formatMinimumStock(item.minimum_stock)}</TableCell>
+                  const currentStockCell = (
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <span className="tabular-nums">{item.current_stock}</span>
+                        <StockLevelBadge level={stockLevel} />
+                      </div>
+                    </TableCell>
+                  )
+
                   return (
                     <TableRow
                       key={item.id}
@@ -531,84 +564,143 @@ function InventoryAreaPanel({
                       // em Clientes/Produtos/Empresas/Pedidos.
                       className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft"
                     >
-                      <TableCell className="truncate" title={item.name}>
-                        {item.name}
-                      </TableCell>
-                      <TableCell className="truncate" title={sizeText}>
-                        {sizeText}
-                      </TableCell>
-                      <TableCell className="truncate" title={item.variant ?? undefined}>
-                        {item.variant ?? '—'}
-                      </TableCell>
-                      <TableCell className="truncate" title={costText}>
-                        {costText}
-                      </TableCell>
-                      <TableCell>{formatMinimumStock(item.minimum_stock)}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className="tabular-nums">{item.current_stock}</span>
-                          <StockLevelBadge level={stockLevel} />
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Switch
-                          checked={item.is_active}
-                          disabled={pendingToggleId === item.id}
-                          onCheckedChange={() => onToggleActive(item)}
-                          aria-label={`${item.is_active ? 'Desativar' : 'Ativar'} ${itemNounSingular} ${item.name}`}
-                          className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        {/* flex-nowrap + shrink-0 (mesmo padrão de
-                            OrdersPage.tsx/ProductsPage.tsx): a coluna Ações
-                            nunca deve quebrar os 3 botões em 2 linhas, mesmo
-                            no menor arraste possível — minWidth de "actions"
-                            (300px, ver INVENTORY_COLUMN_SPECS) garante espaço
-                            suficiente. */}
-                        <div className="flex flex-nowrap items-center gap-1.5">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => onEditItem(item)}
-                            className={cn(
-                              'shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
-                              TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
-                            )}
-                          >
-                            Editar
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => onManageStock(item)}
-                            aria-label={`Movimentar estoque — ${itemNounSingular} ${item.name}`}
-                            className={cn(
-                              'shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
-                              TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
-                            )}
-                          >
-                            Movimentar estoque
-                          </Button>
-                          {/* variant="destructive" é intencionalmente sutil
-                              (bg-destructive/10, não um vermelho sólido) —
-                              não compete visualmente com "Editar"
-                              (brand-primary) nem com o botão primário "Novo
-                              X" da barra acima. aria-label sobrepõe o texto
-                              visível "Excluir" com o nome completo do item,
-                              mesmo idioma já usado no aria-label do Switch
-                              acima. */}
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => onDeleteItem(item)}
-                            aria-label={`Excluir ${itemNounSingular} ${item.name}`}
-                            className={cn('shrink-0', TABLE_COMPACT_ACTION_TEXT_CLASSNAME)}
-                          >
-                            Excluir
-                          </Button>
-                        </div>
-                      </TableCell>
+                      {isAccessoryVariant ? (
+                        <>
+                          {nameCell}
+                          {sizeCell}
+                          {variantCell}
+                          {minimumStockCell}
+                          {currentStockCell}
+                          {costCell}
+                          <TableCell>
+                            {/* "Ações" compacta de Acessórios (2026-09-06):
+                                "Ajuste" (texto) + "Histórico" (só ícone) +
+                                menu de três pontos. Nunca "Movimentar
+                                estoque"/"Gerenciar". flex-nowrap + shrink-0
+                                impedem quebra em 2 linhas. */}
+                            <div className="flex flex-nowrap items-center gap-1.5">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => onAdjustStock?.(item)}
+                                className={cn(
+                                  'shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
+                                  TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+                                )}
+                              >
+                                Ajuste
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="icon-sm"
+                                onClick={() => onOpenHistory?.(item)}
+                                aria-label="Histórico"
+                                title="Histórico"
+                                className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                              >
+                                <HistoryIcon className="size-4" aria-hidden="true" />
+                              </Button>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger
+                                  aria-label={`Mais ações — ${itemNounSingular} ${item.name}`}
+                                  render={
+                                    <Button
+                                      variant="outline"
+                                      size="icon-sm"
+                                      className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0"
+                                    />
+                                  }
+                                >
+                                  <EllipsisIcon className="size-4" aria-hidden="true" />
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent>
+                                  <DropdownMenuItem onClick={() => onEditItem(item)}>Editar</DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    disabled={pendingToggleId === item.id}
+                                    onClick={() => onToggleActive(item)}
+                                  >
+                                    {item.is_active ? 'Desativar' : 'Ativar'}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => onDeleteItem(item)}
+                                    className="text-destructive data-highlighted:text-destructive"
+                                  >
+                                    Excluir
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
+                          </TableCell>
+                        </>
+                      ) : (
+                        <>
+                          {nameCell}
+                          {sizeCell}
+                          {variantCell}
+                          {costCell}
+                          {minimumStockCell}
+                          {currentStockCell}
+                          <TableCell>
+                            <Switch
+                              checked={item.is_active}
+                              disabled={pendingToggleId === item.id}
+                              onCheckedChange={() => onToggleActive(item)}
+                              aria-label={`${item.is_active ? 'Desativar' : 'Ativar'} ${itemNounSingular} ${item.name}`}
+                              className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            {/* flex-nowrap + shrink-0 (mesmo padrão de
+                                OrdersPage.tsx/ProductsPage.tsx): a coluna Ações
+                                nunca deve quebrar os 3 botões em 2 linhas, mesmo
+                                no menor arraste possível — minWidth de "actions"
+                                (300px, ver INVENTORY_COLUMN_SPECS) garante espaço
+                                suficiente. */}
+                            <div className="flex flex-nowrap items-center gap-1.5">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => onEditItem(item)}
+                                className={cn(
+                                  'shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
+                                  TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+                                )}
+                              >
+                                Editar
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => onManageStock?.(item)}
+                                aria-label={`Movimentar estoque — ${itemNounSingular} ${item.name}`}
+                                className={cn(
+                                  'shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
+                                  TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
+                                )}
+                              >
+                                Movimentar estoque
+                              </Button>
+                              {/* variant="destructive" é intencionalmente sutil
+                                  (bg-destructive/10, não um vermelho sólido) —
+                                  não compete visualmente com "Editar"
+                                  (brand-primary) nem com o botão primário "Novo
+                                  X" da barra acima. aria-label sobrepõe o texto
+                                  visível "Excluir" com o nome completo do item,
+                                  mesmo idioma já usado no aria-label do Switch
+                                  acima. */}
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => onDeleteItem(item)}
+                                aria-label={`Excluir ${itemNounSingular} ${item.name}`}
+                                className={cn('shrink-0', TABLE_COMPACT_ACTION_TEXT_CLASSNAME)}
+                              >
+                                Excluir
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </>
+                      )}
                     </TableRow>
                   )
                 })}
@@ -677,11 +769,12 @@ function AccessoriesInventoryPage() {
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  // Movimentação de estoque (Módulo 3, Incremento 2): estado próprio,
-  // independente de criação/edição/ativação/exclusão — mesmo padrão dos
-  // demais diálogos desta página.
-  const [managingItem, setManagingItem] = useState<InventoryItem | null>(null)
-  const [isManageStockDialogOpen, setIsManageStockDialogOpen] = useState(false)
+  // Ajuste por quantidade absoluta / Histórico (2026-09-06): dois diálogos
+  // próprios, independentes dos demais — substituem o antigo "Movimentar
+  // estoque" (StockMovementPanel) só em Acessórios. Embalagens continua com
+  // o painel de movimentação completo.
+  const [adjustingItem, setAdjustingItem] = useState<InventoryItem | null>(null)
+  const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null)
 
   function openCreateDialog() {
     setCreateError(null)
@@ -796,11 +889,6 @@ function AccessoriesInventoryPage() {
     }
   }
 
-  function openManageStockDialog(item: InventoryItem) {
-    setManagingItem(item)
-    setIsManageStockDialogOpen(true)
-  }
-
   return (
     <InventoryPageShell
       area="acessorios"
@@ -810,6 +898,7 @@ function AccessoriesInventoryPage() {
     >
       <InventoryAreaPanel
         tableId="inventory-accessories"
+        variant="accessory"
         items={accessories}
         isLoading={isLoading}
         error={error}
@@ -823,7 +912,8 @@ function AccessoriesInventoryPage() {
         listboxAriaLabel="Sugestões de acessório"
         showStatusFilter={false}
         nameColumnLabel="Acessório"
-        costColumnLabel="Custo/un."
+        costColumnLabel="Custo unitário"
+        currentStockColumnLabel="Disponível"
         createButtonLabel="Novo acessório"
         onOpenCreateDialog={openCreateDialog}
         onEditItem={openEditDialog}
@@ -831,7 +921,8 @@ function AccessoriesInventoryPage() {
         onToggleActive={openToggleDialog}
         pendingToggleId={pendingToggleId}
         onDeleteItem={openDeleteDialog}
-        onManageStock={openManageStockDialog}
+        onAdjustStock={setAdjustingItem}
+        onOpenHistory={setHistoryItem}
       />
 
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
@@ -951,29 +1042,33 @@ function AccessoriesInventoryPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isManageStockDialogOpen} onOpenChange={setIsManageStockDialogOpen}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Movimentar estoque</DialogTitle>
-            <DialogDescription>{managingItem?.name}</DialogDescription>
-          </DialogHeader>
-          {managingItem && (
-            <StockMovementPanel
-              key={managingItem.id}
-              itemType="ACCESSORY"
-              itemId={managingItem.id}
-              itemName={managingItem.name}
-              itemCategoryLabel="Acessório"
-              currentStock={managingItem.current_stock}
-              minimumStock={managingItem.minimum_stock}
-              isActive={managingItem.is_active}
-              onStockChanged={(newStock) => setLocalStock(managingItem.id, newStock)}
-              onSuccess={() => setIsManageStockDialogOpen(false)}
-              onClose={() => setIsManageStockDialogOpen(false)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      <AccessoryStockAdjustDialog
+        item={
+          adjustingItem
+            ? {
+                id: adjustingItem.id,
+                name: adjustingItem.name,
+                current_stock: adjustingItem.current_stock,
+              }
+            : null
+        }
+        onClose={() => setAdjustingItem(null)}
+        onAdjusted={(accessoryId, newStock) => setLocalStock(accessoryId, newStock)}
+      />
+
+      <AccessoryHistoryDialog
+        item={
+          historyItem
+            ? {
+                id: historyItem.id,
+                name: historyItem.name,
+                current_stock: historyItem.current_stock,
+                minimum_stock: historyItem.minimum_stock,
+              }
+            : null
+        }
+        onClose={() => setHistoryItem(null)}
+      />
     </InventoryPageShell>
   )
 }
