@@ -275,7 +275,7 @@ describe('InventoryPage', () => {
       'Estoque mínimo',
       'Disponível',
       'Custo unitário',
-      '', // "Ações" — o <th> não tem texto visível próprio (só a alça)
+      'Ações', // Acessórios: "Ações" agora é VISÍVEL no cabeçalho (não sr-only)
     ])
     expect(screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })).toBeInTheDocument()
 
@@ -1902,12 +1902,13 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     const row = within(getTableBody())
       .getByText('Ímã 6x2')
       .closest('tr') as HTMLElement
-    await user.click(within(row).getByRole('button', { name: 'Ajuste' }))
+    await user.click(within(row).getByRole('button', { name: 'Ajustar quantidade' }))
 
-    const dialog = screen.getByRole('dialog', { name: 'Ajustar quantidade' })
-    expect(within(dialog).getAllByText('Ímã 6x2').length).toBeGreaterThanOrEqual(1)
-    expect(within(dialog).getByText('Quantidade atual')).toBeInTheDocument()
-    expect(within(dialog).getByText('25')).toBeInTheDocument()
+    const dialog = screen.getByRole('dialog', { name: 'Ajustar Quantidade' })
+    // o nome do acessório aparece UMA ÚNICA vez (em destaque no corpo, nunca
+    // também no título/descrição do diálogo)
+    expect(within(dialog).getAllByText('Ímã 6x2')).toHaveLength(1)
+    expect(within(dialog).getByText('Quantidade atual: 25')).toBeInTheDocument()
     // nunca a quantidade do OUTRO acessório
     expect(within(dialog).queryByText('Parafuso')).not.toBeInTheDocument()
   })
@@ -1921,7 +1922,7 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10 })], { setLocalStock })
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
     await user.type(screen.getByLabelText('Nova quantidade'), '15')
     await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
 
@@ -1931,7 +1932,7 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
       quantity: 5,
       reason: 'Ajuste de saldo por contagem',
     })
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Ajustar quantidade' })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Ajustar Quantidade' })).not.toBeInTheDocument())
     expect(toastMock.success).toHaveBeenCalledWith('Ajuste registrado.')
     expect(setLocalStock).toHaveBeenCalledWith('a1', 15)
   })
@@ -1947,7 +1948,7 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 25 })], { setLocalStock })
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
     await user.type(screen.getByLabelText('Nova quantidade'), '18')
     await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
 
@@ -1966,7 +1967,7 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 25 })])
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
     await user.type(screen.getByLabelText('Nova quantidade'), '0')
     await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
 
@@ -1980,13 +1981,13 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10 })])
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
     await user.type(screen.getByLabelText('Nova quantidade'), '-3')
     await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
 
     expect(register).not.toHaveBeenCalled()
     expect(getAccessoryCurrentStockMock).not.toHaveBeenCalled()
-    expect(screen.getByRole('dialog', { name: 'Ajustar quantidade' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Ajustar Quantidade' })).toBeInTheDocument()
   })
 
   it('recusa valor fracionado — nenhum register', async () => {
@@ -1996,7 +1997,7 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10 })])
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
     await user.type(screen.getByLabelText('Nova quantidade'), '10,5')
     await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
 
@@ -2011,7 +2012,7 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10 })])
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
     await user.type(screen.getByLabelText('Nova quantidade'), '10')
     await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
 
@@ -2019,7 +2020,7 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     expect(register).not.toHaveBeenCalled()
     expect(await screen.findByText(/nenhum ajuste foi registrado/i)).toBeInTheDocument()
     expect(toastMock.success).not.toHaveBeenCalled()
-    expect(screen.getByRole('dialog', { name: 'Ajustar quantidade' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Ajustar Quantidade' })).toBeInTheDocument()
   })
 
   it('observação vazia envia o motivo padrão "Ajuste de saldo por contagem"; observação preenchida usa o texto do usuário', async () => {
@@ -2030,9 +2031,9 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10 })])
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
     await user.type(screen.getByLabelText('Nova quantidade'), '12')
-    await user.type(screen.getByLabelText('Observação (opcional)'), 'contagem do dia 06')
+    await user.type(screen.getByLabelText('Observação'), 'contagem do dia 06')
     await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
 
     await waitFor(() => expect(register).toHaveBeenCalledWith(expect.objectContaining({ reason: 'contagem do dia 06' })))
@@ -2049,7 +2050,7 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 25 })])
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
     await user.type(screen.getByLabelText('Nova quantidade'), '18')
     await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
 
@@ -2071,7 +2072,7 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 25 })], { setLocalStock })
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
     await user.type(screen.getByLabelText('Nova quantidade'), '18')
     await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
 
@@ -2081,7 +2082,7 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     expect(setLocalStock).toHaveBeenCalledWith('a1', 20)
     expect(await screen.findByText(/alterado por outra pessoa/i)).toBeInTheDocument()
     // a janela permanece aberta para o usuário revisar
-    expect(screen.getByRole('dialog', { name: 'Ajustar quantidade' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Ajustar Quantidade' })).toBeInTheDocument()
   })
 
   it('bloqueia envio duplicado durante o salvamento', async () => {
@@ -2098,7 +2099,7 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10 })])
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
     await user.type(screen.getByLabelText('Nova quantidade'), '15')
     await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
 
@@ -2108,7 +2109,7 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     expect(register).toHaveBeenCalledTimes(1)
 
     resolveRegister(stockMovementRow({ balance_before: 10, balance_after: 15, quantity_delta: 5 }))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Ajustar quantidade' })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Ajustar Quantidade' })).not.toBeInTheDocument())
   })
 
   it('o ajuste NUNCA altera o Custo unitário exibido na listagem', async () => {
@@ -2122,10 +2123,10 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
 
     expect(within(getTableBody()).getByText(formatBRL(12.5))).toBeInTheDocument()
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
     await user.type(screen.getByLabelText('Nova quantidade'), '15')
     await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Ajustar quantidade' })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Ajustar Quantidade' })).not.toBeInTheDocument())
 
     // custo intacto (nenhuma chamada a update/registro tocou unit_cost)
     expect(within(getTableBody()).getByText(formatBRL(12.5))).toBeInTheDocument()
@@ -2138,13 +2139,67 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 10 })])
     renderPage('acessorios')
 
-    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajuste' }))
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
     await user.type(screen.getByLabelText('Nova quantidade'), '15')
     await user.click(screen.getByRole('button', { name: 'Cancelar' }))
 
-    expect(screen.queryByRole('dialog', { name: 'Ajustar quantidade' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Ajustar Quantidade' })).not.toBeInTheDocument()
     expect(register).not.toHaveBeenCalled()
     expect(getAccessoryCurrentStockMock).not.toHaveBeenCalled()
+  })
+
+  it('interface refinada (2026-09-06): cabeçalho "Ações" visível, botão de ajuste só ícone com tooltip/aria-label, janela sem nome duplicado', async () => {
+    const user = userEvent.setup()
+    getAccessoryCurrentStockMock.mockResolvedValue(0)
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', current_stock: 0 })])
+    renderPage('acessorios')
+
+    // 1. "Ações" aparece visivelmente no cabeçalho da listagem
+    expect(within(getTable()).getByText('Ações')).toBeInTheDocument()
+
+    // 2. o texto "Ajuste" não aparece mais como botão na listagem
+    expect(within(getTable()).queryByRole('button', { name: 'Ajuste' })).not.toBeInTheDocument()
+    expect(within(getTable()).queryByText('Ajuste')).not.toBeInTheDocument()
+
+    // 3 + 4. o botão é só ícone, com tooltip e aria-label "Ajustar quantidade";
+    //        12. Histórico e menu de três pontos seguem inalterados na linha
+    const adjustButton = within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' })
+    expect(adjustButton).toHaveAttribute('title', 'Ajustar quantidade')
+    expect(adjustButton).toHaveAttribute('aria-label', 'Ajustar quantidade')
+    expect(adjustButton).toHaveTextContent('')
+    expect(within(getTableBody()).getByRole('button', { name: 'Histórico' })).toBeInTheDocument()
+    expect(
+      within(getTableBody()).getByRole('button', { name: 'Mais ações — acessório Ímã 6x2' }),
+    ).toBeInTheDocument()
+
+    // 5 + 6. abre o acessório correto; título exatamente "Ajustar Quantidade"
+    // (a partir daqui a listagem fica inerte sob o diálogo — só asserções no dialog)
+    await user.click(adjustButton)
+    const dialog = screen.getByRole('dialog', { name: 'Ajustar Quantidade' })
+    expect(within(dialog).getByRole('heading', { name: 'Ajustar Quantidade' })).toBeInTheDocument()
+
+    // 7. o nome do acessório aparece uma única vez
+    expect(within(dialog).getAllByText('Ímã 6x2')).toHaveLength(1)
+
+    // 8. "Quantidade atual: 0" é exibido
+    expect(within(dialog).getByText('Quantidade atual: 0')).toBeInTheDocument()
+
+    // 9 + 10 + 11. Nova quantidade, Observação, Cancelar e Salvar ajuste seguem presentes
+    expect(within(dialog).getByLabelText('Nova quantidade')).toBeInTheDocument()
+    expect(within(dialog).getByLabelText('Observação')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Cancelar' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Salvar ajuste' })).toBeInTheDocument()
+  })
+
+  it('interface refinada (2026-09-06): Embalagens não sofreu alteração — cabeçalho de Ações sem texto visível e sem botão de ajuste', () => {
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M' })])
+    renderPage('embalagens')
+
+    expect(within(getTable()).queryByText('Ações')).not.toBeInTheDocument()
+    expect(screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })).toBeInTheDocument()
+    expect(within(getTable()).queryByRole('button', { name: 'Ajustar quantidade' })).not.toBeInTheDocument()
+    // o fluxo antigo "Movimentar estoque" continua intacto em Embalagens
+    expect(within(getTableBody()).getByRole('button', { name: 'Movimentar estoque — embalagem Caixa M' })).toBeInTheDocument()
   })
 })
 
@@ -2456,7 +2511,7 @@ describe('InventoryPage — colunas redimensionáveis e persistidas (padronizaç
     mockAccessories([accessoryFixture()])
     renderPage('acessorios')
 
-    const adjustButton = within(getTable()).getByRole('button', { name: 'Ajuste' })
+    const adjustButton = within(getTable()).getByRole('button', { name: 'Ajustar quantidade' })
     const actionsCell = adjustButton.closest('div')
     expect(actionsCell).toHaveClass('flex-nowrap')
     expect(actionsCell).not.toHaveClass('flex-wrap')

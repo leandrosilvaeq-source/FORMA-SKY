@@ -173,15 +173,11 @@ function AccessoryStockAdjustForm({
 
   return (
     <form className="flex flex-col gap-4" onSubmit={(event) => void handleSubmit(event)}>
-      <div className="flex flex-col gap-0.5">
-        <p className="text-muted-foreground text-xs">Acessório</p>
-        <p className="text-sm font-medium">{item.name}</p>
-      </div>
+      {/* Nome do acessório em destaque, logo abaixo do título — aparece uma
+          ÚNICA vez (nunca também no título/descrição do diálogo). */}
+      <p className="text-base font-semibold">{item.name}</p>
 
-      <div className="flex flex-col gap-0.5">
-        <p className="text-muted-foreground text-xs">Quantidade atual</p>
-        <p className="text-sm font-medium tabular-nums">{currentStock}</p>
-      </div>
+      <p className="text-muted-foreground text-sm tabular-nums">Quantidade atual: {currentStock}</p>
 
       <div className="flex flex-col gap-2">
         <Label htmlFor="accessory-stock-adjust-new-quantity">Nova quantidade</Label>
@@ -202,7 +198,10 @@ function AccessoryStockAdjustForm({
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="accessory-stock-adjust-observation">Observação (opcional)</Label>
+        {/* Rótulo "Observação"; segue sendo opcional (sem validação) — sem
+            observação, o backend recebe o motivo padrão
+            "Ajuste de saldo por contagem". */}
+        <Label htmlFor="accessory-stock-adjust-observation">Observação</Label>
         <Textarea
           id="accessory-stock-adjust-observation"
           value={observation}
@@ -256,8 +255,12 @@ export function AccessoryStockAdjustDialog({ item, onClose, onAdjusted }: Access
     >
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>Ajustar quantidade</DialogTitle>
-          <DialogDescription>{item?.name}</DialogDescription>
+          <DialogTitle>Ajustar Quantidade</DialogTitle>
+          {/* Descrição só para leitores de tela — o nome do acessório NÃO
+              entra aqui (aparece uma única vez, em destaque, no corpo). */}
+          <DialogDescription className="sr-only">
+            Informe a nova quantidade total do acessório.
+          </DialogDescription>
         </DialogHeader>
         {item && (
           <AccessoryStockAdjustForm key={item.id} item={item} onClose={onClose} onAdjusted={onAdjusted} />

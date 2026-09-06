@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { EllipsisIcon, HistoryIcon } from 'lucide-react'
+import { EllipsisIcon, HistoryIcon, SlidersHorizontalIcon } from 'lucide-react'
 import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
 import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
@@ -518,7 +518,13 @@ function InventoryAreaPanel({
                       onCommit: columnWidths.commitWidths,
                       onKeyboardResize: columnWidths.adjustByKeyboard,
                     }}
-                  />
+                  >
+                    {/* Acessórios (2026-09-06): "Ações" VISÍVEL no cabeçalho
+                        (TableHead já é text-left, coerente com os botões da
+                        coluna). Embalagens continua sem texto visível (só o
+                        nome acessível pela alça), inalterada. */}
+                    {isAccessoryVariant ? 'Ações' : null}
+                  </ResizableTableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -574,21 +580,22 @@ function InventoryAreaPanel({
                           {costCell}
                           <TableCell>
                             {/* "Ações" compacta de Acessórios (2026-09-06):
-                                "Ajuste" (texto) + "Histórico" (só ícone) +
-                                menu de três pontos. Nunca "Movimentar
-                                estoque"/"Gerenciar". flex-nowrap + shrink-0
-                                impedem quebra em 2 linhas. */}
+                                três botões-ícone de mesmo tamanho/formato —
+                                "Ajustar quantidade" (SlidersHorizontal) +
+                                "Histórico" + menu de três pontos, nesta
+                                ordem. Nunca "Movimentar estoque"/"Gerenciar".
+                                flex-nowrap + shrink-0 impedem quebra em 2
+                                linhas. */}
                             <div className="flex flex-nowrap items-center gap-1.5">
                               <Button
                                 variant="outline"
-                                size="sm"
+                                size="icon-sm"
                                 onClick={() => onAdjustStock?.(item)}
-                                className={cn(
-                                  'shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
-                                  TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
-                                )}
+                                aria-label="Ajustar quantidade"
+                                title="Ajustar quantidade"
+                                className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
                               >
-                                Ajuste
+                                <SlidersHorizontalIcon className="size-4" aria-hidden="true" />
                               </Button>
                               <Button
                                 variant="outline"
