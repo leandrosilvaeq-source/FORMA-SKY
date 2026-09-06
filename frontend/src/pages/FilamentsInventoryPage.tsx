@@ -647,15 +647,9 @@ export function FilamentsInventoryPage() {
       }}
     >
       <div className="mt-4 flex flex-col gap-3">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <input
-            type="search"
-            aria-label="Buscar tipos de filamento"
-            placeholder="Buscar por material, linha, cor ou fabricante"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            className="border-input focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 h-9 max-w-sm rounded-md border bg-white px-3 text-sm outline-none focus-visible:ring-2"
-          />
+        {/* "Novo Filamento" fica em sua própria linha (à direita no
+            desktop) — a linha de baixo agrupa Busca | Material | Linha | Cor. */}
+        <div className="flex justify-end">
           <Button
             onClick={() => {
               setCreateError(null)
@@ -663,20 +657,36 @@ export function FilamentsInventoryPage() {
             }}
             className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark shrink-0"
           >
-            Cadastrar novo tipo
+            Novo Filamento
           </Button>
         </div>
 
-        {/* Material | Linha | Cor na MESMA linha no desktop largo — Material e
-            Cor com a largura do próprio conteúdo (shrink-0), Linha ocupando
-            o resto do espaço (flex-1 + min-w-0, para os botões internos
-            quebrarem DENTRO da própria área em vez de esticar a linha e
-            gerar rolagem horizontal). `md:flex-wrap` deixa a linha quebrar
-            em duas em telas intermediárias; abaixo de `md` tudo empilha
-            (flex-col). `md:items-start` alinha os rótulos dos três grupos no
-            mesmo topo. Sem nenhuma largura rígida — só shrink/grow do flex. */}
+        {/* Busca | Material | Linha | Cor na MESMA linha no desktop largo —
+            Busca, Material e Cor com a largura do próprio conteúdo
+            (shrink-0), Linha ocupando o resto do espaço (flex-1 + min-w-0,
+            para os botões internos quebrarem DENTRO da própria área em vez
+            de esticar a linha e gerar rolagem horizontal). `md:flex-wrap`
+            deixa a linha quebrar em duas em telas intermediárias; abaixo de
+            `md` tudo empilha (flex-col). `md:items-start` alinha os quatro
+            rótulos no mesmo topo. Sem nenhuma largura rígida — só
+            shrink/grow do flex. */}
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-start md:gap-4">
+            <div className="flex flex-col items-start gap-1.5 md:shrink-0">
+              {/* O campo de busca não tinha rótulo visível — ganhou um
+                  ("Buscar") para alinhar com Material/Linha/Cor no topo. O
+                  `aria-label` descritivo continua sendo o nome acessível. */}
+              <Label htmlFor="filament-type-search">Buscar</Label>
+              <input
+                id="filament-type-search"
+                type="search"
+                aria-label="Buscar tipos de filamento"
+                placeholder="Buscar por material, linha, cor ou fabricante"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                className="border-input focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 h-9 w-full rounded-md border bg-white px-3 text-sm outline-none focus-visible:ring-2 md:w-64"
+              />
+            </div>
             <div className="md:shrink-0">
               <SingleSelectActionFilter
                 label="Material"
@@ -697,7 +707,7 @@ export function FilamentsInventoryPage() {
             </div>
             <div className="md:shrink-0">
               {/* Cor continua o mesmo Popover multisseleção — só ganhou um
-                  rótulo próprio, para alinhar com Material/Linha no topo. */}
+                  rótulo próprio, para alinhar com Busca/Material/Linha no topo. */}
               <div className="flex flex-col items-start gap-1.5">
                 <Label>Cor</Label>
                 <MultiSelectFilterButton

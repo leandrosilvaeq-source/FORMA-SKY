@@ -217,7 +217,20 @@ interface InventoryAreaPanelProps {
   searchAriaLabel: string
   listboxId: string
   listboxAriaLabel: string
-  statusFilterAriaLabel: string
+  // Acessórios (2026-09-06) removeu o filtro visual Todos/Ativos/Inativos —
+  // Embalagens continua com ele. Quando `showStatusFilter` é false o
+  // <StatusFilter> não é renderizado e a listagem mostra sempre todos os
+  // itens (statusFilter permanece 'all', nunca deixa de exibir inativos).
+  // Default true (Embalagens). `statusFilterAriaLabel` só é lido quando o
+  // filtro é exibido.
+  showStatusFilter?: boolean
+  statusFilterAriaLabel?: string
+  // Rótulos das colunas que Acessórios renomeia (2026-09-06): "Nome" ->
+  // "Acessório", "Custo" -> "Custo/un.". Embalagens mantém os padrões.
+  // NUNCA muda a chave de ordenação (column="name"/"unit_cost") nem nada no
+  // banco/API — só o texto do cabeçalho.
+  nameColumnLabel?: string
+  costColumnLabel?: string
   createButtonLabel: string
   onOpenCreateDialog: () => void
   onEditItem: (item: InventoryItem) => void
@@ -259,7 +272,10 @@ function InventoryAreaPanel({
   searchAriaLabel,
   listboxId,
   listboxAriaLabel,
+  showStatusFilter = true,
   statusFilterAriaLabel,
+  nameColumnLabel = 'Nome',
+  costColumnLabel = 'Custo',
   createButtonLabel,
   onOpenCreateDialog,
   onEditItem,
@@ -329,7 +345,13 @@ function InventoryAreaPanel({
             listboxAriaLabel={listboxAriaLabel}
             noResultsText={searchNoSuggestionsText}
           />
-          <StatusFilter value={statusFilter} onChange={setStatusFilter} ariaLabel={statusFilterAriaLabel} />
+          {showStatusFilter && statusFilterAriaLabel && (
+            <StatusFilter
+              value={statusFilter}
+              onChange={setStatusFilter}
+              ariaLabel={statusFilterAriaLabel}
+            />
+          )}
         </div>
         <Button
           onClick={onOpenCreateDialog}
@@ -403,7 +425,7 @@ function InventoryAreaPanel({
                 <TableRow>
                   <SortableColumnHeader
                     column="name"
-                    label="Nome"
+                    label={nameColumnLabel}
                     sort={sort}
                     onSortChange={setSort}
                     resize={{
@@ -439,7 +461,7 @@ function InventoryAreaPanel({
                   />
                   <SortableColumnHeader
                     column="unit_cost"
-                    label="Custo"
+                    label={costColumnLabel}
                     sort={sort}
                     onSortChange={setSort}
                     resize={{
@@ -799,7 +821,9 @@ function AccessoriesInventoryPage() {
         searchAriaLabel="Buscar acessórios"
         listboxId="inventory-accessories-search-listbox"
         listboxAriaLabel="Sugestões de acessório"
-        statusFilterAriaLabel="Filtrar acessórios por status"
+        showStatusFilter={false}
+        nameColumnLabel="Acessório"
+        costColumnLabel="Custo/un."
         createButtonLabel="Novo acessório"
         onOpenCreateDialog={openCreateDialog}
         onEditItem={openEditDialog}

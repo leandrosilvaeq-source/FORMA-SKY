@@ -876,7 +876,7 @@ describe('FilamentsInventoryPage — filtros Material / Linha / Cor', () => {
   })
 })
 
-describe('FilamentsInventoryPage — alinhamento horizontal Material/Linha/Cor (2026-09-05)', () => {
+describe('FilamentsInventoryPage — alinhamento horizontal Busca/Material/Linha/Cor (2026-09-06)', () => {
   beforeEach(() => {
     toastMock.success.mockReset()
     toastMock.error.mockReset()
@@ -899,13 +899,10 @@ describe('FilamentsInventoryPage — alinhamento horizontal Material/Linha/Cor (
     ])
   })
 
-  // Sobe do rótulo "Material" até o container responsivo (o que carrega
-  // `md:flex-row`) — o ancestral comum dos três grupos de filtro.
+  // Sobe do rótulo visível "Buscar" até o container responsivo (o que
+  // carrega `md:flex-row`) — o ancestral comum dos quatro grupos.
   function filtersRow(): HTMLElement {
-    // "Material" também é rótulo de coluna da tabela — pega só o <label> do filtro.
-    let el: HTMLElement | null = screen.getByText('Material', {
-      selector: '[data-slot="label"]',
-    })
+    let el: HTMLElement | null = screen.getByText('Buscar', { selector: '[data-slot="label"]' })
     while (el && !el.className.includes('md:flex-row')) el = el.parentElement
     if (!el) throw new Error('container responsivo dos filtros não encontrado')
     return el
@@ -918,22 +915,44 @@ describe('FilamentsInventoryPage — alinhamento horizontal Material/Linha/Cor (
     return screen.getByRole('radiogroup', { name: 'Filtrar por linha' })
   }
 
-  it('os três grupos ficam no MESMO container, na ordem visual Material, Linha, Cor', () => {
+  it('os quatro grupos ficam no MESMO container, na ordem visual Busca, Material, Linha, Cor', () => {
     renderPage()
     const row = filtersRow()
     const wrappers = Array.from(row.children) as HTMLElement[]
-    expect(wrappers).toHaveLength(3)
-    expect(wrappers[0].querySelector('[data-slot="label"]')?.textContent).toBe('Material')
-    expect(wrappers[1].querySelector('[data-slot="label"]')?.textContent).toBe('Linha')
-    expect(wrappers[2].querySelector('[data-slot="label"]')?.textContent).toBe('Cor')
+    expect(wrappers).toHaveLength(4)
+    expect(wrappers[0].querySelector('[data-slot="label"]')?.textContent).toBe('Buscar')
+    expect(wrappers[1].querySelector('[data-slot="label"]')?.textContent).toBe('Material')
+    expect(wrappers[2].querySelector('[data-slot="label"]')?.textContent).toBe('Linha')
+    expect(wrappers[3].querySelector('[data-slot="label"]')?.textContent).toBe('Cor')
 
-    // e os três controles de fato vivem dentro do container
+    // e os quatro controles de fato vivem dentro do container
+    expect(within(row).getByLabelText('Buscar tipos de filamento')).toBeInTheDocument()
     expect(within(row).getByRole('radiogroup', { name: 'Filtrar por material' })).toBeInTheDocument()
     expect(within(row).getByRole('radiogroup', { name: 'Filtrar por linha' })).toBeInTheDocument()
     expect(within(row).getByRole('button', { name: /^Cor/ })).toBeInTheDocument()
   })
 
-  it('empilha no mobile e vira linha horizontal (com rótulos no topo, podendo quebrar em 2 linhas) no desktop', () => {
+  it('o grupo Cor fica imediatamente depois do grupo Linha', () => {
+    renderPage()
+    const wrappers = Array.from(filtersRow().children) as HTMLElement[]
+    const lineIndex = wrappers.findIndex((w) =>
+      within(w).queryByRole('radiogroup', { name: 'Filtrar por linha' }),
+    )
+    const colorIndex = wrappers.findIndex((w) =>
+      within(w).queryByRole('button', { name: /^Cor/ }),
+    )
+    expect(lineIndex).toBeGreaterThanOrEqual(0)
+    expect(colorIndex).toBe(lineIndex + 1)
+  })
+
+  it('o campo de busca ganhou um rótulo visível ("Buscar") e mantém o nome acessível descritivo', () => {
+    renderPage()
+    expect(screen.getByText('Buscar', { selector: '[data-slot="label"]' })).toBeInTheDocument()
+    const input = screen.getByLabelText('Buscar tipos de filamento')
+    expect(input).toHaveAttribute('type', 'search')
+  })
+
+  it('empilha no mobile e vira linha horizontal (rótulos no topo, podendo quebrar em 2 linhas) no desktop', () => {
     renderPage()
     const row = filtersRow()
     expect(row.className).toContain('flex-col')
@@ -942,22 +961,32 @@ describe('FilamentsInventoryPage — alinhamento horizontal Material/Linha/Cor (
     expect(row.className).toContain('md:items-start')
   })
 
-  it('Linha ocupa o espaço restante (md:flex-1 + min-w-0); Material e Cor ficam com a largura do conteúdo (md:shrink-0)', () => {
+  it('Linha ocupa o espaço restante (md:flex-1 + min-w-0); Busca, Material e Cor ficam com a largura do conteúdo (md:shrink-0)', () => {
     renderPage()
-    const [materialWrap, lineWrap, colorWrap] = Array.from(filtersRow().children) as HTMLElement[]
+    const [buscaWrap, materialWrap, lineWrap, colorWrap] = Array.from(
+      filtersRow().children,
+    ) as HTMLElement[]
+    expect(buscaWrap.className).toContain('md:shrink-0')
     expect(materialWrap.className).toContain('md:shrink-0')
     expect(lineWrap.className).toContain('md:flex-1')
     expect(lineWrap.className).toContain('min-w-0')
     expect(colorWrap.className).toContain('md:shrink-0')
   })
 
-  it('o container dos filtros não cria rolagem horizontal própria (nem nenhum ancestral até o main)', () => {
+  it('o container dos filtros não cria rolagem horizontal própria (nem nenhum ancestral até o body)', () => {
     renderPage()
     let el: HTMLElement | null = filtersRow()
     while (el && el.tagName !== 'BODY') {
       expect(el.className).not.toMatch(/overflow-x-(auto|scroll)/)
       el = el.parentElement
     }
+  })
+
+  it('a busca continua funcionando após a reorganização', async () => {
+    renderPage()
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('Buscar tipos de filamento'), 'petg')
+    expect(getVisibleGroupLabels()).toEqual(['PETG/Mate/Azul'])
   })
 
   it('Cor continua um Popover multisseleção (não virou action buttons) e preserva busca/seleção/limpeza', async () => {
@@ -968,23 +997,22 @@ describe('FilamentsInventoryPage — alinhamento horizontal Material/Linha/Cor (
     expect(screen.queryByRole('radiogroup', { name: 'Filtrar por cor' })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /^Cor/ }))
-    // opções vêm dos tipos carregados, seleção por checkbox
     await user.click(await screen.findByRole('checkbox', { name: 'Preto' }))
     await user.click(screen.getByRole('heading', { level: 1 }))
     expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/Preto'])
 
-    // limpeza pelo próprio Popover
     await user.click(screen.getByRole('button', { name: /^Cor \(1\)/ }))
     await user.click(screen.getByRole('button', { name: 'Limpar' }))
     await user.click(screen.getByRole('heading', { level: 1 }))
     expect(getVisibleGroupLabels()).toHaveLength(2)
   })
 
-  it('Material, Linha e Cor seguem funcionando e combinam em AND após a reorganização', async () => {
+  it('Busca + Material + Linha + Cor combinam em AND após a reorganização', async () => {
     mockTypes([
       typeFixture({ filament_type_id: '1', material: 'PLA', line: 'Sólida', commercial_color: 'Preto' }),
       typeFixture({ filament_type_id: '2', material: 'PLA', line: 'Matte', commercial_color: 'Preto' }),
       typeFixture({ filament_type_id: '3', material: 'PETG', line: 'Sólida', commercial_color: 'Preto' }),
+      typeFixture({ filament_type_id: '4', material: 'PLA', line: 'Sólida', commercial_color: 'Azul' }),
     ])
     renderPage()
     const user = userEvent.setup()
@@ -994,8 +1022,14 @@ describe('FilamentsInventoryPage — alinhamento horizontal Material/Linha/Cor (
     await user.click(screen.getByRole('button', { name: /^Cor/ }))
     await user.click(await screen.findByRole('checkbox', { name: 'Preto' }))
     await user.click(screen.getByRole('heading', { level: 1 }))
-
     expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/Preto'])
+
+    // + a busca, em AND com os três filtros: "azul" não bate com o único
+    // grupo restante -> estado vazio.
+    await user.type(screen.getByLabelText('Buscar tipos de filamento'), 'azul')
+    expect(
+      screen.getByText('Nenhum resultado para a busca e os filtros atuais.'),
+    ).toBeInTheDocument()
   })
 
   it('"Limpar filtros" restaura Material = Todos, Linha = Todos e Cor = Todas', async () => {
@@ -1029,14 +1063,13 @@ describe('FilamentsInventoryPage — alinhamento horizontal Material/Linha/Cor (
     renderPage()
     const user = userEvent.setup()
 
-    // a própria coluna Linha já mostra o rótulo consolidado
     expect(getVisibleGroupLabels().sort()).toEqual(['PLA/Mate/Azul', 'PLA/Sólido/Preto'])
 
     await user.click(within(lineFilterGroup()).getByRole('radio', { name: 'Sólido' }))
     expect(getVisibleGroupLabels()).toEqual(['PLA/Sólido/Preto'])
   })
 
-  it('os demais controles da tela continuam presentes (busca, Situação, faixa de rolos, Cadastrar novo tipo)', () => {
+  it('os demais controles da tela continuam presentes (busca, Situação, faixa de rolos, Novo Filamento)', () => {
     renderPage()
     expect(screen.getByLabelText('Buscar tipos de filamento')).toBeInTheDocument()
     expect(
@@ -1045,7 +1078,7 @@ describe('FilamentsInventoryPage — alinhamento horizontal Material/Linha/Cor (
     expect(
       within(screen.getByRole('table')).getByRole('columnheader', { name: /Rolos disponíveis/ }),
     ).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Cadastrar novo tipo' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Novo Filamento' })).toBeInTheDocument()
   })
 })
 
@@ -2468,12 +2501,15 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     expect(screen.getByRole('button', { name: /compras/i })).toBeInTheDocument()
   })
 
-  it('o botão da listagem chama-se "Cadastrar novo tipo" e abre a janela "Novo tipo de filamento"', async () => {
+  it('o botão da listagem chama-se "Novo Filamento" (nunca mais "Cadastrar novo tipo") e abre a MESMA janela "Novo tipo de filamento"', async () => {
     mockTypes([])
     renderPage()
     const user = userEvent.setup()
+    expect(screen.queryByRole('button', { name: 'Cadastrar novo tipo' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Novo tipo de filamento' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    const button = screen.getByRole('button', { name: 'Novo Filamento' })
+    await user.click(button)
+    // Mesmo diálogo/título interno de sempre — só o texto do botão mudou.
     expect(screen.getByRole('dialog', { name: 'Novo tipo de filamento' })).toBeInTheDocument()
   })
 
@@ -2481,7 +2517,7 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     mockTypes([])
     renderPage()
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.click(screen.getByRole('button', { name: 'Novo Filamento' }))
     expect(screen.queryByLabelText(/código da cor/i)).not.toBeInTheDocument()
   })
 
@@ -2491,7 +2527,7 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     renderPage()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.click(screen.getByRole('button', { name: 'Novo Filamento' }))
     expect(screen.queryByLabelText(/fabricante/i)).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/fornecedor/i)).not.toBeInTheDocument()
 
@@ -2510,7 +2546,7 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     renderPage()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.click(screen.getByRole('button', { name: 'Novo Filamento' }))
     const lineGroup = screen.getByRole('radiogroup', { name: 'Linha' })
     // Sem campo de texto livre para Linha (só o de Cor, que não muda).
     expect(within(lineGroup).queryByRole('textbox')).not.toBeInTheDocument()
@@ -2532,7 +2568,7 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     renderPage()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.click(screen.getByRole('button', { name: 'Novo Filamento' }))
     const lineGroup = screen.getByRole('radiogroup', { name: 'Linha' })
     await user.click(within(lineGroup).getByRole('radio', { name: 'Silk' }))
     expect(within(lineGroup).getByRole('radio', { name: 'Silk' })).toHaveAttribute(
@@ -2561,7 +2597,7 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     renderPage()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.click(screen.getByRole('button', { name: 'Novo Filamento' }))
     await user.click(screen.getByRole('radio', { name: 'PETG' }))
     await user.click(screen.getByRole('radio', { name: 'Matte' }))
     await user.type(screen.getByLabelText('Cor'), 'Vermelho')
@@ -2586,7 +2622,7 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     renderPage()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.click(screen.getByRole('button', { name: 'Novo Filamento' }))
     await user.click(screen.getByRole('radio', { name: 'PLA' }))
     await user.type(screen.getByLabelText('Cor'), 'Preto')
     await user.click(screen.getByRole('button', { name: /^salvar$/i }))
@@ -2702,7 +2738,7 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     renderPage()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.click(screen.getByRole('button', { name: 'Novo Filamento' }))
     const lineGroup = screen.getByRole('radiogroup', { name: 'Linha' })
     expect(within(lineGroup).getByRole('radio', { name: 'Tricolor' })).toBeInTheDocument()
 
@@ -2728,7 +2764,7 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     renderPage()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.click(screen.getByRole('button', { name: 'Novo Filamento' }))
     await user.type(screen.getByLabelText('Cor'), 'do')
 
     expect(await screen.findByRole('option', { name: 'Dourado' })).toBeInTheDocument()
@@ -2744,7 +2780,7 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     renderPage()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.click(screen.getByRole('button', { name: 'Novo Filamento' }))
     await user.type(screen.getByLabelText('Cor'), 'pre')
 
     expect(await screen.findAllByRole('option', { name: 'Preto' })).toHaveLength(1)
@@ -2755,7 +2791,7 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     renderPage()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.click(screen.getByRole('button', { name: 'Novo Filamento' }))
     await user.type(screen.getByLabelText('Cor'), 'AGUA')
 
     expect(await screen.findByRole('option', { name: 'Verde Água' })).toBeInTheDocument()
@@ -2767,7 +2803,7 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     renderPage()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.click(screen.getByRole('button', { name: 'Novo Filamento' }))
     await user.click(screen.getByRole('radio', { name: 'PLA' }))
     await user.click(screen.getByRole('radio', { name: 'Sólida' }))
     await user.type(screen.getByLabelText('Cor'), 'Roxo Fluorescente')
@@ -2783,7 +2819,7 @@ describe('FilamentsInventoryPage — Compras e ausência do código da cor', () 
     renderPage()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Cadastrar novo tipo' }))
+    await user.click(screen.getByRole('button', { name: 'Novo Filamento' }))
     await user.type(screen.getByLabelText('Cor'), 'dou')
     await user.click(await screen.findByRole('option', { name: 'Dourado' }))
 

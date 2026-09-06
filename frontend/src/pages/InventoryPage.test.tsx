@@ -232,13 +232,16 @@ describe('InventoryPage', () => {
     expect(screen.queryByText('Nenhum acessório cadastrado.')).not.toBeInTheDocument()
   })
 
-  it('renderiza as 6 colunas esperadas', () => {
+  it('renderiza as 6 colunas esperadas — com "Acessório" e "Custo/un." nos cabeçalhos renomeados', () => {
     mockAccessories([accessoryFixture()])
     renderPage('acessorios')
 
-    for (const label of ['Nome', 'Tamanho', 'Variante', 'Custo', 'Estoque mínimo', 'Ativo']) {
+    for (const label of ['Acessório', 'Tamanho', 'Variante', 'Custo/un.', 'Estoque mínimo', 'Ativo']) {
       expect(screen.getByRole('button', { name: `Ordenar coluna ${label}` })).toBeInTheDocument()
     }
+    // os rótulos antigos não aparecem mais como nome de coluna
+    expect(screen.queryByRole('button', { name: 'Ordenar coluna Nome' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ordenar coluna Custo' })).not.toBeInTheDocument()
   })
 
   it('size nulo é exibido como "Não se aplica"', () => {
@@ -345,27 +348,36 @@ describe('InventoryPage', () => {
     expect(within(getTable()).getByText('Parafuso')).toBeInTheDocument()
   })
 
-  it('filtros Todos/Ativos/Inativos filtram corretamente', async () => {
-    const user = userEvent.setup()
+  it('não existe filtro de status em Acessórios — a listagem mostra ativos E inativos ao mesmo tempo', () => {
     mockAccessories([
       accessoryFixture({ id: 'a1', name: 'Ímã ativo', is_active: true }),
       accessoryFixture({ id: 'a2', name: 'Ímã inativo', is_active: false }),
     ])
     renderPage('acessorios')
 
-    const filterGroup = screen.getByRole('radiogroup', { name: 'Filtrar acessórios por status' })
-    expect(within(filterGroup).getByRole('radio', { name: 'Todos' })).toHaveAttribute('aria-checked', 'true')
+    // o controle Todos/Ativos/Inativos foi removido de Acessórios
+    expect(
+      screen.queryByRole('radiogroup', { name: 'Filtrar acessórios por status' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Todos' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Ativos' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Inativos' })).not.toBeInTheDocument()
 
-    await user.click(within(filterGroup).getByRole('radio', { name: 'Ativos' }))
+    // a listagem se comporta como o antigo estado "Todos": mostra os dois
     expect(within(getTable()).getByText('Ímã ativo')).toBeInTheDocument()
-    expect(within(getTable()).queryByText('Ímã inativo')).not.toBeInTheDocument()
-
-    await user.click(within(filterGroup).getByRole('radio', { name: 'Inativos' }))
     expect(within(getTable()).getByText('Ímã inativo')).toBeInTheDocument()
-    expect(within(getTable()).queryByText('Ímã ativo')).not.toBeInTheDocument()
+    // a coluna que identifica a situação de cada registro (Switch "Ativo")
+    // continua presente
+    expect(screen.getByRole('button', { name: 'Ordenar coluna Ativo' })).toBeInTheDocument()
+    expect(
+      within(getTableBody()).getByRole('switch', { name: 'Desativar acessório Ímã ativo' }),
+    ).toBeInTheDocument()
+    expect(
+      within(getTableBody()).getByRole('switch', { name: 'Ativar acessório Ímã inativo' }),
+    ).toBeInTheDocument()
   })
 
-  it('busca e filtro combinam com AND lógico (só sobra o item que atende às duas condições)', async () => {
+  it('a busca de Acessórios continua funcionando por si só (não há filtro de status para combinar)', async () => {
     const user = userEvent.setup()
     mockAccessories([
       accessoryFixture({ id: 'a1', name: 'Ímã ativo', is_active: true }),
@@ -375,32 +387,15 @@ describe('InventoryPage', () => {
     renderPage('acessorios')
 
     await user.type(screen.getByRole('combobox', { name: 'Buscar acessórios' }), 'Ímã')
-    await user.click(screen.getByRole('radio', { name: 'Ativos' }))
 
-    // Só "Ímã ativo" atende busca ("Ímã") + filtro (Ativos) ao mesmo tempo —
-    // "Ímã inativo" cai pelo filtro, "Parafuso ativo" cai pela busca.
+    // "Ímã" mantém tanto o ativo quanto o inativo (sem filtro de status) e
+    // descarta "Parafuso ativo".
     expect(within(getTable()).getByText('Ímã ativo')).toBeInTheDocument()
-    expect(within(getTable()).queryByText('Ímã inativo')).not.toBeInTheDocument()
+    expect(within(getTable()).getByText('Ímã inativo')).toBeInTheDocument()
     expect(within(getTable()).queryByText('Parafuso ativo')).not.toBeInTheDocument()
   })
 
-  it('o filtro de status é operável por teclado (foco + Enter)', async () => {
-    const user = userEvent.setup()
-    mockAccessories([
-      accessoryFixture({ id: 'a1', name: 'Ímã ativo', is_active: true }),
-      accessoryFixture({ id: 'a2', name: 'Ímã inativo', is_active: false }),
-    ])
-    renderPage('acessorios')
-
-    const activeRadio = screen.getByRole('radio', { name: 'Ativos' })
-    activeRadio.focus()
-    await user.keyboard('{Enter}')
-
-    expect(activeRadio).toHaveAttribute('aria-checked', 'true')
-    expect(within(getTable()).queryByText('Ímã inativo')).not.toBeInTheDocument()
-  })
-
-  it('ordenação por Nome alterna crescente e decrescente sem mutar os dados originais', async () => {
+  it('ordenação pelo cabeçalho renomeado "Acessório" alterna crescente e decrescente sem mutar os dados originais', async () => {
     const user = userEvent.setup()
     const list = [
       accessoryFixture({ id: 'a1', name: 'Zebra' }),
@@ -409,10 +404,10 @@ describe('InventoryPage', () => {
     mockAccessories(list)
     renderPage('acessorios')
 
-    await applySort(user, 'Nome', 'Ordenar crescente')
+    await applySort(user, 'Acessório', 'Ordenar crescente')
     expect(getVisibleNamesInOrder()).toEqual(['Abelha', 'Zebra'])
 
-    await applySort(user, 'Nome', 'Ordenar decrescente')
+    await applySort(user, 'Acessório', 'Ordenar decrescente')
     expect(getVisibleNamesInOrder()).toEqual(['Zebra', 'Abelha'])
 
     // O array original passado ao componente nunca é reordenado in-place.
@@ -431,27 +426,7 @@ describe('InventoryPage', () => {
     expect(screen.getByText('1 resultado')).toBeInTheDocument()
   })
 
-  it('botão "Limpar filtros" só aparece com filtro de status ativo e restaura "Todos"', async () => {
-    const user = userEvent.setup()
-    mockAccessories([
-      accessoryFixture({ id: 'a1', name: 'Ímã ativo', is_active: true }),
-      accessoryFixture({ id: 'a2', name: 'Ímã inativo', is_active: false }),
-    ])
-    renderPage('acessorios')
-
-    expect(screen.queryByRole('button', { name: 'Limpar filtros' })).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole('radio', { name: 'Ativos' }))
-    expect(screen.getByRole('button', { name: 'Limpar filtros' })).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: 'Limpar filtros' }))
-
-    expect(screen.getByRole('radio', { name: 'Todos' })).toHaveAttribute('aria-checked', 'true')
-    expect(within(getTable()).getByText('Ímã inativo')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Limpar filtros' })).not.toBeInTheDocument()
-  })
-
-  it('ordenação por Custo trata valores nulos de forma determinística (sempre ao final)', async () => {
+  it('ordenação pelo cabeçalho renomeado "Custo/un." trata valores nulos de forma determinística (sempre ao final)', async () => {
     const user = userEvent.setup()
     mockAccessories([
       accessoryFixture({ id: 'a1', name: 'Sem custo', unit_cost: null }),
@@ -460,10 +435,10 @@ describe('InventoryPage', () => {
     ])
     renderPage('acessorios')
 
-    await applySort(user, 'Custo', 'Ordenar crescente')
+    await applySort(user, 'Custo/un.', 'Ordenar crescente')
     expect(getVisibleNamesInOrder()).toEqual(['Custo baixo', 'Custo alto', 'Sem custo'])
 
-    await applySort(user, 'Custo', 'Ordenar decrescente')
+    await applySort(user, 'Custo/un.', 'Ordenar decrescente')
     expect(getVisibleNamesInOrder()).toEqual(['Custo alto', 'Custo baixo', 'Sem custo'])
   })
 
@@ -486,7 +461,7 @@ describe('InventoryPage', () => {
     expect(screen.getByRole('radiogroup', { name: 'Filtrar embalagens por status' })).toBeInTheDocument()
   })
 
-  it('busca e filtro de Acessórios e Embalagens são independentes entre si', async () => {
+  it('a busca de Acessórios e Embalagens é independente entre si', async () => {
     const user = userEvent.setup()
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2' })])
     const { unmount } = renderPage('acessorios')
@@ -589,7 +564,12 @@ describe('InventoryPage — área Embalagens (/estoque/embalagens)', () => {
     const filterGroup = screen.getByRole('radiogroup', { name: 'Filtrar embalagens por status' })
     expect(within(filterGroup).getByRole('radio', { name: 'Todos' })).toHaveAttribute('aria-checked', 'true')
 
-    await user.click(within(filterGroup).getByRole('radio', { name: 'Ativos' }))
+    // operável por teclado (foco + Enter) — cobertura antes exercida também
+    // pelo filtro de Acessórios, que foi removido nesta rodada.
+    const activeRadio = within(filterGroup).getByRole('radio', { name: 'Ativos' })
+    activeRadio.focus()
+    await user.keyboard('{Enter}')
+    expect(activeRadio).toHaveAttribute('aria-checked', 'true')
     expect(within(getTable()).getByText('Caixa ativa')).toBeInTheDocument()
     expect(within(getTable()).queryByText('Caixa inativa')).not.toBeInTheDocument()
 
@@ -603,6 +583,31 @@ describe('InventoryPage — área Embalagens (/estoque/embalagens)', () => {
     expect(within(filterGroup).getByRole('radio', { name: 'Todos' })).toHaveAttribute('aria-checked', 'true')
     expect(within(getTable()).getByText('Caixa ativa')).toBeInTheDocument()
     expect(within(getTable()).getByText('Caixa inativa')).toBeInTheDocument()
+  })
+
+  it('com o filtro "Ativos", um item que vira inativo some da listagem assim que o array local é atualizado', async () => {
+    // Cobertura antes feita na área Acessórios (filtro removido nesta
+    // rodada) — o filtro de Embalagens continua e a mesma reatividade via
+    // useMemo precisa seguir valendo.
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(packagingFixture({ id: 'k1', name: 'Caixa M', is_active: false }))
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', is_active: true })], { update })
+    const { rerender } = renderPage('embalagens')
+
+    await user.click(screen.getByRole('radio', { name: 'Ativos' }))
+    expect(within(getTableBody()).getByText('Caixa M')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('switch', { name: 'Desativar embalagem Caixa M' }))
+    await user.click(screen.getByRole('button', { name: 'Desativar' }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith('k1', { is_active: false }))
+
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', is_active: false })], { update })
+    rerender(<InventoryPage area="embalagens" />)
+
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    expect(screen.queryByText('Caixa M')).not.toBeInTheDocument()
+    expect(screen.getByText('Nenhum resultado encontrado.')).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Ativos' })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('ordenação por Nome alterna crescente e decrescente', async () => {
@@ -1051,7 +1056,7 @@ describe('InventoryPage — edição de itens existentes', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
-  it('editar não limpa a busca nem o filtro de status ativos na listagem', async () => {
+  it('editar não limpa a busca ativa na listagem', async () => {
     const user = userEvent.setup()
     const update = vi.fn().mockResolvedValue(accessoryFixture())
     mockAccessories(
@@ -1062,14 +1067,12 @@ describe('InventoryPage — edição de itens existentes', () => {
 
     const searchInput = screen.getByRole('combobox', { name: 'Buscar acessórios' })
     await user.type(searchInput, 'Ímã')
-    await user.click(screen.getByRole('radio', { name: 'Ativos' }))
 
     await user.click(within(getTableBody()).getByRole('button', { name: 'Editar' }))
     await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
 
     expect(searchInput).toHaveValue('Ímã')
-    expect(screen.getByRole('radio', { name: 'Ativos' })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('botão "Editar" existe na listagem de Embalagens e abre "Editar embalagem" com payload correto', async () => {
@@ -1312,7 +1315,7 @@ describe('InventoryPage — ativação e desativação', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('ativar/desativar não limpa a busca nem o filtro de status ativos', async () => {
+  it('ativar/desativar não limpa a busca ativa', async () => {
     const user = userEvent.setup()
     const update = vi.fn().mockResolvedValue(accessoryFixture({ is_active: false }))
     mockAccessories(
@@ -1326,44 +1329,33 @@ describe('InventoryPage — ativação e desativação', () => {
 
     const searchInput = screen.getByRole('combobox', { name: 'Buscar acessórios' })
     await user.type(searchInput, 'Ímã')
-    await user.click(screen.getByRole('radio', { name: 'Ativos' }))
 
     await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
     await user.click(screen.getByRole('button', { name: 'Desativar' }))
     await waitFor(() => expect(update).toHaveBeenCalled())
 
     expect(searchInput).toHaveValue('Ímã')
-    expect(screen.getByRole('radio', { name: 'Ativos' })).toHaveAttribute('aria-checked', 'true')
   })
 
-  it('com o filtro "Ativos", um item que vira inativo some da listagem assim que o array local é atualizado', async () => {
+  it('desativar um acessório NUNCA o esconde da listagem (sem filtro de status, ele continua visível, agora inativo)', async () => {
     const user = userEvent.setup()
     const update = vi.fn().mockResolvedValue(accessoryFixture({ id: 'a1', name: 'Ímã 6x2', is_active: false }))
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', is_active: true })], { update })
     const { rerender } = renderPage('acessorios')
 
-    await user.click(screen.getByRole('radio', { name: 'Ativos' }))
-    expect(within(getTableBody()).getByText('Ímã 6x2')).toBeInTheDocument()
-
     await user.click(screen.getByRole('switch', { name: 'Desativar acessório Ímã 6x2' }))
     await user.click(screen.getByRole('button', { name: 'Desativar' }))
     await waitFor(() => expect(update).toHaveBeenCalledWith('a1', { is_active: false }))
 
-    // O hook real substituiria o item local (is_active: false) e a página
-    // re-renderizaria com o novo array — como o hook está mockado neste
-    // teste, simulamos essa substituição remockando o retorno e forçando um
-    // novo render; o filtro "Ativos" (estado local do painel) continua
-    // selecionado e reage sozinho ao novo array via useMemo.
+    // Simula a substituição do array local que o hook real faria.
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', is_active: false })], { update })
     rerender(<InventoryPage area="acessorios" />)
 
-    // O filtro "Ativos" agora não inclui mais nenhum item — a tabela some
-    // por completo, dando lugar a "Nenhum resultado encontrado." (mesmo
-    // comportamento já usado pela busca sem correspondência).
-    expect(screen.queryByRole('table')).not.toBeInTheDocument()
-    expect(screen.queryByText('Ímã 6x2')).not.toBeInTheDocument()
-    expect(screen.getByText('Nenhum resultado encontrado.')).toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: 'Ativos' })).toHaveAttribute('aria-checked', 'true')
+    // Continua na listagem — só o Switch reflete a inatividade.
+    expect(within(getTableBody()).getByText('Ímã 6x2')).toBeInTheDocument()
+    expect(
+      within(getTableBody()).getByRole('switch', { name: 'Ativar acessório Ímã 6x2' }),
+    ).toHaveAttribute('aria-checked', 'false')
   })
 
   it('nome acessível do switch identifica a ação e o item; switch e diálogo são operáveis por teclado', async () => {
@@ -1976,7 +1968,7 @@ describe('InventoryPage — colunas redimensionáveis e persistidas (padronizaç
   it('presença das alças: cabeçalhos ordenáveis e o cabeçalho de Ações têm separador de redimensionamento', () => {
     mockAccessories([accessoryFixture()])
     renderPage('acessorios')
-    expect(screen.getByRole('separator', { name: 'Redimensionar coluna Nome' })).toBeInTheDocument()
+    expect(screen.getByRole('separator', { name: 'Redimensionar coluna Acessório' })).toBeInTheDocument()
     expect(screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })).toBeInTheDocument()
   })
 
@@ -2001,7 +1993,7 @@ describe('InventoryPage — colunas redimensionáveis e persistidas (padronizaç
   it('redimensionar uma coluna por teclado altera só aquela coluna, nunca as demais', () => {
     mockAccessories([accessoryFixture()])
     renderPage('acessorios')
-    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Nome' })
+    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Acessório' })
     const otherWidthBefore = (document.querySelectorAll('col')[1] as HTMLElement).style.width
 
     handle.focus()
@@ -2014,7 +2006,7 @@ describe('InventoryPage — colunas redimensionáveis e persistidas (padronizaç
   it('largura salva é restaurada após remontar a página', () => {
     mockAccessories([accessoryFixture()])
     const { unmount } = renderPage('acessorios')
-    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Nome' })
+    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Acessório' })
 
     fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
     fireEvent.pointerMove(handle, { clientX: 160, pointerId: 1 })
@@ -2028,7 +2020,7 @@ describe('InventoryPage — colunas redimensionáveis e persistidas (padronizaç
   it('"Restaurar larguras" volta a coluna redimensionada ao padrão desta tabela', () => {
     mockAccessories([accessoryFixture()])
     renderPage('acessorios')
-    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Nome' })
+    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Acessório' })
     fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
     fireEvent.pointerMove(handle, { clientX: 160, pointerId: 1 })
     fireEvent.pointerUp(handle, { clientX: 160, pointerId: 1 })
@@ -2042,7 +2034,7 @@ describe('InventoryPage — colunas redimensionáveis e persistidas (padronizaç
   it('isolamento: largura salva em Acessórios nunca afeta Embalagens (mesmo componente, tableId diferente)', () => {
     mockAccessories([accessoryFixture()])
     const { unmount } = renderPage('acessorios')
-    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Nome' })
+    const handle = screen.getByRole('separator', { name: 'Redimensionar coluna Acessório' })
     fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 })
     fireEvent.pointerMove(handle, { clientX: 160, pointerId: 1 })
     fireEvent.pointerUp(handle, { clientX: 160, pointerId: 1 })
@@ -2074,12 +2066,12 @@ describe('InventoryPage — colunas redimensionáveis e persistidas (padronizaç
     expect(within(getTable()).getByRole('button', { name: /^Excluir/ })).toBeInTheDocument()
   })
 
-  it('regressão: busca, filtro de status e ordenação continuam funcionando após o redimensionamento', async () => {
+  it('regressão: busca e ordenação continuam funcionando após o redimensionamento', async () => {
     mockAccessories([accessoryFixture()])
     const user = userEvent.setup()
     renderPage('acessorios')
 
-    await applySort(user, 'Nome', 'Ordenar crescente')
+    await applySort(user, 'Acessório', 'Ordenar crescente')
     expect(within(getTableBody()).getByText('Ímã 6x2')).toBeInTheDocument()
   })
 })
