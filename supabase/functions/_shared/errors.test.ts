@@ -500,3 +500,29 @@ Deno.test("mapPgError não confunde as mensagens de register_filament_purchase c
   assertEquals(single.message.includes("register_inventory_purchase"), true);
   assertEquals(multi.message.includes("register_filament_purchase"), true);
 });
+
+// ---------------------------------------------------------------------------
+// SQLSTATE 42501 (insufficient_privilege) — regressão do erro real
+// "permission denied for table accessories" da Edge Function `entity-images`.
+// Dentro de uma Edge Function o banco é acessado pelo service_role, então
+// 42501 é SEMPRE uma configuração de privilégio faltando (nunca uma decisão
+// de autorização legítima) e a mensagem crua do Postgres, que cita o nome
+// interno do objeto, NÃO pode chegar ao cliente.
+// ---------------------------------------------------------------------------
+Deno.test("mapPgError trata 42501 como erro interno genérico (500) e NÃO vaza o nome da tabela", () => {
+  const err = mapPgError({ code: "42501", message: "permission denied for table accessories" });
+
+  assertEquals(err.type, "database");
+  assertEquals(err.status, 500);
+  // O nome interno do objeto nunca aparece na mensagem devolvida ao cliente.
+  assertEquals(err.message.includes("accessories"), false);
+  assertEquals(err.message.includes("permission denied"), false);
+  assertEquals(err.message.toLowerCase().includes("table"), false);
+});
+
+Deno.test("mapPgError 42501 não é confundido com uma regra de negócio nem com 'não encontrado'", () => {
+  const err = mapPgError({ code: "42501", message: "permission denied for table filament_types" });
+  assertEquals(err instanceof BusinessRuleError, false);
+  assertEquals(err instanceof NotFoundError, false);
+  assertEquals(err instanceof ValidationError, false);
+});

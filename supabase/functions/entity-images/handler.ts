@@ -159,6 +159,14 @@ export function assertMaxBytes(bytes: Uint8Array, max: number, field: string): v
 // Existência do registro (leitura direta da service_role — a ESCRITA nunca
 // passa por aqui). expectExists=false é usado no purge (o registro já deve
 // ter sido excluído).
+//
+// Esta é a ÚNICA leitura direta de accessories/packaging/filament_types/
+// products feita por uma Edge Function (as demais só as tocam por RPCs
+// security definer). Exige GRANT SELECT do Postgres para o papel
+// service_role nas quatro tabelas — concedido pela migration
+// 20260906130000_grant_service_role_select_entity_image_tables.sql. Sem esse
+// grant o Postgres devolve SQLSTATE 42501 ("permission denied for table
+// accessories"), mesmo com a service_role ignorando RLS.
 // ---------------------------------------------------------------------------
 async function assertRecordExistence(
   entity: EntityImageEntity,

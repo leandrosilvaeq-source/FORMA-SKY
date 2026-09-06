@@ -438,6 +438,21 @@ export function mapPgError(err: PgErrorLike): AppError {
   const code = err.code;
   const message = err.message ?? "Erro desconhecido no banco de dados.";
 
+  // 42501 = insufficient_privilege. Dentro de uma Edge Function o banco é
+  // acessado pelo service_role (que ignora RLS), então este código nunca é
+  // uma decisão de autorização legítima — é sempre uma configuração de
+  // privilégio faltando no banco (ex.: uma tabela sem GRANT SELECT para
+  // service_role). A mensagem crua do Postgres cita o nome interno do objeto
+  // ("permission denied for table accessories") e NÃO pode vazar ao cliente
+  // (docs/02_ESPECIFICACAO_TECNICA.md §14). O texto real vai só para o log da
+  // função; o cliente recebe uma mensagem genérica de erro interno (500).
+  if (code === "42501") {
+    console.error("mapPgError: privilégio insuficiente no banco (42501):", message);
+    return new DatabaseError(
+      "Não foi possível concluir a operação por uma restrição interna. Tente novamente mais tarde.",
+    );
+  }
+
   if (code && code !== "P0001" && code in SQLSTATE_MAP) {
     return SQLSTATE_MAP[code](message);
   }

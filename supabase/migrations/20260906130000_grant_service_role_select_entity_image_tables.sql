@@ -1,0 +1,55 @@
+-- Correção: a Edge Function `entity-images` precisa confirmar a EXISTÊNCIA
+-- (ou a ausência, no /purge) de um registro de accessories / packaging /
+-- filament_types / products antes de tocar no Storage. Essa checagem é uma
+-- leitura direta feita pelo admin client (service_role):
+--   supabase/functions/entity-images/handler.ts::assertRecordExistence
+--     -> admin.from(<tabela>).select("id").eq("id", id).maybeSingle()
+--
+-- service_role BYPASSA RLS, mas ainda precisa do privilégio de tabela do
+-- Postgres para executar SELECT. As migrations que criaram essas quatro
+-- tabelas concederam SELECT apenas a `authenticated` e revogaram de `anon`
+-- (20260816150000 accessories/packaging, 20260827100000 filament_types,
+-- 20260813205942 products) — nunca concederam nada a `service_role`. Além
+-- disso este projeto NÃO auto-expõe tabelas novas às Data API roles
+-- (supabase/config.toml, `auto_expose_new_tables` não definido = novo padrão
+-- do cloud). Resultado: a primeira operação real de foto em Acessórios
+-- falhou com HTTP 500 e SQLSTATE 42501:
+--   { "error": { "type": "database",
+--                "message": "permission denied for table accessories" } }
+--
+-- Até aqui nenhuma Edge Function tinha esbarrado nisso porque toda escrita/
+-- leitura de accessories/packaging/filament_types/products passava por RPCs
+-- `security definer` (create_/update_/delete_*, set_entity_image), que rodam
+-- com o privilégio do OWNER da função, não do chamador. `entity-images` é a
+-- primeira função a fazer uma leitura DIRETA de tabela pelo service_role.
+--
+-- É o MESMO defeito já corrigido para public.users em
+-- 20260815034503_grant_service_role_select_users.sql, e a correção é a mesma,
+-- de escopo mínimo: apenas SELECT, apenas para service_role.
+--
+-- Migration APPEND-ONLY — nenhuma migration anterior é editada; a migration
+-- 20260906120000 (infraestrutura de foto principal) permanece intocada.
+--
+-- Confirmável, antes e depois:
+--   select has_table_privilege('service_role', 'public.accessories',   'SELECT'); -- false -> true
+--   select has_table_privilege('service_role', 'public.packaging',     'SELECT');
+--   select has_table_privilege('service_role', 'public.filament_types','SELECT');
+--   select has_table_privilege('service_role', 'public.products',      'SELECT');
+--
+-- O QUE ESTA MIGRATION NÃO FAZ (a segurança permanece igual):
+--   - NÃO concede INSERT/UPDATE/DELETE a service_role em nenhuma tabela — a
+--     ESCRITA de image_path/image_thumb_path continua exclusivamente pela RPC
+--     set_entity_image (security definer, EXECUTE só para service_role).
+--   - NÃO altera os grants de anon/authenticated (authenticated mantém o
+--     SELECT/INSERT/UPDATE-por-coluna definido nas migrations originais; anon
+--     continua sem nada).
+--   - NÃO cria policy nem mexe em RLS.
+--   - NÃO torna o bucket entity-images público nem cria policy de
+--     storage.objects.
+--   - NÃO concede EXECUTE de set_entity_image a authenticated.
+-- ---------------------------------------------------------------------------
+
+grant select on public.accessories   to service_role;
+grant select on public.packaging     to service_role;
+grant select on public.filament_types to service_role;
+grant select on public.products      to service_role;

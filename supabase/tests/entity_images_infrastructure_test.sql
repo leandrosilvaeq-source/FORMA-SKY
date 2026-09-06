@@ -8,11 +8,16 @@
 -- transação, terminada sempre com ROLLBACK — nada persiste. Usa somente
 -- registros "TESTE%", nunca dados oficiais.
 --
--- IMPORTANTE — LIMITAÇÃO DE AMBIENTE: a migration 20260906120000 ainda NÃO
--- foi aplicada (nem no remoto nem localmente) e não há Supabase local
--- rodando nesta sessão, portanto ESTE SCRIPT NÃO FOI EXECUTADO. Está escrito
--- seguindo o padrão de supabase/tests/product_composition_inactive_links_test.sql
--- e precisa de uma primeira execução real após a migration ser aplicada:
+-- HISTÓRICO DE APLICAÇÃO:
+--   - Seções 1–6: a migration 20260906120000 foi aplicada ao projeto remoto
+--     e estas seções foram executadas e aprovadas (rodada de publicação da
+--     Edge Function `entity-images` v1).
+--   - Seção 7 (NOVA): cobre a migration corretiva
+--     20260906130000_grant_service_role_select_entity_image_tables.sql, que
+--     ainda NÃO foi aplicada. Não há Supabase local rodando nesta sessão,
+--     portanto a SEÇÃO 7 NÃO FOI EXECUTADA — está escrita seguindo o padrão
+--     do restante do arquivo e precisa de uma primeira execução real depois
+--     de a migration 20260906130000 ser aplicada:
 --   npx supabase db query --linked --file supabase/tests/entity_images_infrastructure_test.sql
 -- =============================================================================
 
@@ -338,6 +343,101 @@ begin
     'products.default_file_id e public.files continuam existindo, intocados',
     case when v_default_file_id_exists and v_files_exists then 'PASS' else 'FAIL' end,
     format('default_file_id=%s files=%s', v_default_file_id_exists, v_files_exists)
+  );
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 7. Privilégios de tabela do service_role (migration
+--    20260906130000_grant_service_role_select_entity_image_tables.sql).
+--
+--    A Edge Function `entity-images` (assertRecordExistence) faz uma leitura
+--    DIRETA de accessories/packaging/filament_types/products pelo admin
+--    client (service_role) para confirmar a existência do registro antes de
+--    tocar no Storage. service_role bypassa RLS mas ainda precisa do GRANT
+--    SELECT do Postgres — sem ele o upload real falhava com SQLSTATE 42501
+--    "permission denied for table accessories". Esta seção prova que:
+--      (a) service_role passou a ter SELECT nas quatro tabelas;
+--      (b) service_role continua SEM INSERT/UPDATE/DELETE nelas — a escrita
+--          de image_path/image_thumb_path é exclusivamente via a RPC
+--          set_entity_image (conferida na seção 3);
+--      (c) o grant de authenticated não mudou (SELECT preservado).
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_tbl text;
+  v_missing_select text := '';
+  v_unexpected_write text := '';
+  v_auth_missing_select text := '';
+begin
+  foreach v_tbl in array array[
+    'public.accessories', 'public.packaging', 'public.filament_types', 'public.products'
+  ] loop
+    if not has_table_privilege('service_role', v_tbl, 'SELECT') then
+      v_missing_select := v_missing_select || v_tbl || ' ';
+    end if;
+    if has_table_privilege('service_role', v_tbl, 'INSERT')
+       or has_table_privilege('service_role', v_tbl, 'UPDATE')
+       or has_table_privilege('service_role', v_tbl, 'DELETE') then
+      v_unexpected_write := v_unexpected_write || v_tbl || ' ';
+    end if;
+    if not has_table_privilege('authenticated', v_tbl, 'SELECT') then
+      v_auth_missing_select := v_auth_missing_select || v_tbl || ' ';
+    end if;
+  end loop;
+
+  insert into zz_ei_results(section, test_name, status, details)
+  values (
+    '7. grants service_role',
+    'service_role tem SELECT nas quatro tabelas de entidade',
+    case when v_missing_select = '' then 'PASS' else 'FAIL' end,
+    case when v_missing_select = '' then 'accessories, packaging, filament_types, products'
+         else 'faltando SELECT: ' || v_missing_select end
+  );
+
+  insert into zz_ei_results(section, test_name, status, details)
+  values (
+    '7. grants service_role',
+    'service_role NÃO tem INSERT/UPDATE/DELETE nessas tabelas (escrita só via RPC)',
+    case when v_unexpected_write = '' then 'PASS' else 'FAIL' end,
+    case when v_unexpected_write = '' then 'nenhum privilégio de escrita direto'
+         else 'privilégio de escrita indevido em: ' || v_unexpected_write end
+  );
+
+  insert into zz_ei_results(section, test_name, status, details)
+  values (
+    '7. grants service_role',
+    'authenticated mantém SELECT nas quatro tabelas (grant original intacto)',
+    case when v_auth_missing_select = '' then 'PASS' else 'FAIL' end,
+    case when v_auth_missing_select = '' then 'SELECT de authenticated preservado'
+         else 'authenticated perdeu SELECT em: ' || v_auth_missing_select end
+  );
+end $$;
+
+-- A leitura de existência que a Edge Function faz de fato (admin client):
+-- select id from public.accessories where id = <id> — deve rodar sob o papel
+-- service_role sem erro de permissão.
+do $$
+declare
+  v_acc uuid;
+  v_seen uuid;
+  v_err text := 'sem erro';
+begin
+  insert into public.accessories (name) values ('TESTE ei grant service_role') returning id into v_acc;
+
+  set local role service_role;
+  begin
+    select id into v_seen from public.accessories where id = v_acc;
+  exception when others then
+    v_err := SQLERRM;
+  end;
+  reset role;
+
+  insert into zz_ei_results(section, test_name, status, details)
+  values (
+    '7. grants service_role',
+    'SELECT id em accessories roda sob o papel service_role sem 42501',
+    case when v_err = 'sem erro' and v_seen = v_acc then 'PASS' else 'FAIL' end,
+    v_err
   );
 end $$;
 

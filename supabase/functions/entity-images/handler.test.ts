@@ -1,8 +1,10 @@
 // Testes locais da Edge Function `entity-images` — validadores puros +
 // roteamento offline (preflight CORS, 401 sem Authorization, 404 rota
-// desconhecida, 405 método não permitido). Mesma disciplina de
-// accessories/handler.test.ts: importa só de handler.ts (sem Deno.serve),
-// nenhuma rede/banco.
+// desconhecida, 405 método não permitido) + contrato de identidade do
+// cliente administrativo (getAdminClient exige a service-role key; upload sem
+// Authorization para na identidade antes de qualquer leitura de tabela).
+// Mesma disciplina de accessories/handler.test.ts: importa só de handler.ts
+// (sem Deno.serve), nenhuma rede/banco.
 //
 // O caminho feliz completo (upload/remove/sign/purge com usuário autenticado
 // real + Storage + RPC) NÃO é coberto aqui — exigiria Supabase local e um
@@ -17,6 +19,7 @@
 // como verde.
 
 import { ValidationError } from "../_shared/errors.ts";
+import { getAdminClient } from "../_shared/supabaseAdmin.ts";
 import {
   assertMaxBytes,
   assertWebp,
@@ -158,4 +161,71 @@ Deno.test("ValidationError das asserções é 400", () => {
     assertEquals(err instanceof ValidationError, true);
     assertEquals((err as ValidationError).status, 400);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Identidade do cliente administrativo — regressão do erro real
+// "permission denied for table accessories" (SQLSTATE 42501) no primeiro
+// upload de foto em Acessórios.
+//
+// Causa raiz: NÃO era o client errado — getAdminClient() já cria o client
+// exclusivamente com SUPABASE_SERVICE_ROLE_KEY, sem repassar o header
+// Authorization do usuário. O que faltava era o GRANT SELECT do Postgres para
+// o papel service_role nas tabelas accessories/packaging/filament_types/
+// products (a Edge Function `entity-images` é a primeira a fazer uma leitura
+// DIRETA dessas tabelas pelo admin client, via assertRecordExistence — todas
+// as outras funções só as tocam por RPCs security definer). A correção de
+// banco é a migration
+// 20260906130000_grant_service_role_select_entity_image_tables.sql; a
+// regressão do privilégio em si é exercida por
+// supabase/tests/entity_images_infrastructure_test.sql (seção 7).
+//
+// O que este arquivo garante, offline, é o contrato de identidade do lado da
+// função: o caminho administrativo depende da service-role key e NUNCA cai
+// para a identidade anônima/do usuário quando ela falta.
+// ---------------------------------------------------------------------------
+Deno.test("getAdminClient exige SUPABASE_SERVICE_ROLE_KEY — nunca cai para anon/JWT do usuário", () => {
+  const savedUrl = Deno.env.get("SUPABASE_URL");
+  const savedService = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  try {
+    Deno.env.set("SUPABASE_URL", "https://example.supabase.co");
+    Deno.env.delete("SUPABASE_SERVICE_ROLE_KEY");
+
+    let threw = false;
+    try {
+      getAdminClient();
+    } catch (err) {
+      threw = true;
+      // A mensagem cita a env var que falta, sem expor nenhum segredo.
+      assertEquals((err as Error).message.includes("SUPABASE_SERVICE_ROLE_KEY"), true);
+    }
+    assertEquals(threw, true);
+  } finally {
+    if (savedUrl === undefined) Deno.env.delete("SUPABASE_URL");
+    else Deno.env.set("SUPABASE_URL", savedUrl);
+    if (savedService === undefined) Deno.env.delete("SUPABASE_SERVICE_ROLE_KEY");
+    else Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", savedService);
+  }
+});
+
+Deno.test("upload sem Authorization falha na identidade ANTES de qualquer leitura de tabela/Storage", async () => {
+  // Sem header Authorization, resolveOperator lança 401 antes de
+  // assertRecordExistence — nenhuma leitura de accessories, nenhum upload,
+  // nenhuma chamada de RPC acontece. Garante que a checagem de permissão de
+  // tabela nunca é alcançada por um chamador não autenticado.
+  const res = await handleRequest(
+    new Request("https://x.test/entity-images/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        entity: "accessories",
+        id: "00000000-0000-0000-0000-000000000000",
+        original_base64: "x",
+        thumb_base64: "x",
+      }),
+    }),
+  );
+  assertEquals(res.status, 401);
+  const payload = await res.json();
+  assertEquals(payload.error.type, "authorization");
 });
