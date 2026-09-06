@@ -1021,13 +1021,37 @@ oficiais (só valores legados pré-existentes podem estar fora do enum).
 `unit_cost` é **somente leitura** na interface de cadastro mestre — não há digitação manual de
 custo neste cadastro. Quando `unit_cost is null`, a interface exibe "Não informado"; um custo
 ausente nunca é tratado como zero em nenhum cálculo. Valores legados existentes (ex.: gravados via
-SQL controlado para fixtures) são preservados e exibidos normalmente. Novos custos dependerão
-futuramente das compras e entradas de estoque — **nenhuma fórmula de custo é definida ou
-inventada nesta etapa**.
+SQL controlado para fixtures) são preservados e exibidos normalmente.
 
-> **Lembrete de retomada:** quando as entradas de estoque e as regras de compras estiverem
-> implementadas e validadas, retornar ao cadastro mestre de Acessórios e Embalagens para calcular
-> e exibir automaticamente o custo conforme as compras registradas.
+**Cálculo automático a partir das compras de Acessórios (2026-09-06, migration
+`20260906140000`, ainda NÃO aplicada):** `accessories.unit_cost` passa a ser atualizado
+automaticamente pela RPC `register_accessory_purchase` (compra multi-item de acessórios),
+por **média ponderada móvel**, na mesma transação e sob `FOR UPDATE` da linha do acessório —
+nunca calculado no frontend. Para cada linha da compra, seja `valor da entrada = total_value +
+freight_allocated` (frete rateado proporcionalmente ao `total_value` de cada linha, em centavos
+inteiros pelo método do maior resto):
+
+- se `current_stock = 0` **ou** `unit_cost IS NULL` →
+  `unit_cost = round(valor da entrada / quantidade comprada, 2)` — a **primeira compra define o
+  custo inicial**, sem diluição pelo saldo anterior (decisão do usuário: um `unit_cost` NULL com
+  saldo anterior conhecido é substituído pelo custo da entrada, nunca combinado com um custo
+  anterior desconhecido);
+- caso contrário →
+  `unit_cost = round((current_stock × unit_cost + total_value + freight_allocated) /
+  (current_stock + quantidade comprada), 2)`.
+
+`numeric` (decimal exato) em todo o caminho; **só o resultado final é arredondado a 2 casas**. O
+**total efetivamente pago permanece exato** — `inventory_purchases.item_value` (soma exata dos
+`total_value` das linhas), `inventory_purchases.total_value` (gerada = itens + frete) e
+`inventory_purchase_accessory_items.total_value` (autoritativo, nunca reconstruído por
+`quantidade × unit_cost`); só o `unit_cost` derivado sofre arredondamento (ex.: 3 un por
+R$ 10,00 → ledger mantém R$ 10,00, `unit_cost` = R$ 3,33). **Ficha Técnica de Produtos**: passa a
+consumir naturalmente o `unit_cost` atualizado nos subtotais por linha e no "Subtotal de
+componentes" — efeito esperado, nenhuma mudança de código na Ficha Técnica.
+
+**Embalagens permanecem inalteradas nesta rodada** — `packaging.unit_cost` continua sem cálculo
+automático; a compra de Embalagem segue pelo fluxo de item único de `register_inventory_purchase`,
+que não toca `unit_cost`.
 
 ### Exclusão
 
@@ -1197,6 +1221,55 @@ como o modelo aprovado.
 - `status`
 - `reserved_at`
 - `released_at`
+
+---
+
+## 15.3 Compras — `inventory_purchases` e itens
+
+**Aplicadas ao Supabase remoto:** `inventory_purchases` (cabeçalho/ledger financeiro imutável,
+migration `20260828120000`), `inventory_purchase_filament_items` (itens de compra de filamento,
+`20260904130000` + `total_value` autoritativo em `20260905160000`).
+
+**Migration `20260906140000` — ainda NÃO aplicada** (compra de acessórios multi-item):
+
+- `inventory_purchases` ganha **`supplier_name text NULL`** — fornecedor como **texto livre
+  opcional**. `NULL` permitido; quando presente, sem texto vazio após `trim` e ≤ 200 caracteres
+  (CHECK `inventory_purchases_supplier_name_not_blank`). **Nunca** reutiliza `notes` nem
+  `purchase_channel` para fornecedor. A tabela `suppliers` (§14) continua fora de escopo.
+- Nova tabela **`inventory_purchase_accessory_items`** — um item por linha de uma compra de
+  acessórios, sempre vinculado a um cabeçalho `inventory_purchases` (`category = 'ACCESSORY'`,
+  `item_id NULL` no cabeçalho multi-item; `quantity`/`item_value` = totais agregados,
+  `item_value` = soma exata dos `total_value` das linhas). Campos: `id`, `purchase_id` (FK
+  `inventory_purchases`), `accessory_id` (FK `accessories`, `ON DELETE RESTRICT`), `line_number`
+  (> 0), `quantity` (> 0), `total_value numeric(12,2)` (> 0, **fonte autoritativa** do valor
+  pago pela linha — nunca `quantidade × unit_cost`), `freight_allocated numeric(12,2)` (≥ 0,
+  parcela do frete único rateada proporcionalmente a `total_value`, centavos inteiros, maior
+  resto, Σ = `freight_value`), `landed_total_value` (**gerada** = `total_value +
+  freight_allocated`), `balance_before`/`balance_after` (≥ 0, `balance_after = balance_before +
+  quantity`), `unit_cost_before numeric(10,2) NULL`, `unit_cost_after numeric(10,2)` (≥ 0,
+  média ponderada móvel — ver §13.3), `created_at`. `UNIQUE (purchase_id, accessory_id)` (um
+  acessório nunca se repete na mesma compra) e `UNIQUE (purchase_id, line_number)`. Ledger
+  **imutável**: `SELECT` só a `authenticated` ativo (RLS `is_active_user()`), **nenhum**
+  `INSERT`/`UPDATE`/`DELETE` a nenhuma role de sessão — escrita exclusiva via
+  `register_accessory_purchase` (`security definer`, `search_path` fixo, `EXECUTE` só
+  `service_role`).
+- **`register_accessory_purchase(p_items jsonb, p_freight_value, p_supplier_name, p_notes,
+  p_occurred_at, p_changed_by, p_idempotency_key)`** — RPC dedicada. Numa **única transação**:
+  valida 1..50 itens; rateia o frete (determinístico, maior resto); trava os acessórios em
+  ordem ascendente por `id` (`FOR UPDATE` — serializa compras concorrentes, evita deadlock;
+  bloqueia inexistente/inativo); cria o cabeçalho e os itens; chama `register_stock_movement`
+  (`PURCHASE`, `reference_type='PURCHASE'`, `reference_id` = cabeçalho, `occurred_at` = data
+  informada, `reason` = fornecedor/observação legível) por acessório; atualiza
+  `accessories.unit_cost`. Idempotente por `p_idempotency_key` (compara
+  `category`/`freight`/`supplier`/`notes`/itens canônicos por `accessory_id`; `occurred_at`
+  fica de fora, mesma convenção das outras RPCs). Qualquer exceção desfaz cabeçalho, itens,
+  movimentos, saldo **e** custos. Devolve um `jsonb` com o cabeçalho e os itens ordenados por
+  `line_number` (`unit_cost_before`/`unit_cost_after`, `balance_before`/`balance_after`,
+  `freight_allocated`, `landed_total_value`).
+- Edge Function `inventory-purchases`: rota nova **`POST /inventory-purchases/accessory`**
+  (`inventory-purchases` **não republicada** nesta rodada). O frontend **nunca** envia
+  `unit_cost`, `freight_allocated` nem saldos — o handler rejeita chave desconhecida. As rotas
+  base (Embalagem/legado) e `/filament` permanecem **inalteradas**.
 
 ---
 

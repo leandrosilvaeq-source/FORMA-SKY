@@ -141,4 +141,42 @@ describe('StockMovementHistory', () => {
     expect(screen.queryByRole('button', { name: /editar/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /excluir/i })).not.toBeInTheDocument()
   })
+
+  it('modo responsivo: uma compra (reference_type PURCHASE) mostra "Compra" + referência curta, sem UUID completo', () => {
+    const purchaseId = 'abcd1234-5678-90ab-cdef-1234567890ab'
+    render(
+      <StockMovementHistory
+        movements={[
+          movementFixture({
+            movement_type: 'PURCHASE',
+            reference_type: 'PURCHASE',
+            reference_id: purchaseId,
+            reason: 'Fornecedor: Loja X — reposição',
+          }),
+        ]}
+        isLoading={false}
+        error={null}
+        onRetry={vi.fn()}
+        responsive
+      />,
+    )
+    // "Compra" e "Ref. abcd1234" aparecem; o UUID completo nunca
+    expect(screen.getAllByText('Compra').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Ref. abcd1234').length).toBeGreaterThan(0)
+    expect(screen.queryByText(new RegExp(purchaseId))).not.toBeInTheDocument()
+    expect(screen.getAllByText(/Fornecedor: Loja X — reposição/).length).toBeGreaterThan(0)
+  })
+
+  it('modo responsivo: movimentação sem referência de compra não mostra "Ref."', () => {
+    render(
+      <StockMovementHistory
+        movements={[movementFixture({ movement_type: 'POSITIVE_ADJUSTMENT', reference_type: null, reason: 'contagem' })]}
+        isLoading={false}
+        error={null}
+        onRetry={vi.fn()}
+        responsive
+      />,
+    )
+    expect(screen.queryByText(/^Ref\. /)).not.toBeInTheDocument()
+  })
 })

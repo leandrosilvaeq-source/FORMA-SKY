@@ -32,13 +32,17 @@ import { useAccessories } from '@/hooks/useAccessories'
 import { usePackaging } from '@/hooks/usePackaging'
 import { useFilamentTypes } from '@/hooks/useFilamentTypes'
 import {
+  registerAccessoryPurchase,
   registerFilamentPurchase,
   registerInventoryPurchase,
   type PurchaseChannel,
+  type RegisterAccessoryPurchaseInput,
+  type RegisterAccessoryPurchaseItemInput,
   type RegisterFilamentPurchaseInput,
   type RegisterFilamentPurchaseItemInput,
   type RegisterInventoryPurchaseInput,
 } from '@/lib/api/inventoryPurchases'
+import { allocateFreightCents, predictUnitCostAfter } from '@/lib/inventory/accessoryPurchaseCost'
 import { ApiError } from '@/lib/api/errors'
 import {
   formatDateToBrShort,
@@ -57,7 +61,7 @@ import {
   removeLastDigit,
 } from '@/lib/forms/currencyField'
 import { cn } from '@/lib/utils'
-import type { FilamentTypeSummary, InventoryPurchaseCategory } from '@/types/domain'
+import type { Accessory, FilamentTypeSummary, InventoryPurchaseCategory } from '@/types/domain'
 
 // Módulo 3, Incremento 5 (Compras) — pedido do usuário em 2026-08-28, depois
 // do MVP manual de filamentos ter sido aprovado: fluxo centralizado de
@@ -249,65 +253,73 @@ function CurrencyInput({
   )
 }
 
-// Select pesquisável de itens ATIVOS (Acessório/Embalagem) — nunca mostra
-// inativos, nunca cria cadastro automaticamente (requisito 9/10: "se o item
-// não existir, orientar cadastrá-lo primeiro na aba correspondente").
-// Montado só quando a categoria correspondente está selecionada (ver
-// PurchaseDialog abaixo) — o hook (useAccessories/usePackaging) só busca a
-// listagem enquanto esta sub-tela está de fato visível, nunca a cada
-// abertura do diálogo de compras inteiro.
+// Select pesquisável de UM acessório ATIVO já cadastrado, usado por CADA
+// linha da "Compra de acessórios" (2026-09-06 — vários acessórios na mesma
+// compra). Nunca mostra inativos nem cria cadastro (requisito: "cadastrar
+// primeiro na aba Acessórios"). `accessories`/`isLoading` vêm de um ÚNICO
+// useAccessories() no componente pai (nunca um por linha). `excludeIds`
+// remove das sugestões os acessórios já escolhidos em OUTRAS linhas —
+// impede o mesmo acessório em duas linhas antes mesmo do envio. Rótulo/ids
+// incluem o número do item para nunca colidir entre linhas.
 function AccessoryItemPicker({
+  index,
+  accessories,
   selectedId,
+  excludeIds,
   onSelect,
   disabled,
   error,
+  autoFocus,
 }: {
+  index: number
+  accessories: Accessory[]
   selectedId: string | null
+  excludeIds: Set<string>
   onSelect: (id: string | null, label: string) => void
   disabled: boolean
   error?: string
+  autoFocus?: boolean
 }) {
-  const { accessories, isLoading } = useAccessories()
   const [searchTerm, setSearchTerm] = useState('')
-  const activeItems = accessories.filter((item) => item.is_active)
-  const suggestions = activeItems.map((item) => ({
-    id: item.id,
-    label: item.variant ? `${item.name} — ${item.variant}` : item.name,
-  }))
+  const suggestions = accessories
+    .filter((item) => item.id === selectedId || !excludeIds.has(item.id))
+    .map((item) => ({
+      id: item.id,
+      label: item.variant ? `${item.name} — ${item.variant}` : item.name,
+    }))
+  const normalizedTerm = normalizeForSearch(searchTerm)
+  const filtered = normalizedTerm
+    ? suggestions.filter((s) => normalizeForSearch(s.label).includes(normalizedTerm))
+    : suggestions
+  const fieldLabel = `Acessório — item ${index}`
 
   function handleSelect(label: string) {
-    const match = suggestions.find((suggestion) => suggestion.label === label)
+    const match = filtered.find((suggestion) => suggestion.label === label)
     setSearchTerm(label)
     onSelect(match?.id ?? null, label)
   }
 
-  if (!isLoading && activeItems.length === 0) {
-    return (
-      <p role="status" className="text-muted-foreground text-sm">
-        Nenhum acessório ativo cadastrado. Cadastre um na aba Acessórios antes de registrar esta
-        compra.
-      </p>
-    )
-  }
-
   return (
     <fieldset disabled={disabled} className="contents">
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="purchase-accessory">Acessório</Label>
+      <div className="flex flex-col gap-1">
+        <Label htmlFor={`purchase-accessory-${index}`} className="sr-only sm:not-sr-only">
+          {fieldLabel}
+        </Label>
         <SearchAutocomplete
           value={searchTerm}
           onValueChange={(value) => {
             setSearchTerm(value)
             onSelect(null, value)
           }}
-          suggestions={suggestions}
+          suggestions={filtered}
           onSelect={handleSelect}
-          ariaLabel="Acessório"
+          ariaLabel={fieldLabel}
           placeholder="Buscar acessório ativo"
-          clearLabel="Limpar seleção de acessório"
-          listboxId="purchase-accessory-listbox"
-          listboxAriaLabel="Sugestões de acessório"
+          clearLabel={`Limpar seleção de acessório — item ${index}`}
+          listboxId={`purchase-accessory-listbox-${index}`}
+          listboxAriaLabel={`Sugestões de acessório — item ${index}`}
           noResultsText="Nenhum acessório ativo encontrado."
+          autoFocus={autoFocus}
         />
         {selectedId === null && searchTerm && (
           <p className="text-muted-foreground text-xs">Selecione um acessório da lista.</p>
@@ -510,6 +522,40 @@ function emptyFilamentItem(): FilamentPurchaseItemState {
 const FILAMENT_ITEM_ROW_GRID_CLASSNAME =
   'grid grid-cols-1 items-start gap-2 sm:grid-cols-[minmax(200px,2.2fr)_auto_72px_minmax(130px,1.1fr)_130px_auto] sm:items-end sm:gap-2'
 
+// Grade compacta de cada linha da "Compra de acessórios" (2026-09-06):
+// Acessório | Quantidade | Valor total | Remover. Acessório é a coluna mais
+// larga; Quantidade/Valor total têm largura fixa compacta; Remover é só o
+// ícone. Abaixo de sm, empilha em uma coluna. max-h-[90vh] overflow-y-auto
+// do DialogContent garante rolagem só vertical.
+const ACCESSORY_ITEM_ROW_GRID_CLASSNAME =
+  'grid grid-cols-1 items-start gap-2 sm:grid-cols-[minmax(220px,2.6fr)_90px_150px_auto] sm:items-end sm:gap-2'
+
+// Um item da "Compra de acessórios" — estado local de formulário, nunca
+// enviado assim (handleAccessorySubmit converte para
+// RegisterAccessoryPurchaseItemInput). "Valor total" é quanto o usuário
+// pagou por TODOS os itens da linha (nunca o unitário) — enviado
+// diretamente ao backend, que grava o total exato e deriva o Custo unitário
+// por média ponderada móvel (migration 20260906140000). `key` é gerada uma
+// vez por item (crypto.randomUUID()), usada como React key e para escopar
+// erros de campo.
+interface AccessoryPurchaseItemState {
+  key: string
+  accessoryId: string | null
+  quantity: string
+  totalValueField: CurrencyFieldState
+}
+
+function emptyAccessoryItem(): AccessoryPurchaseItemState {
+  return {
+    key: crypto.randomUUID(),
+    accessoryId: null,
+    quantity: '',
+    totalValueField: emptyCurrencyField(),
+  }
+}
+
+const ACCESSORY_PURCHASE_MAX_ITEMS = 50
+
 export interface PurchaseDialogProps {
   // Chamado após uma compra concluída com sucesso, com a categoria
   // comprada — cada página de área decide se aquilo afeta os dados que ela
@@ -557,6 +603,21 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
     useFilamentTypes()
   const activeFilamentTypes = filamentTypes.filter((type) => type.is_active)
 
+  // Acessório — Compra multi-item (2026-09-06). Mesma disciplina do bloco de
+  // Filamento acima: useAccessories() é chamado UMA ÚNICA VEZ aqui (instância
+  // própria, distinta da de AccessoriesInventoryPage — o projeto não tem
+  // cache central) e repassado por prop a cada AccessoryItemPicker;
+  // `refetchAccessories` roda toda vez que a janela ABRE, para o seletor e a
+  // PREVISÃO de custo refletirem saldo/custo mais recentes sem F5. Cabeçalho
+  // próprio: Fornecedor (texto livre opcional) e Observação (opcional) — a
+  // Data reaproveita purchaseDateText (compartilhada com Filamento).
+  const { accessories, isLoading: isLoadingAccessories, refetch: refetchAccessories } = useAccessories()
+  const activeAccessories = accessories.filter((item) => item.is_active)
+  const [accessoryItems, setAccessoryItems] = useState<AccessoryPurchaseItemState[]>([])
+  const [autoFocusAccessoryKey, setAutoFocusAccessoryKey] = useState<string | null>(null)
+  const [supplierName, setSupplierName] = useState('')
+  const [purchaseNotes, setPurchaseNotes] = useState('')
+
   // Compartilhados: quantidade/Valor dos itens são usados só por Acessório/
   // Embalagem a partir desta rodada (Filamento passou a ter quantidade e
   // valor unitário por item, ver filamentItems acima). Frete continua
@@ -588,6 +649,10 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
     setPurchaseChannel(null)
     setFilamentItems([])
     setAutoFocusItemKey(null)
+    setAccessoryItems([])
+    setAutoFocusAccessoryKey(null)
+    setSupplierName('')
+    setPurchaseNotes('')
     setQuantity('')
     setItemValueField(emptyCurrencyField())
     setFreightValueField(emptyCurrencyField())
@@ -599,11 +664,11 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
   function handleOpenChange(next: boolean) {
     if (next) {
       resetForm()
-      // Sempre busca os tipos de filamento mais recentes ao abrir — nunca os
-      // dados carregados na primeira montagem do diálogo (ver comentário de
-      // useFilamentTypes acima). Só dispara neste instante (abertura), nunca
-      // em polling nem a cada renderização.
+      // Sempre busca os cadastros mais recentes ao abrir — nunca os dados
+      // carregados na primeira montagem do diálogo. Só dispara neste instante
+      // (abertura), nunca em polling nem a cada renderização.
       refetchFilamentTypes()
+      refetchAccessories()
     }
     setIsOpen(next)
   }
@@ -611,15 +676,53 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
   function handleCategoryChange(next: InventoryPurchaseCategory) {
     setCategory(next)
     setItemId(null)
-    // Ao entrar em Filamento, a janela já apresenta um item vazio e a data
-    // pré-preenchida com hoje; ao sair, tudo é descartado (reconstruído do
-    // zero se o usuário voltar).
-    setPurchaseDateText(next === 'FILAMENT' ? formatDateToBrShort(new Date()) : '')
+    // Ao entrar em Filamento OU Acessório, a janela já apresenta uma linha
+    // vazia e a data pré-preenchida com hoje; ao sair, tudo é descartado
+    // (reconstruído do zero se o usuário voltar).
+    setPurchaseDateText(
+      next === 'FILAMENT' || next === 'ACCESSORY' ? formatDateToBrShort(new Date()) : '',
+    )
     setPurchaseChannel(null)
     setFilamentItems(next === 'FILAMENT' ? [emptyFilamentItem()] : [])
     setAutoFocusItemKey(null)
+    setAccessoryItems(next === 'ACCESSORY' ? [emptyAccessoryItem()] : [])
+    setAutoFocusAccessoryKey(null)
+    setSupplierName('')
+    setPurchaseNotes('')
     setQuantity('')
     setFieldErrors({})
+  }
+
+  function handleAddAccessoryItem() {
+    const next = emptyAccessoryItem()
+    setAccessoryItems((current) =>
+      current.length >= ACCESSORY_PURCHASE_MAX_ITEMS ? current : [...current, next],
+    )
+    setAutoFocusAccessoryKey(next.key)
+    setFieldErrors((current) => ({ ...current, items: '' }))
+  }
+
+  function handleRemoveAccessoryItem(key: string) {
+    setAccessoryItems((current) =>
+      current.length <= 1 ? current : current.filter((item) => item.key !== key),
+    )
+    setFieldErrors((current) => {
+      const next = { ...current }
+      delete next[`acc_${key}_accessory_id`]
+      delete next[`acc_${key}_quantity`]
+      delete next[`acc_${key}_total_value`]
+      return next
+    })
+  }
+
+  function updateAccessoryItem(key: string, patch: Partial<AccessoryPurchaseItemState>) {
+    setAccessoryItems((current) =>
+      current.map((item) => (item.key === key ? { ...item, ...patch } : item)),
+    )
+  }
+
+  function clearAccessoryItemError(key: string, field: string) {
+    setFieldErrors((current) => ({ ...current, [`acc_${key}_${field}`]: '' }))
   }
 
   function handleAddFilamentItem() {
@@ -714,8 +817,52 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
   const filamentCostPerRoll =
     filamentTotalQuantity > 0 ? filamentTotalReais / filamentTotalQuantity : 0
 
-  async function handleAccessoryOrPackagingSubmit() {
-    if (category !== 'ACCESSORY' && category !== 'PACKAGING') return
+  // Resumo de Acessórios — mesma disciplina: soma os CENTAVOS do "Valor
+  // total" de cada linha diretamente (soma exata), rateia o frete pelo MESMO
+  // método determinístico da RPC (allocateFreightCents) e calcula a PREVISÃO
+  // do novo Custo unitário por linha pela regra aprovada
+  // (predictUnitCostAfter). Tudo aqui é só informativo — o valor real vem do
+  // backend (unit_cost_after de cada item).
+  const accessoryLineTotalsCents = accessoryItems.map((item) => item.totalValueField.cents)
+  const accessorySubtotalCents = accessoryLineTotalsCents.reduce((sum, cents) => sum + cents, 0)
+  const accessoryTotalQuantity = accessoryItems.reduce((sum, item) => {
+    const itemQuantity = parseNumberField(item.quantity, 'a quantidade', { integer: true }).value
+    return sum + (itemQuantity && itemQuantity > 0 ? itemQuantity : 0)
+  }, 0)
+  const accessoryTotalReais = centsToAmount(accessorySubtotalCents + freightValueField.cents)
+  const accessoryFreightAllocationCents = allocateFreightCents(
+    accessoryLineTotalsCents,
+    freightValueField.cents,
+  )
+  const accessoryPredictedCosts = accessoryItems.map((item, index) => {
+    const itemQuantity = parseNumberField(item.quantity, 'a quantidade', { integer: true }).value
+    if (
+      !item.accessoryId ||
+      !itemQuantity ||
+      itemQuantity <= 0 ||
+      item.totalValueField.cents <= 0
+    ) {
+      return null
+    }
+    const accessory = accessories.find((entry) => entry.id === item.accessoryId)
+    if (!accessory) return null
+    return {
+      name: accessory.variant ? `${accessory.name} — ${accessory.variant}` : accessory.name,
+      predicted: predictUnitCostAfter({
+        balanceBefore: accessory.current_stock,
+        unitCostBefore: accessory.unit_cost,
+        quantity: itemQuantity,
+        lineTotalCents: item.totalValueField.cents,
+        freightAllocatedCents: accessoryFreightAllocationCents[index] ?? 0,
+      }),
+    }
+  })
+
+  // EMBALAGEM continua no fluxo de item único, INALTERADO (register_inventory_purchase
+  // / rota base). Acessório passou a ter janela multi-item própria
+  // (handleAccessorySubmit abaixo) a partir de 2026-09-06.
+  async function handlePackagingSubmit() {
+    if (category !== 'PACKAGING') return
 
     const errors: Record<string, string> = {}
 
@@ -731,8 +878,7 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
     }
 
     if (!itemId) {
-      errors.item_id =
-        category === 'ACCESSORY' ? 'Selecione um acessório.' : 'Selecione uma embalagem.'
+      errors.item_id = 'Selecione uma embalagem.'
     }
 
     if (Object.keys(errors).length > 0) {
@@ -741,7 +887,7 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
     }
 
     const input: RegisterInventoryPurchaseInput = {
-      category,
+      category: 'PACKAGING',
       quantity: quantityResult.value as number,
       item_value: itemValueReais,
       freight_value: freightValueReais,
@@ -755,7 +901,115 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
     try {
       await registerInventoryPurchase({ ...input, idempotency_key: getIdempotencyKey(fingerprint) })
       toast.success('Compra registrada.')
-      onPurchaseCompleted(category)
+      onPurchaseCompleted('PACKAGING')
+      handleOpenChange(false)
+    } catch (err) {
+      const message = toErrorMessage(err)
+      if (err instanceof ApiError && err.type === 'validation') {
+        setSubmitError(message)
+      } else {
+        toast.error(message)
+      }
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  // Compra de acessórios com uma ou várias linhas (2026-09-06). Envia
+  // total_value de cada linha EXATAMENTE como digitado (nunca dividido); o
+  // frete é único e é rateado no backend; o Custo unitário é derivado no
+  // PostgreSQL por média ponderada móvel — o frontend nunca envia unit_cost,
+  // freight_allocated nem saldos.
+  async function handleAccessorySubmit() {
+    if (category !== 'ACCESSORY') return
+
+    const errors: Record<string, string> = {}
+
+    const dateResult = parseBrShortDate(purchaseDateText)
+    if (dateResult.error) errors.purchase_date = dateResult.error
+
+    const trimmedSupplier = supplierName.trim()
+    if (trimmedSupplier.length > 200) {
+      errors.supplier_name = 'O fornecedor deve ter no máximo 200 caracteres.'
+    }
+    const trimmedNotes = purchaseNotes.trim()
+    if (trimmedNotes.length > 1000) {
+      errors.notes = 'A observação deve ter no máximo 1000 caracteres.'
+    }
+
+    if (accessoryItems.length === 0) {
+      errors.items = 'Adicione ao menos um item de compra.'
+    }
+    if (accessoryItems.length > ACCESSORY_PURCHASE_MAX_ITEMS) {
+      errors.items = `No máximo ${ACCESSORY_PURCHASE_MAX_ITEMS} itens por compra.`
+    }
+
+    const validatedItems: RegisterAccessoryPurchaseItemInput[] = []
+    const seenIds = new Set<string>()
+
+    for (const item of accessoryItems) {
+      let itemHasError = false
+
+      if (!item.accessoryId) {
+        errors[`acc_${item.key}_accessory_id`] = 'Selecione um acessório.'
+        itemHasError = true
+      } else if (seenIds.has(item.accessoryId)) {
+        errors[`acc_${item.key}_accessory_id`] = 'Este acessório já foi adicionado em outra linha.'
+        itemHasError = true
+      }
+
+      const quantityResult = parseNumberField(item.quantity, 'a quantidade', {
+        required: true,
+        min: 1,
+        integer: true,
+      })
+      if (quantityResult.error) {
+        errors[`acc_${item.key}_quantity`] = quantityResult.error
+        itemHasError = true
+      }
+
+      if (item.totalValueField.cents <= 0) {
+        errors[`acc_${item.key}_total_value`] = 'Informe o valor total do item, maior que zero.'
+        itemHasError = true
+      }
+
+      if (!itemHasError && item.accessoryId) {
+        seenIds.add(item.accessoryId)
+        validatedItems.push({
+          accessory_id: item.accessoryId,
+          quantity: quantityResult.value as number,
+          // Enviado diretamente, em reais, exatamente como informado — NUNCA
+          // dividido pela quantidade aqui (o backend grava total_value tal
+          // como recebido e deriva o Custo unitário internamente).
+          total_value: centsToAmount(item.totalValueField.cents),
+        })
+      }
+    }
+
+    if (Object.keys(errors).length > 0 || validatedItems.length === 0 || !dateResult.value) {
+      setFieldErrors(errors)
+      return
+    }
+
+    const input: RegisterAccessoryPurchaseInput = {
+      items: validatedItems,
+      freight_value: freightValueReais,
+      supplier_name: trimmedSupplier || null,
+      notes: trimmedNotes || null,
+      occurred_at: dateResult.value,
+    }
+    const fingerprint = JSON.stringify(input)
+
+    setFieldErrors({})
+    setSubmitError(null)
+    setIsSubmitting(true)
+    try {
+      await registerAccessoryPurchase({
+        ...input,
+        idempotency_key: getIdempotencyKey(fingerprint),
+      })
+      toast.success('Compra registrada.')
+      onPurchaseCompleted('ACCESSORY')
       handleOpenChange(false)
     } catch (err) {
       const message = toErrorMessage(err)
@@ -886,7 +1140,11 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
       void handleFilamentSubmit()
       return
     }
-    void handleAccessoryOrPackagingSubmit()
+    if (category === 'ACCESSORY') {
+      void handleAccessorySubmit()
+      return
+    }
+    void handlePackagingSubmit()
   }
 
   return (
@@ -904,20 +1162,26 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
         <DialogContent
           className={cn(
             'max-h-[90vh] overflow-y-auto',
-            // A janela só precisa ser mais larga no desktop para acomodar os
-            // itens de Filamento em uma única linha — Acessório/Embalagem
-            // mantêm a largura original.
-            category === 'FILAMENT' ? 'sm:max-w-4xl' : 'sm:max-w-2xl',
+            // Filamento e Acessório precisam de mais largura no desktop para
+            // acomodar os itens em uma única linha — Embalagem mantém a
+            // largura original.
+            category === 'FILAMENT' || category === 'ACCESSORY' ? 'sm:max-w-4xl' : 'sm:max-w-2xl',
           )}
         >
           <DialogHeader>
             <DialogTitle>
-              {category === 'FILAMENT' ? 'Compra de filamentos' : 'Registrar compra'}
+              {category === 'FILAMENT'
+                ? 'Compra de filamentos'
+                : category === 'ACCESSORY'
+                  ? 'Compra de acessórios'
+                  : 'Registrar compra'}
             </DialogTitle>
             <DialogDescription>
               {category === 'FILAMENT'
                 ? 'Registre um ou mais filamentos na mesma compra — os rolos correspondentes são criados automaticamente no estoque.'
-                : 'Selecione o item e preencha os dados da compra — a entrada correspondente é lançada automaticamente no estoque.'}
+                : category === 'ACCESSORY'
+                  ? 'Registre um ou mais acessórios na mesma compra — a entrada de estoque e o Custo unitário de cada acessório são atualizados automaticamente.'
+                  : 'Selecione o item e preencha os dados da compra — a entrada correspondente é lançada automaticamente no estoque.'}
             </DialogDescription>
           </DialogHeader>
 
@@ -1255,16 +1519,271 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
 
             {category === 'ACCESSORY' && (
               <>
-                <AccessoryItemPicker
-                  selectedId={itemId}
-                  onSelect={(id) => {
-                    setItemId(id)
-                    setFieldErrors((current) => ({ ...current, item_id: '' }))
-                  }}
-                  disabled={isSubmitting}
-                  error={fieldErrors.item_id}
-                />
-                {quantityField}
+                {/* 1. Dados Gerais */}
+                <div className="flex flex-col gap-3 rounded-lg border p-3">
+                  <p className="text-sm font-medium" data-section-heading="true">
+                    Dados Gerais
+                  </p>
+                  <div className="flex flex-wrap gap-4">
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="purchase-accessory-date">Data da compra</Label>
+                      <Input
+                        id="purchase-accessory-date"
+                        inputMode="numeric"
+                        autoComplete="off"
+                        maxLength={8}
+                        placeholder="dd/mm/aa"
+                        value={purchaseDateText}
+                        onChange={(event) => {
+                          setPurchaseDateText(maskBrShortDate(event.target.value))
+                          setFieldErrors((current) => ({ ...current, purchase_date: '' }))
+                        }}
+                        disabled={isSubmitting}
+                        aria-invalid={fieldErrors.purchase_date ? true : undefined}
+                        className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-28"
+                      />
+                      {fieldErrors.purchase_date && (
+                        <p className="text-destructive text-sm">{fieldErrors.purchase_date}</p>
+                      )}
+                    </div>
+
+                    <div className="flex min-w-[200px] flex-1 flex-col gap-2">
+                      <Label htmlFor="purchase-accessory-supplier">Fornecedor (opcional)</Label>
+                      <Input
+                        id="purchase-accessory-supplier"
+                        value={supplierName}
+                        maxLength={200}
+                        placeholder="Ex.: Loja X"
+                        onChange={(event) => {
+                          setSupplierName(event.target.value)
+                          setFieldErrors((current) => ({ ...current, supplier_name: '' }))
+                        }}
+                        disabled={isSubmitting}
+                        aria-invalid={fieldErrors.supplier_name ? true : undefined}
+                        className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
+                      />
+                      {fieldErrors.supplier_name && (
+                        <p className="text-destructive text-sm">{fieldErrors.supplier_name}</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Itens */}
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium" data-section-heading="true">
+                      Itens
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon-sm"
+                      onClick={handleAddAccessoryItem}
+                      disabled={
+                        isSubmitting ||
+                        accessoryItems.length >= ACCESSORY_PURCHASE_MAX_ITEMS ||
+                        (!isLoadingAccessories && activeAccessories.length === 0)
+                      }
+                      aria-label="Adicionar outro acessório"
+                      className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                    >
+                      <PlusIcon aria-hidden="true" />
+                    </Button>
+                  </div>
+                  {fieldErrors.items && (
+                    <p className="text-destructive text-sm">{fieldErrors.items}</p>
+                  )}
+
+                  {!isLoadingAccessories && activeAccessories.length === 0 ? (
+                    <p role="status" className="text-muted-foreground text-sm">
+                      Nenhum acessório ativo cadastrado. Cadastre um na aba Acessórios antes de
+                      registrar esta compra.
+                    </p>
+                  ) : (
+                    <div className="flex flex-col gap-3">
+                      <div
+                        className={cn(
+                          ACCESSORY_ITEM_ROW_GRID_CLASSNAME,
+                          'text-muted-foreground hidden text-xs font-medium sm:grid',
+                        )}
+                        aria-hidden="true"
+                      >
+                        <span>Acessório</span>
+                        <span>Quantidade</span>
+                        <span>Valor total</span>
+                        <span />
+                      </div>
+
+                      {accessoryItems.map((item, index) => {
+                        const excludeIds = new Set(
+                          accessoryItems
+                            .filter((other) => other.key !== item.key && other.accessoryId)
+                            .map((other) => other.accessoryId as string),
+                        )
+                        return (
+                          <div
+                            key={item.key}
+                            role="group"
+                            aria-label={`Item ${index + 1}`}
+                            className={cn(
+                              ACCESSORY_ITEM_ROW_GRID_CLASSNAME,
+                              'border-input rounded-lg border p-2 sm:border-0 sm:p-0',
+                            )}
+                          >
+                            <AccessoryItemPicker
+                              index={index + 1}
+                              accessories={activeAccessories}
+                              selectedId={item.accessoryId}
+                              excludeIds={excludeIds}
+                              onSelect={(id) => {
+                                updateAccessoryItem(item.key, { accessoryId: id })
+                                clearAccessoryItemError(item.key, 'accessory_id')
+                              }}
+                              disabled={isSubmitting}
+                              error={fieldErrors[`acc_${item.key}_accessory_id`]}
+                              autoFocus={item.key === autoFocusAccessoryKey}
+                            />
+
+                            <div className="flex flex-col gap-1">
+                              <Label
+                                htmlFor={`purchase-accessory-${item.key}-quantity`}
+                                className="sr-only sm:not-sr-only"
+                              >
+                                Quantidade
+                              </Label>
+                              <Input
+                                id={`purchase-accessory-${item.key}-quantity`}
+                                inputMode="numeric"
+                                value={item.quantity}
+                                onChange={(event) => {
+                                  updateAccessoryItem(item.key, { quantity: event.target.value })
+                                  clearAccessoryItemError(item.key, 'quantity')
+                                }}
+                                disabled={isSubmitting}
+                                aria-invalid={
+                                  fieldErrors[`acc_${item.key}_quantity`] ? true : undefined
+                                }
+                                className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-full"
+                              />
+                              {fieldErrors[`acc_${item.key}_quantity`] && (
+                                <p className="text-destructive text-sm">
+                                  {fieldErrors[`acc_${item.key}_quantity`]}
+                                </p>
+                              )}
+                            </div>
+
+                            <CurrencyInput
+                              id={`purchase-accessory-${item.key}-total-value`}
+                              label="Valor total"
+                              inputClassName="w-full"
+                              state={item.totalValueField}
+                              onChange={(next) => {
+                                updateAccessoryItem(item.key, { totalValueField: next })
+                                clearAccessoryItemError(item.key, 'total_value')
+                              }}
+                              disabled={isSubmitting}
+                              error={fieldErrors[`acc_${item.key}_total_value`]}
+                            />
+
+                            <div className="flex items-end justify-end sm:items-center">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon-sm"
+                                aria-label={`Remover item ${index + 1}`}
+                                onClick={() => handleRemoveAccessoryItem(item.key)}
+                                disabled={isSubmitting || accessoryItems.length <= 1}
+                                className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0"
+                              >
+                                <Trash2Icon aria-hidden="true" />
+                              </Button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* 3. Frete */}
+                <div className="flex flex-col gap-3 rounded-lg border p-3">
+                  <p className="text-sm font-medium" data-section-heading="true">
+                    Frete
+                  </p>
+                  <CurrencyInput
+                    id="purchase-accessory-freight"
+                    label="Valor do frete"
+                    state={freightValueField}
+                    onChange={setFreightValueField}
+                    disabled={isSubmitting}
+                  />
+                </div>
+
+                {/* 4. Observação */}
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="purchase-accessory-notes">Observação (opcional)</Label>
+                  <Input
+                    id="purchase-accessory-notes"
+                    value={purchaseNotes}
+                    maxLength={1000}
+                    onChange={(event) => {
+                      setPurchaseNotes(event.target.value)
+                      setFieldErrors((current) => ({ ...current, notes: '' }))
+                    }}
+                    disabled={isSubmitting}
+                    aria-invalid={fieldErrors.notes ? true : undefined}
+                    className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50"
+                  />
+                  {fieldErrors.notes && <p className="text-destructive text-sm">{fieldErrors.notes}</p>}
+                </div>
+
+                {/* 5. Resumo */}
+                <div className="flex flex-col gap-2">
+                  <p className="text-sm font-medium" data-section-heading="true">
+                    Resumo
+                  </p>
+                  <div className="border-brand-primary/20 bg-brand-primary-soft/40 grid grid-cols-2 gap-2 rounded-lg border px-3 py-2 sm:grid-cols-4">
+                    <div>
+                      <p className="text-muted-foreground text-xs">Quantidade total</p>
+                      <p className="text-brand-primary-dark text-sm font-medium">
+                        {accessoryTotalQuantity}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground text-xs">Subtotal</p>
+                      <p className="text-brand-primary-dark text-sm font-medium">
+                        {formatBRL(centsToAmount(accessorySubtotalCents))}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground text-xs">Frete</p>
+                      <p className="text-brand-primary-dark text-sm font-medium">
+                        {formatBRL(freightValueReais)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground text-xs">Total da compra</p>
+                      <p className="text-brand-primary-dark text-sm font-medium">
+                        {formatBRL(accessoryTotalReais)}
+                      </p>
+                    </div>
+                  </div>
+                  {accessoryPredictedCosts.some((entry) => entry !== null) && (
+                    <div className="border-brand-primary/20 flex flex-col gap-1 rounded-lg border px-3 py-2">
+                      <p className="text-muted-foreground text-xs">
+                        Custo unitário previsto (o valor final é calculado pelo servidor)
+                      </p>
+                      {accessoryPredictedCosts.map((entry, index) =>
+                        entry ? (
+                          <p key={index} className="text-brand-primary-dark text-sm">
+                            {entry.name}: <span className="font-medium">{formatBRL(entry.predicted)}</span>
+                          </p>
+                        ) : null,
+                      )}
+                    </div>
+                  )}
+                </div>
               </>
             )}
 
@@ -1283,7 +1802,7 @@ export function PurchaseDialog({ onPurchaseCompleted }: PurchaseDialogProps) {
               </>
             )}
 
-            {(category === 'ACCESSORY' || category === 'PACKAGING') && (
+            {category === 'PACKAGING' && (
               <>
                 <div className="flex flex-wrap gap-4">
                   <CurrencyInput

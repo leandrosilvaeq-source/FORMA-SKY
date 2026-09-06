@@ -26,6 +26,16 @@ function movementTypeLabel(type: string): string {
   return MOVEMENT_TYPE_LABELS[type as StockMovementType] ?? type
 }
 
+// Referência curta da compra que originou a movimentação (2026-09-06):
+// "Ref. <8 primeiros caracteres do id>" — nunca o UUID completo, que
+// prejudicaria a leitura. Só para movimentações de compra
+// (reference_type === 'PURCHASE'); qualquer outra referência (ou nenhuma)
+// não mostra nada.
+function purchaseShortRef(movement: StockMovement): string | null {
+  if (movement.reference_type !== 'PURCHASE' || !movement.reference_id) return null
+  return `Ref. ${movement.reference_id.slice(0, 8)}`
+}
+
 function formatDateTime(value: string): string {
   return new Date(value).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
 }
@@ -128,6 +138,7 @@ export function StockMovementHistory({
             <TableBody>
               {movements.map((movement) => {
                 const delta = formatSignedQuantity(movement.quantity_delta)
+                const shortRef = purchaseShortRef(movement)
                 return (
                   <TableRow key={movement.id}>
                     <TableCell className="truncate" title={formatDateTime(movement.occurred_at)}>
@@ -138,6 +149,9 @@ export function StockMovementHistory({
                       title={movementTypeLabel(movement.movement_type)}
                     >
                       {movementTypeLabel(movement.movement_type)}
+                      {shortRef && (
+                        <span className="text-muted-foreground block text-xs">{shortRef}</span>
+                      )}
                     </TableCell>
                     <TableCell
                       className={cn(
@@ -165,12 +179,14 @@ export function StockMovementHistory({
         <div className="flex flex-col gap-2 sm:hidden">
           {movements.map((movement) => {
             const delta = formatSignedQuantity(movement.quantity_delta)
+            const shortRef = purchaseShortRef(movement)
             return (
               <Card key={movement.id} size="sm">
                 <CardContent className="flex flex-col gap-1">
                   <span className="text-sm font-medium">{formatDateTime(movement.occurred_at)}</span>
                   <span className="text-muted-foreground text-xs break-words">
                     Tipo: {movementTypeLabel(movement.movement_type)}
+                    {shortRef ? ` · ${shortRef}` : ''}
                   </span>
                   <span
                     className={cn(

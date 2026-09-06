@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ApiError } from '@/lib/api/errors'
 import { formatCentsToBRL } from '@/lib/forms/currencyField'
@@ -11,6 +11,7 @@ const {
   useFilamentTypesMock,
   registerInventoryPurchaseMock,
   registerFilamentPurchaseMock,
+  registerAccessoryPurchaseMock,
   toastMock,
 } = vi.hoisted(() => ({
   useAccessoriesMock: vi.fn(),
@@ -18,6 +19,7 @@ const {
   useFilamentTypesMock: vi.fn(),
   registerInventoryPurchaseMock: vi.fn(),
   registerFilamentPurchaseMock: vi.fn(),
+  registerAccessoryPurchaseMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
 }))
 
@@ -27,6 +29,7 @@ vi.mock('@/hooks/useFilamentTypes', () => ({ useFilamentTypes: useFilamentTypesM
 vi.mock('@/lib/api/inventoryPurchases', () => ({
   registerInventoryPurchase: registerInventoryPurchaseMock,
   registerFilamentPurchase: registerFilamentPurchaseMock,
+  registerAccessoryPurchase: registerAccessoryPurchaseMock,
 }))
 vi.mock('sonner', () => ({ toast: toastMock }))
 
@@ -155,6 +158,23 @@ function purchaseFixture(overrides: Partial<Record<string, unknown>> = {}) {
   }
 }
 
+function accessoryPurchaseResultFixture(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    purchase_id: 'ap1',
+    category: 'ACCESSORY',
+    quantity: 1,
+    item_value: 10,
+    freight_value: 0,
+    total_value: 10,
+    supplier_name: null,
+    notes: null,
+    occurred_at: '2026-09-06T00:00:00Z',
+    created_at: '2026-09-06T00:00:00Z',
+    items: [],
+    ...overrides,
+  }
+}
+
 function filamentPurchaseResultFixture(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     purchase_id: 'fp1',
@@ -188,10 +208,32 @@ describe('PurchaseDialog', () => {
     toastMock.error.mockReset()
     registerInventoryPurchaseMock.mockReset()
     registerFilamentPurchaseMock.mockReset()
+    registerAccessoryPurchaseMock.mockReset()
+    registerAccessoryPurchaseMock.mockResolvedValue(accessoryPurchaseResultFixture())
     mockAccessories([accessoryFixture()])
     mockPackaging([packagingFixture()])
     mockFilamentTypes([filamentTypeFixture()])
   })
+
+  // Preenche uma linha da grade de "Compra de acessórios" (role="group"
+  // "Item N", 1-based): seleciona o acessório (digitar-e-clicar), a
+  // quantidade e o "Valor total" (campo bancário — dígitos entram pela
+  // direita).
+  async function fillAccessoryRow(
+    user: ReturnType<typeof userEvent.setup>,
+    dialog: HTMLElement,
+    itemIndex: number,
+    opts: { search: string; option: string | RegExp; quantity: string; totalDigits: string },
+  ) {
+    const row = within(dialog).getByRole('group', { name: `Item ${itemIndex}` })
+    await user.type(
+      within(row).getByRole('combobox', { name: `Acessório — item ${itemIndex}` }),
+      opts.search,
+    )
+    await user.click(await within(row).findByRole('option', { name: opts.option }))
+    await user.type(within(row).getByLabelText('Quantidade'), opts.quantity)
+    await user.type(within(row).getByLabelText('Valor total'), opts.totalDigits)
+  }
 
   // Cada linha de item é um role="group" com nome acessível "Item N"
   // (2026-09-04, janela compacta) — escopo confiável para localizar os
@@ -294,7 +336,7 @@ describe('PurchaseDialog', () => {
 
   it('bloqueia duplo envio: o botão de envio fica desabilitado enquanto a chamada está em andamento', async () => {
     let resolvePurchase: (value: unknown) => void = () => {}
-    registerInventoryPurchaseMock.mockReturnValue(
+    registerAccessoryPurchaseMock.mockReturnValue(
       new Promise((resolve) => {
         resolvePurchase = resolve
       }),
@@ -304,23 +346,25 @@ describe('PurchaseDialog', () => {
     const dialog = await openDialog(user)
 
     await selectCategory(user, dialog, 'Acessório')
-    await user.type(within(dialog).getByRole('combobox', { name: 'Acessório' }), 'Ímã')
-    await user.click(await within(dialog).findByRole('option', { name: /Ímã 6x2/i }))
-    await user.type(within(dialog).getByLabelText('Quantidade'), '2')
-    await user.type(within(dialog).getByLabelText('Valor dos itens'), '1000')
+    await fillAccessoryRow(user, dialog, 1, {
+      search: 'Ímã',
+      option: /Ímã 6x2/i,
+      quantity: '2',
+      totalDigits: '1000',
+    })
 
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
 
     await waitFor(() =>
       expect(within(dialog).getByRole('button', { name: /^registrando\.\.\.$/i })).toBeDisabled(),
     )
-    expect(registerInventoryPurchaseMock).toHaveBeenCalledTimes(1)
+    expect(registerAccessoryPurchaseMock).toHaveBeenCalledTimes(1)
 
-    resolvePurchase(purchaseFixture())
+    resolvePurchase(accessoryPurchaseResultFixture())
   })
 
   it('erro real do backend mantém o diálogo aberto e preserva os valores preenchidos', async () => {
-    registerInventoryPurchaseMock.mockRejectedValue(
+    registerAccessoryPurchaseMock.mockRejectedValue(
       new ApiError('validation', 400, 'valor inválido'),
     )
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
@@ -328,37 +372,42 @@ describe('PurchaseDialog', () => {
     const dialog = await openDialog(user)
 
     await selectCategory(user, dialog, 'Acessório')
-    await user.type(within(dialog).getByRole('combobox', { name: 'Acessório' }), 'Ímã')
-    await user.click(await within(dialog).findByRole('option', { name: /Ímã 6x2/i }))
-    await user.type(within(dialog).getByLabelText('Quantidade'), '3')
-    await user.type(within(dialog).getByLabelText('Valor dos itens'), '500')
+    await fillAccessoryRow(user, dialog, 1, {
+      search: 'Ímã',
+      option: /Ímã 6x2/i,
+      quantity: '3',
+      totalDigits: '500',
+    })
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
 
     expect(await within(dialog).findByText('valor inválido')).toBeInTheDocument()
-    expect(screen.getByRole('dialog', { name: 'Registrar compra' })).toBeInTheDocument()
-    expect(within(dialog).getByLabelText('Quantidade')).toHaveValue('3')
+    expect(screen.getByRole('dialog', { name: 'Compra de acessórios' })).toBeInTheDocument()
+    const row = within(dialog).getByRole('group', { name: 'Item 1' })
+    expect(within(row).getByLabelText('Quantidade')).toHaveValue('3')
   })
 
   it('idempotência: reenviar o mesmo formulário sem alterações reusa a mesma idempotency_key', async () => {
-    registerInventoryPurchaseMock.mockRejectedValueOnce(new ApiError('database', 500, 'falhou'))
-    registerInventoryPurchaseMock.mockResolvedValueOnce(purchaseFixture())
+    registerAccessoryPurchaseMock.mockRejectedValueOnce(new ApiError('database', 500, 'falhou'))
+    registerAccessoryPurchaseMock.mockResolvedValueOnce(accessoryPurchaseResultFixture())
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
 
     await selectCategory(user, dialog, 'Acessório')
-    await user.type(within(dialog).getByRole('combobox', { name: 'Acessório' }), 'Ímã')
-    await user.click(await within(dialog).findByRole('option', { name: /Ímã 6x2/i }))
-    await user.type(within(dialog).getByLabelText('Quantidade'), '1')
-    await user.type(within(dialog).getByLabelText('Valor dos itens'), '100')
+    await fillAccessoryRow(user, dialog, 1, {
+      search: 'Ímã',
+      option: /Ímã 6x2/i,
+      quantity: '1',
+      totalDigits: '100',
+    })
 
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
-    await waitFor(() => expect(registerInventoryPurchaseMock).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(registerAccessoryPurchaseMock).toHaveBeenCalledTimes(1))
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
-    await waitFor(() => expect(registerInventoryPurchaseMock).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(registerAccessoryPurchaseMock).toHaveBeenCalledTimes(2))
 
-    const firstKey = registerInventoryPurchaseMock.mock.calls[0][0].idempotency_key
-    const secondKey = registerInventoryPurchaseMock.mock.calls[1][0].idempotency_key
+    const firstKey = registerAccessoryPurchaseMock.mock.calls[0][0].idempotency_key
+    const secondKey = registerAccessoryPurchaseMock.mock.calls[1][0].idempotency_key
     expect(firstKey).toBeTruthy()
     expect(firstKey).toBe(secondKey)
   })
@@ -1352,8 +1401,9 @@ describe('PurchaseDialog', () => {
     const dialog = await openDialog(user)
     await selectCategory(user, dialog, 'Acessório')
 
-    await user.type(within(dialog).getByRole('combobox', { name: 'Acessório' }), 'a')
+    await user.type(within(dialog).getByRole('combobox', { name: 'Acessório — item 1' }), 'a')
     expect(screen.queryByRole('option', { name: /Inativo/i })).not.toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: /Ativo/i })).toBeInTheDocument()
   })
 
   it('Acessório: nenhum item ativo cadastrado orienta cadastrar na aba Acessórios', async () => {
@@ -1366,65 +1416,226 @@ describe('PurchaseDialog', () => {
     expect(within(dialog).getByText(/cadastre um na aba Acessórios/i)).toBeInTheDocument()
   })
 
-  it('Acessório: envia o payload correto e aciona onPurchaseCompleted("ACCESSORY") após sucesso', async () => {
-    registerInventoryPurchaseMock.mockResolvedValue(purchaseFixture())
+  it('Acessório: envia o payload multi-item correto (total_value direto, sem unit_cost/freight_allocated) e aciona onPurchaseCompleted("ACCESSORY")', async () => {
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Ímã 6x2', variant: 'azul' }),
+      accessoryFixture({ id: 'a2', name: 'Parafuso', variant: null }),
+    ])
+    registerAccessoryPurchaseMock.mockResolvedValue(accessoryPurchaseResultFixture())
     const onPurchaseCompleted = vi.fn()
     render(<PurchaseDialog onPurchaseCompleted={onPurchaseCompleted} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
     await selectCategory(user, dialog, 'Acessório')
-    await user.type(within(dialog).getByRole('combobox', { name: 'Acessório' }), 'Ímã')
-    await user.click(await within(dialog).findByRole('option', { name: /Ímã 6x2/i }))
-    await user.type(within(dialog).getByLabelText('Quantidade'), '4')
-    await user.type(within(dialog).getByLabelText('Valor dos itens'), '4000')
-    await user.type(within(dialog).getByLabelText('Frete'), '500')
+
+    await fillAccessoryRow(user, dialog, 1, {
+      search: 'Ímã',
+      option: /Ímã 6x2/i,
+      quantity: '4',
+      totalDigits: '4000',
+    })
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar outro acessório' }))
+    await fillAccessoryRow(user, dialog, 2, {
+      search: 'Parafuso',
+      option: /Parafuso/i,
+      quantity: '10',
+      totalDigits: '1000',
+    })
+    await user.type(within(dialog).getByLabelText('Fornecedor (opcional)'), 'Loja X')
+    await user.type(within(dialog).getByLabelText('Valor do frete'), '500')
 
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
 
-    await waitFor(() => expect(registerInventoryPurchaseMock).toHaveBeenCalledTimes(1))
-    expect(registerInventoryPurchaseMock.mock.calls[0][0]).toMatchObject({
-      category: 'ACCESSORY',
-      item_id: 'a1',
-      quantity: 4,
-      item_value: 40,
+    await waitFor(() => expect(registerAccessoryPurchaseMock).toHaveBeenCalledTimes(1))
+    const payload = registerAccessoryPurchaseMock.mock.calls[0][0]
+    expect(payload).toMatchObject({
       freight_value: 5,
+      supplier_name: 'Loja X',
+      items: [
+        { accessory_id: 'a1', quantity: 4, total_value: 40 },
+        { accessory_id: 'a2', quantity: 10, total_value: 10 },
+      ],
     })
+    expect(payload.occurred_at).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(payload.idempotency_key).toBeTruthy()
+    // O frontend NUNCA envia unit_cost, freight_allocated nem saldos.
+    expect(JSON.stringify(payload)).not.toMatch(/unit_cost|freight_allocated|balance_before|balance_after/)
     expect(toastMock.success).toHaveBeenCalledWith('Compra registrada.')
     expect(onPurchaseCompleted).toHaveBeenCalledWith('ACCESSORY')
-    expect(screen.queryByRole('dialog', { name: 'Registrar compra' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('Acessório: quantidade ausente/zero bloqueia o envio', async () => {
+  it('Acessório: quantidade ausente bloqueia o envio', async () => {
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
     await selectCategory(user, dialog, 'Acessório')
-    await user.type(within(dialog).getByRole('combobox', { name: 'Acessório' }), 'Ímã')
-    await user.click(await within(dialog).findByRole('option', { name: /Ímã 6x2/i }))
-    await user.type(within(dialog).getByLabelText('Valor dos itens'), '100')
+    const row = within(dialog).getByRole('group', { name: 'Item 1' })
+    await user.type(
+      within(row).getByRole('combobox', { name: 'Acessório — item 1' }),
+      'Ímã',
+    )
+    await user.click(await within(row).findByRole('option', { name: /Ímã 6x2/i }))
+    await user.type(within(row).getByLabelText('Valor total'), '100')
 
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
     expect(await within(dialog).findByText(/^informe a quantidade/i)).toBeInTheDocument()
-    expect(registerInventoryPurchaseMock).not.toHaveBeenCalled()
+    expect(registerAccessoryPurchaseMock).not.toHaveBeenCalled()
   })
 
-  it('Acessório: erro de negócio do backend vira toast, nunca atualiza estoque no frontend (sem chamada extra)', async () => {
-    registerInventoryPurchaseMock.mockRejectedValue(
-      new ApiError('business_rule', 409, 'não encontrado ou inativo'),
+  it('Acessório: valor total zero bloqueia o envio', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Acessório')
+    const row = within(dialog).getByRole('group', { name: 'Item 1' })
+    await user.type(within(row).getByRole('combobox', { name: 'Acessório — item 1' }), 'Ímã')
+    await user.click(await within(row).findByRole('option', { name: /Ímã 6x2/i }))
+    await user.type(within(row).getByLabelText('Quantidade'), '2')
+
+    await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
+    expect(await within(dialog).findByText(/informe o valor total do item/i)).toBeInTheDocument()
+    expect(registerAccessoryPurchaseMock).not.toHaveBeenCalled()
+  })
+
+  it('Acessório: o mesmo acessório não pode aparecer em duas linhas', async () => {
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Acessório')
+
+    await fillAccessoryRow(user, dialog, 1, {
+      search: 'Ímã',
+      option: /Ímã 6x2/i,
+      quantity: '1',
+      totalDigits: '100',
+    })
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar outro acessório' }))
+    // A 2a linha nem oferece o acessório já escolhido na 1a
+    const row2 = within(dialog).getByRole('group', { name: 'Item 2' })
+    await user.type(within(row2).getByRole('combobox', { name: 'Acessório — item 2' }), 'Ímã')
+    expect(screen.queryByRole('option', { name: /Ímã 6x2/i })).not.toBeInTheDocument()
+  })
+
+  it('Acessório: erro de negócio do backend vira toast, nunca fecha o diálogo', async () => {
+    registerAccessoryPurchaseMock.mockRejectedValue(
+      new ApiError('business_rule', 409, 'está inativo'),
     )
     render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
     const user = userEvent.setup()
     const dialog = await openDialog(user)
     await selectCategory(user, dialog, 'Acessório')
-    await user.type(within(dialog).getByRole('combobox', { name: 'Acessório' }), 'Ímã')
-    await user.click(await within(dialog).findByRole('option', { name: /Ímã 6x2/i }))
-    await user.type(within(dialog).getByLabelText('Quantidade'), '1')
-    await user.type(within(dialog).getByLabelText('Valor dos itens'), '100')
+    await fillAccessoryRow(user, dialog, 1, {
+      search: 'Ímã',
+      option: /Ímã 6x2/i,
+      quantity: '1',
+      totalDigits: '100',
+    })
 
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
 
-    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('não encontrado ou inativo'))
-    expect(registerInventoryPurchaseMock).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('está inativo'))
+    expect(registerAccessoryPurchaseMock).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('dialog', { name: 'Compra de acessórios' })).toBeInTheDocument()
+  })
+
+  it('Acessório: começa com uma linha; adicionar cria a linha 2; remover volta a 1; a última nunca é removível', async () => {
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Ímã' }),
+      accessoryFixture({ id: 'a2', name: 'Parafuso' }),
+    ])
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Acessório')
+
+    expect(within(dialog).getByRole('group', { name: 'Item 1' })).toBeInTheDocument()
+    expect(within(dialog).queryByRole('group', { name: 'Item 2' })).not.toBeInTheDocument()
+    // a única linha não pode ser removida
+    expect(
+      within(within(dialog).getByRole('group', { name: 'Item 1' })).getByRole('button', {
+        name: 'Remover item 1',
+      }),
+    ).toBeDisabled()
+
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar outro acessório' }))
+    expect(within(dialog).getByRole('group', { name: 'Item 2' })).toBeInTheDocument()
+
+    await user.click(
+      within(within(dialog).getByRole('group', { name: 'Item 2' })).getByRole('button', {
+        name: 'Remover item 2',
+      }),
+    )
+    expect(within(dialog).queryByRole('group', { name: 'Item 2' })).not.toBeInTheDocument()
+  })
+
+  it('Acessório: não passa de 50 itens (botão "Adicionar outro acessório" desabilita no teto)', async () => {
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã' })])
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Acessório')
+
+    // fireEvent.click (síncrono) evita o pipeline completo do userEvent 49x —
+    // o objetivo aqui é só o teto de 50, não a interação fina.
+    const addButton = within(dialog).getByRole('button', { name: 'Adicionar outro acessório' })
+    for (let i = 0; i < 60 && !(addButton as HTMLButtonElement).disabled; i++) {
+      fireEvent.click(addButton)
+    }
+    await waitFor(() =>
+      expect(within(dialog).getAllByRole('group', { name: /^Item \d+$/ })).toHaveLength(50),
+    )
+    expect(addButton).toBeDisabled()
+  })
+
+  it('Acessório: subtotal soma os "Valor total" das linhas; frete é somado UMA vez ao Total da compra', async () => {
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Ímã' }),
+      accessoryFixture({ id: 'a2', name: 'Parafuso' }),
+    ])
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Acessório')
+
+    await fillAccessoryRow(user, dialog, 1, {
+      search: 'Ímã',
+      option: /Ímã/i,
+      quantity: '2',
+      totalDigits: '3000', // R$ 30,00
+    })
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar outro acessório' }))
+    await fillAccessoryRow(user, dialog, 2, {
+      search: 'Parafuso',
+      option: /Parafuso/i,
+      quantity: '5',
+      totalDigits: '2000', // R$ 20,00
+    })
+    await user.type(within(dialog).getByLabelText('Valor do frete'), '1000') // R$ 10,00
+
+    const resumo = within(dialog).getByText('Resumo').closest('div') as HTMLElement
+    expect(within(resumo).getByText(normalizedBRL(5000))).toBeInTheDocument() // Subtotal 50,00
+    expect(within(resumo).getByText(normalizedBRL(6000))).toBeInTheDocument() // Total 60,00
+  })
+
+  it('Acessório: previsão do Custo unitário aparece rotulada como previsão (valor final do servidor)', async () => {
+    // saldo 10 × R$ 1,00 ; compra 5 un por R$ 10,00 sem frete
+    // -> (1000 + 1000) / 15 = 133,33 centavos -> R$ 1,33
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', variant: 'azul', current_stock: 10, unit_cost: 1 })])
+    render(<PurchaseDialog onPurchaseCompleted={vi.fn()} />)
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await selectCategory(user, dialog, 'Acessório')
+    await fillAccessoryRow(user, dialog, 1, {
+      search: 'Ímã',
+      option: /Ímã 6x2/i,
+      quantity: '5',
+      totalDigits: '1000',
+    })
+
+    expect(within(dialog).getByText(/Custo unitário previsto/i)).toBeInTheDocument()
+    expect(within(dialog).getByText(/Ímã 6x2 — azul:/)).toBeInTheDocument()
+    expect(within(dialog).getByText(normalizedBRL(133))).toBeInTheDocument()
   })
 
   it('Embalagem: mesmas regras de Acessório — envia payload correto e aciona onPurchaseCompleted("PACKAGING")', async () => {

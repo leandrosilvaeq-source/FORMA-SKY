@@ -4,15 +4,23 @@
 //
 // Rotas:
 //   POST /inventory-purchases          -> RPC register_inventory_purchase
-//     (ACCESSORY/PACKAGING; FILAMENT de item único, preservado para
-//     compatibilidade — a interface não usa mais este caminho para
-//     Filamento, ver rota abaixo)
+//     (ACCESSORY/PACKAGING de item único; FILAMENT de item único, preservado
+//     para compatibilidade — a interface não usa mais este caminho para
+//     Filamento nem para Acessório, ver rotas abaixo). Embalagem continua
+//     usando esta rota, INALTERADA.
 //   POST /inventory-purchases/filament -> RPC register_filament_purchase
 //     (2026-09-04 — compra de filamento com UM OU MAIS itens/tipos/marcas
 //     na mesma compra, migration
 //     20260904130000_support_multi_item_filament_purchases.sql; único
 //     caminho usado pela janela "Compra de filamentos" a partir desta
 //     rodada)
+//   POST /inventory-purchases/accessory -> RPC register_accessory_purchase
+//     (2026-09-06 — compra de acessórios com UM OU MAIS itens na mesma
+//     compra + custo unitário por média ponderada móvel + frete rateado,
+//     migration 20260906140000_register_multi_item_accessory_purchases.sql;
+//     único caminho usado pela janela "Compra de acessórios" a partir desta
+//     rodada. O frontend NUNCA envia unit_cost, freight_allocated nem
+//     saldos — tudo é derivado no backend, sob lock, numa única transação)
 //
 // As duas RPCs são security definer com EXECUTE concedido só a service_role
 // (supabase/migrations/20260828121000_create_register_inventory_purchase_function.sql,
@@ -109,6 +117,15 @@ export async function handleRequest(req: Request): Promise<Response> {
         "validation",
         405,
         `Método ${req.method} não permitido em /inventory-purchases/filament.`,
+      );
+    }
+
+    if (route.length === 1 && route[0] === "accessory") {
+      if (req.method === "POST") return await handleRegisterAccessoryPurchase(req);
+      throw new AppError(
+        "validation",
+        405,
+        `Método ${req.method} não permitido em /inventory-purchases/accessory.`,
       );
     }
 
@@ -462,6 +479,150 @@ async function handleRegisterFilamentPurchase(req: Request): Promise<Response> {
 
   const admin = getAdminClient();
   const { data, error } = await admin.rpc("register_filament_purchase", {
+    ...params,
+    p_changed_by: operator.userId,
+  });
+
+  if (error) throw mapPgError(error);
+
+  return jsonResponse(req, data, 201);
+}
+
+// ---------------------------------------------------------------------------
+// POST /inventory-purchases/accessory -> register_accessory_purchase
+//   (p_items, p_freight_value, p_supplier_name, p_notes, p_occurred_at,
+//   p_changed_by, p_idempotency_key) — compra de acessórios com UM OU MAIS
+//   itens (2026-09-06, migration 20260906140000). Cada item exige
+//   accessory_id (acessório já cadastrado e ATIVO — a RPC bloqueia
+//   inexistente/inativo sob lock), quantity (inteiro > 0) e total_value (o
+//   valor pago por TODOS os itens da linha, exatamente como informado, 2
+//   casas — unit_cost é derivado dentro da RPC, nunca aceito aqui). O frete
+//   é único por compra (freight_value) e é rateado no backend
+//   (freight_allocated NUNCA vem do cliente). supplier_name/notes são
+//   opcionais, texto livre com trim e teto (200/1000). O cliente também
+//   nunca envia saldos (balance_before/after) nem campos administrativos.
+// ---------------------------------------------------------------------------
+const ACCESSORY_PURCHASE_KEYS = [
+  "items",
+  "freight_value",
+  "supplier_name",
+  "notes",
+  "occurred_at",
+  "idempotency_key",
+] as const;
+
+const ACCESSORY_PURCHASE_ITEM_KEYS = ["accessory_id", "quantity", "total_value"] as const;
+
+const SUPPLIER_NAME_MAX = 200;
+const PURCHASE_NOTES_MAX = 1000;
+const ACCESSORY_PURCHASE_MAX_ITEMS = 50;
+
+export interface AccessoryPurchaseItemParams {
+  accessory_id: string;
+  quantity: number;
+  total_value: number;
+}
+
+// total_value: o valor pago por TODOS os itens da linha, exatamente como
+// informado. Rejeita <= 0 e mais de 2 casas decimais aqui (a RPC valida de
+// novo em profundidade). unit_cost e freight_allocated NUNCA fazem parte
+// deste contrato — são derivados no backend.
+export function validateAccessoryPurchaseItem(
+  value: unknown,
+  index: number,
+): AccessoryPurchaseItemParams {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ValidationError(`Campo inválido: items[${index}] deve ser um objeto.`);
+  }
+  const item = value as Record<string, unknown>;
+  rejectUnknownKeys(item, ACCESSORY_PURCHASE_ITEM_KEYS, `items[${index}]`);
+
+  const totalValue = requireNumber(item.total_value, `items[${index}].total_value`);
+  if (totalValue <= 0) {
+    throw new ValidationError(`Campo inválido: items[${index}].total_value deve ser maior que zero.`);
+  }
+  if (Number(totalValue.toFixed(2)) !== totalValue) {
+    throw new ValidationError(
+      `Campo inválido: items[${index}].total_value deve ter no máximo 2 casas decimais.`,
+    );
+  }
+
+  return {
+    accessory_id: requireUuid(item.accessory_id, `items[${index}].accessory_id`),
+    quantity: requirePositiveIntegerQuantity(item.quantity),
+    total_value: totalValue,
+  };
+}
+
+export function validateRegisterAccessoryPurchasePayload(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  rejectUnknownKeys(body, ACCESSORY_PURCHASE_KEYS, "corpo da requisição");
+
+  const freightValue = optionalNumber(body.freight_value, "freight_value", { min: 0 }) ?? 0;
+  if (Number(freightValue.toFixed(2)) !== freightValue) {
+    throw new ValidationError("Campo inválido: freight_value deve ter no máximo 2 casas decimais.");
+  }
+  const occurredAt = optionalTimestamp(body.occurred_at, "occurred_at");
+  const idempotencyKey = optionalNonEmptyString(body.idempotency_key, "idempotency_key");
+
+  const supplierName = optionalNonEmptyString(body.supplier_name, "supplier_name");
+  if (supplierName !== null && supplierName.length > SUPPLIER_NAME_MAX) {
+    throw new ValidationError(
+      `Campo inválido: supplier_name deve ter no máximo ${SUPPLIER_NAME_MAX} caracteres.`,
+    );
+  }
+
+  const notes = optionalNonEmptyString(body.notes, "notes");
+  if (notes !== null && notes.length > PURCHASE_NOTES_MAX) {
+    throw new ValidationError(
+      `Campo inválido: notes deve ter no máximo ${PURCHASE_NOTES_MAX} caracteres.`,
+    );
+  }
+
+  if (!Array.isArray(body.items) || body.items.length === 0) {
+    throw new ValidationError(
+      "Campo inválido: items deve ser uma lista com ao menos um item de compra.",
+    );
+  }
+  if (body.items.length > ACCESSORY_PURCHASE_MAX_ITEMS) {
+    throw new ValidationError(
+      `Campo inválido: items deve ter no máximo ${ACCESSORY_PURCHASE_MAX_ITEMS} itens.`,
+    );
+  }
+
+  const items = body.items.map((raw, index) => validateAccessoryPurchaseItem(raw, index));
+
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (seen.has(item.accessory_id)) {
+      throw new ValidationError(
+        "Campo inválido: o mesmo acessório não pode aparecer em duas linhas da mesma compra.",
+      );
+    }
+    seen.add(item.accessory_id);
+  }
+
+  return {
+    p_items: items,
+    p_freight_value: freightValue,
+    p_supplier_name: supplierName,
+    p_notes: notes,
+    p_occurred_at: occurredAt,
+    p_idempotency_key: idempotencyKey,
+  };
+}
+
+async function handleRegisterAccessoryPurchase(req: Request): Promise<Response> {
+  const operator = await resolveOperator(req);
+
+  const rawBody = await req.text();
+  rejectIdentityFields(rawBody);
+  const body = parseJsonBody(rawBody);
+  const params = validateRegisterAccessoryPurchasePayload(body);
+
+  const admin = getAdminClient();
+  const { data, error } = await admin.rpc("register_accessory_purchase", {
     ...params,
     p_changed_by: operator.userId,
   });

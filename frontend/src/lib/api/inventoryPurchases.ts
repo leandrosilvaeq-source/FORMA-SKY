@@ -128,3 +128,67 @@ export async function registerFilamentPurchase(
 ): Promise<FilamentPurchaseResult> {
   return callEdgeFunction<FilamentPurchaseResult>('inventory-purchases', '/filament', 'POST', input)
 }
+
+// Compra de ACESSÓRIOS com UM OU MAIS itens na mesma compra (2026-09-06,
+// migration 20260906140000). Cada linha informa o acessório, a quantidade e
+// o VALOR TOTAL pago pela linha (nunca o unitário). O frete é único por
+// compra e é rateado no backend proporcionalmente ao total_value de cada
+// linha (o frontend NUNCA envia freight_allocated). O Custo unitário é
+// calculado no PostgreSQL por média ponderada móvel, sob lock, na mesma
+// transação — o frontend NUNCA envia unit_cost nem saldos.
+export interface RegisterAccessoryPurchaseItemInput {
+  accessory_id: string
+  quantity: number
+  // Valor pago por TODOS os itens desta linha, exatamente como digitado (em
+  // reais, 2 casas). Nunca dividido pelo frontend.
+  total_value: number
+}
+
+export interface RegisterAccessoryPurchaseInput {
+  items: RegisterAccessoryPurchaseItemInput[]
+  freight_value?: number
+  supplier_name?: string | null
+  notes?: string | null
+  occurred_at?: string
+  idempotency_key?: string
+}
+
+export interface AccessoryPurchaseResultItem {
+  accessory_id: string
+  line_number: number
+  quantity: number
+  // total_value é a fonte autoritativa (exatamente o que foi informado);
+  // unit_cost_after é derivado e arredondado a 2 casas.
+  total_value: number
+  freight_allocated: number
+  landed_total_value: number
+  balance_before: number
+  balance_after: number
+  unit_cost_before: number | null
+  unit_cost_after: number
+}
+
+export interface AccessoryPurchaseResult {
+  purchase_id: string
+  category: 'ACCESSORY'
+  quantity: number
+  item_value: number
+  freight_value: number
+  total_value: number
+  supplier_name: string | null
+  notes: string | null
+  occurred_at: string
+  created_at: string
+  items: AccessoryPurchaseResultItem[]
+}
+
+// POST /inventory-purchases/accessory -> register_accessory_purchase. Uma
+// única transação: cria o cabeçalho, cada item, a movimentação de estoque
+// PURCHASE de cada acessório e atualiza accessories.unit_cost — falha em
+// qualquer ponto reverte tudo (nunca uma compra parcial, nunca saldo/custo
+// inconsistente).
+export async function registerAccessoryPurchase(
+  input: RegisterAccessoryPurchaseInput,
+): Promise<AccessoryPurchaseResult> {
+  return callEdgeFunction<AccessoryPurchaseResult>('inventory-purchases', '/accessory', 'POST', input)
+}

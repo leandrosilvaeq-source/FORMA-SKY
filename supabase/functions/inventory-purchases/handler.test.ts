@@ -54,7 +54,9 @@ import {
   requirePurchaseChannel,
   requireTrimmedString,
   requireUuid,
+  validateAccessoryPurchaseItem,
   validateFilamentPurchaseItem,
+  validateRegisterAccessoryPurchasePayload,
   validateRegisterFilamentPurchasePayload,
   validateRegisterInventoryPurchasePayload,
 } from "./handler.ts";
@@ -736,4 +738,160 @@ Deno.test("respostas de erro não expõem detalhes internos (mensagem genérica 
   assertEquals(res.status, 401);
   assertEquals(envelope.error?.type, "authorization");
   assertEquals(envelope.error?.message, "Header Authorization ausente.");
+});
+
+// ---------------------------------------------------------------------------
+// ACESSÓRIOS — validateAccessoryPurchaseItem / validateRegisterAccessoryPurchasePayload
+// (rota POST /inventory-purchases/accessory, register_accessory_purchase,
+// migration 20260906140000). O frontend NUNCA envia unit_cost,
+// freight_allocated nem saldos — o handler só valida estrutura
+// (accessory_id/quantity/total_value, limites, acessório único, strings com
+// trim/teto). As regras que dependem do banco (acessório existe/ativo,
+// idempotência, rateio, média ponderada) são exclusivas da RPC e são
+// cobertas por supabase/tests/accessory_purchase_test.sql.
+// ---------------------------------------------------------------------------
+
+const VALID_ACCESSORY_ITEM = { accessory_id: VALID_UUID, quantity: 3, total_value: 25 };
+const OTHER_UUID = "223e4567-e89b-42d3-a456-426614174111";
+
+Deno.test("validateAccessoryPurchaseItem aceita um item mínimo válido", () => {
+  assertEquals(validateAccessoryPurchaseItem({ ...VALID_ACCESSORY_ITEM }, 0), VALID_ACCESSORY_ITEM);
+});
+
+Deno.test("validateAccessoryPurchaseItem rejeita accessory_id ausente/inválido", () => {
+  assertThrows(() => validateAccessoryPurchaseItem({ ...VALID_ACCESSORY_ITEM, accessory_id: undefined }, 0));
+  assertThrows(() => validateAccessoryPurchaseItem({ ...VALID_ACCESSORY_ITEM, accessory_id: "nao-e-uuid" }, 0));
+});
+
+Deno.test("validateAccessoryPurchaseItem rejeita quantidade zero/negativa/fracionada", () => {
+  assertThrows(() => validateAccessoryPurchaseItem({ ...VALID_ACCESSORY_ITEM, quantity: 0 }, 0));
+  assertThrows(() => validateAccessoryPurchaseItem({ ...VALID_ACCESSORY_ITEM, quantity: -1 }, 0));
+  assertThrows(() => validateAccessoryPurchaseItem({ ...VALID_ACCESSORY_ITEM, quantity: 1.5 }, 0));
+});
+
+Deno.test("validateAccessoryPurchaseItem rejeita total_value zero/negativo e com mais de 2 casas", () => {
+  assertThrows(() => validateAccessoryPurchaseItem({ ...VALID_ACCESSORY_ITEM, total_value: 0 }, 0));
+  assertThrows(() => validateAccessoryPurchaseItem({ ...VALID_ACCESSORY_ITEM, total_value: -5 }, 0));
+  assertThrows(
+    () => validateAccessoryPurchaseItem({ ...VALID_ACCESSORY_ITEM, total_value: 25.005 }, 0),
+    (err) => assertEquals(isValidationError(err), true),
+  );
+  assertEquals(validateAccessoryPurchaseItem({ ...VALID_ACCESSORY_ITEM, total_value: 25.5 }, 0).total_value, 25.5);
+});
+
+Deno.test("validateAccessoryPurchaseItem rejeita chave desconhecida no item (nunca unit_cost/freight_allocated/saldos)", () => {
+  assertThrows(() => validateAccessoryPurchaseItem({ ...VALID_ACCESSORY_ITEM, unit_cost: 3 }, 0));
+  assertThrows(() => validateAccessoryPurchaseItem({ ...VALID_ACCESSORY_ITEM, freight_allocated: 1 }, 0));
+  assertThrows(() => validateAccessoryPurchaseItem({ ...VALID_ACCESSORY_ITEM, balance_before: 0 }, 0));
+});
+
+Deno.test("validateRegisterAccessoryPurchasePayload aceita um payload mínimo (frete default 0, sem fornecedor/observação)", () => {
+  const result = validateRegisterAccessoryPurchasePayload({ items: [{ ...VALID_ACCESSORY_ITEM }] });
+  assertEquals(result, {
+    p_items: [VALID_ACCESSORY_ITEM],
+    p_freight_value: 0,
+    p_supplier_name: null,
+    p_notes: null,
+    p_occurred_at: null,
+    p_idempotency_key: null,
+  });
+});
+
+Deno.test("validateRegisterAccessoryPurchasePayload preserva freight/supplier/notes/occurred_at quando informados (com trim)", () => {
+  const result = validateRegisterAccessoryPurchasePayload({
+    items: [{ ...VALID_ACCESSORY_ITEM }],
+    freight_value: 5,
+    supplier_name: "  Loja X  ",
+    notes: "  compra de reposicao  ",
+    occurred_at: "2026-09-06T00:00:00Z",
+    idempotency_key: "abc",
+  });
+  assertEquals(result.p_freight_value, 5);
+  assertEquals(result.p_supplier_name, "Loja X");
+  assertEquals(result.p_notes, "compra de reposicao");
+  assertEquals(result.p_occurred_at, "2026-09-06T00:00:00Z");
+  assertEquals(result.p_idempotency_key, "abc");
+});
+
+Deno.test("validateRegisterAccessoryPurchasePayload rejeita lista vazia e mais de 50 itens; aceita exatamente 50", () => {
+  assertThrows(() => validateRegisterAccessoryPurchasePayload({ items: [] }));
+  const make = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      accessory_id: `${i.toString().padStart(8, "0")}-e89b-42d3-a456-426614174000`,
+      quantity: 1,
+      total_value: 1,
+    }));
+  assertThrows(
+    () => validateRegisterAccessoryPurchasePayload({ items: make(51) }),
+    (err) => assertEquals(isValidationError(err), true),
+  );
+  assertEquals((validateRegisterAccessoryPurchasePayload({ items: make(50) }).p_items as unknown[]).length, 50);
+});
+
+Deno.test("validateRegisterAccessoryPurchasePayload rejeita o mesmo acessório em duas linhas; aceita distintos", () => {
+  assertThrows(
+    () =>
+      validateRegisterAccessoryPurchasePayload({
+        items: [
+          { accessory_id: VALID_UUID, quantity: 1, total_value: 10 },
+          { accessory_id: VALID_UUID, quantity: 2, total_value: 20 },
+        ],
+      }),
+    (err) => assertEquals(isValidationError(err), true),
+  );
+  const ok = validateRegisterAccessoryPurchasePayload({
+    items: [
+      { accessory_id: VALID_UUID, quantity: 1, total_value: 10 },
+      { accessory_id: OTHER_UUID, quantity: 2, total_value: 20 },
+    ],
+  });
+  assertEquals((ok.p_items as unknown[]).length, 2);
+});
+
+Deno.test("validateRegisterAccessoryPurchasePayload rejeita freight_value negativo / >2 casas e supplier>200 / notes>1000", () => {
+  assertThrows(() => validateRegisterAccessoryPurchasePayload({ items: [{ ...VALID_ACCESSORY_ITEM }], freight_value: -1 }));
+  assertThrows(() =>
+    validateRegisterAccessoryPurchasePayload({ items: [{ ...VALID_ACCESSORY_ITEM }], freight_value: 1.005 })
+  );
+  assertThrows(() =>
+    validateRegisterAccessoryPurchasePayload({ items: [{ ...VALID_ACCESSORY_ITEM }], supplier_name: "x".repeat(201) })
+  );
+  assertThrows(() =>
+    validateRegisterAccessoryPurchasePayload({ items: [{ ...VALID_ACCESSORY_ITEM }], notes: "y".repeat(1001) })
+  );
+});
+
+Deno.test("validateRegisterAccessoryPurchasePayload rejeita chave desconhecida no corpo (nunca category/unit_cost/freight_allocated)", () => {
+  assertThrows(() =>
+    validateRegisterAccessoryPurchasePayload({ items: [{ ...VALID_ACCESSORY_ITEM }], category: "ACCESSORY" })
+  );
+  assertThrows(() =>
+    validateRegisterAccessoryPurchasePayload({ items: [{ ...VALID_ACCESSORY_ITEM }], freight_allocated: 1 })
+  );
+});
+
+// ---------------------------------------------------------------------------
+// handleRequest — POST /inventory-purchases/accessory (register_accessory_purchase)
+// ---------------------------------------------------------------------------
+
+Deno.test("handleRequest rejeita POST em /inventory-purchases/accessory sem Authorization com 401 (sem tocar rede)", async () => {
+  const res = await handleRequest(makeRequest("POST", "/accessory", { items: [VALID_ACCESSORY_ITEM] }));
+  assertEquals(res.status, 401);
+});
+
+Deno.test("handleRequest devolve 405 para método não permitido em /inventory-purchases/accessory (sem exigir autenticação)", () =>
+  handleRequest(makeRequest("GET", "/accessory")).then((res) => assertEquals(res.status, 405)));
+
+Deno.test("handleRequest devolve 404 para sub-rota de /inventory-purchases/accessory (sem exigir autenticação)", async () => {
+  const res = await handleRequest(makeRequest("GET", "/accessory/algum-id"));
+  assertEquals(res.status, 404);
+});
+
+Deno.test("handleRequest preserva as rotas antigas: base (Embalagem/legado) e /filament seguem respondendo 401 sem Authorization", async () => {
+  const base = await handleRequest(
+    makeRequest("POST", "", { category: "PACKAGING", quantity: 1, item_value: 1, item_id: VALID_UUID }),
+  );
+  assertEquals(base.status, 401);
+  const filament = await handleRequest(makeRequest("POST", "/filament", { items: [VALID_ITEM] }));
+  assertEquals(filament.status, 401);
 });

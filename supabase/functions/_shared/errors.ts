@@ -325,6 +325,18 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
   ["register_filament_purchase: purchase_channel", (message) => new ValidationError(message)],
   ["register_filament_purchase: informe ao menos um item", (message) => new ValidationError(message)],
   ["register_filament_purchase: item ", (message) => new ValidationError(message)],
+  // register_accessory_purchase (migration 20260906140000, compra de
+  // acessórios com um ou mais itens + custo unitário por média ponderada
+  // móvel). Mesmo critério: defesa em profundidade — a Edge Function
+  // `inventory-purchases`, rota /accessory, já valida payload/limites antes
+  // de chamar a RPC; estas mensagens só aparecem numa chamada direta. Todas
+  // começam com o prefixo da função e são erros de ENTRADA inválida (400).
+  // Um único padrão cobre todas (validações de item, frete, limite de 50,
+  // acessório repetido). A variante "acessório de id % não encontrado" casa
+  // ANTES com o padrão genérico "não encontrado" (primeiro da lista) -> 404;
+  // "INVENTORY_PURCHASE_ITEM_INACTIVE:" (acessório inativo) já é 409 pela
+  // entrada existente acima.
+  ["register_accessory_purchase:", (message) => new ValidationError(message)],
   // Ajustes de Produtos/Clientes/Pedidos (2026-08-29) — migrations
   // 20260829140000/141000/142000/143000.
   //
