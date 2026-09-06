@@ -140,6 +140,11 @@ export interface Product {
   production_weight_manual_override_grams: number | null
   production_time_manual_override_seconds: number | null
   is_active: boolean
+  // Foto principal do produto (migration 20260906120000) — DISTINTA de
+  // default_file_id (arquivo 3D). Ver Accessory.image_path; infraestrutura
+  // reservada, sem tela consumidora ainda (2026-09-06).
+  image_path?: string | null
+  image_thumb_path?: string | null
   created_at: string
   updated_at: string
 }
@@ -351,6 +356,10 @@ export interface SpotItemDetails {
 }
 
 // supabase/migrations/20260816150000_create_accessories_packaging_and_composition_tables.sql
+// image_path/image_thumb_path (migration 20260906120000): caminho INTERNO do
+// objeto no bucket privado `entity-images` — NUNCA uma URL. null = sem foto.
+// A URL de exibição é assinada e temporária (3600s), obtida sob demanda via
+// a Edge Function `entity-images` (frontend/src/lib/api/entityImages.ts).
 export interface Accessory {
   id: string
   name: string
@@ -361,6 +370,8 @@ export interface Accessory {
   minimum_stock: number | null
   current_stock: number
   is_active: boolean
+  image_path?: string | null
+  image_thumb_path?: string | null
   created_at: string
   updated_at: string
 }
@@ -375,6 +386,8 @@ export interface Packaging {
   minimum_stock: number | null
   current_stock: number
   is_active: boolean
+  image_path?: string | null
+  image_thumb_path?: string | null
   created_at: string
   updated_at: string
 }
@@ -437,6 +450,10 @@ export interface FilamentType {
   minimum_stock_grams: number | null
   is_active: boolean
   notes: string | null
+  // Ver Accessory.image_path — infraestrutura reservada (2026-09-06), nenhuma
+  // tela de Filamentos consome estes campos ainda.
+  image_path?: string | null
+  image_thumb_path?: string | null
   created_at: string
   updated_at: string
 }
@@ -549,6 +566,10 @@ export interface FilamentTypeSummary {
   total_available_grams: number
   usable_spool_count: number
   total_spool_count: number
+  // Expostos por vw_filament_type_summary (migration 20260906120000). Ver
+  // Accessory.image_path — infraestrutura reservada, sem tela consumidora.
+  image_path?: string | null
+  image_thumb_path?: string | null
 }
 
 // supabase/migrations/20260827113000_create_product_filaments_table.sql —

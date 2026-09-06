@@ -28,6 +28,11 @@ interface UseAccessoriesResult {
   // buscar o item de novo só para saber um valor que a própria resposta já
   // trouxe seria uma requisição desnecessária.
   setLocalStock: (id: string, currentStock: number) => void
+  // Atualização local pura (sem rede) do par de caminhos da foto principal —
+  // usada depois de um upload/remoção bem-sucedido pela Edge Function
+  // `entity-images` (que já devolve os caminhos novos), para a listagem
+  // refletir a miniatura sem F5. `null`/`null` = foto removida.
+  setLocalImage: (id: string, imagePath: string | null, imageThumbPath: string | null) => void
 }
 
 function toApiError(err: unknown): ApiError {
@@ -108,5 +113,26 @@ export function useAccessories(): UseAccessoriesResult {
     )
   }, [])
 
-  return { accessories, isLoading, error, refetch, create, update, delete: deleteItem, setLocalStock }
+  const setLocalImage = useCallback(
+    (id: string, imagePath: string | null, imageThumbPath: string | null) => {
+      setAccessories((current) =>
+        current.map((item) =>
+          item.id === id ? { ...item, image_path: imagePath, image_thumb_path: imageThumbPath } : item,
+        ),
+      )
+    },
+    [],
+  )
+
+  return {
+    accessories,
+    isLoading,
+    error,
+    refetch,
+    create,
+    update,
+    delete: deleteItem,
+    setLocalStock,
+    setLocalImage,
+  }
 }

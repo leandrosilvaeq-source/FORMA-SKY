@@ -12,6 +12,10 @@ const {
   useAuthMock,
   toastMock,
   getAccessoryCurrentStockMock,
+  uploadEntityImageMock,
+  removeEntityImageMock,
+  signEntityImageUrlsMock,
+  purgeEntityImagesMock,
 } = vi.hoisted(() => ({
   useAccessoriesMock: vi.fn(),
   usePackagingMock: vi.fn(),
@@ -19,7 +23,25 @@ const {
   useAuthMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
   getAccessoryCurrentStockMock: vi.fn(),
+  uploadEntityImageMock: vi.fn(),
+  removeEntityImageMock: vi.fn(),
+  signEntityImageUrlsMock: vi.fn(),
+  purgeEntityImagesMock: vi.fn(),
 }))
+
+// Par "processado" fictício emitido pelo test double de EntityImageUploadField
+// (o processamento real de canvas/WebP tem sua própria suíte —
+// processEntityImage.test.ts / EntityImageUploadField.test.tsx).
+const FAKE_PROCESSED = {
+  original: new Blob(['o'], { type: 'image/webp' }),
+  originalWidth: 1600,
+  originalHeight: 900,
+  thumb: new Blob(['t'], { type: 'image/webp' }),
+  thumbWidth: 320,
+  thumbHeight: 180,
+  sourceWidth: 4000,
+  sourceHeight: 2250,
+}
 
 vi.mock('@/hooks/useAccessories', () => ({ useAccessories: useAccessoriesMock }))
 vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
@@ -40,6 +62,43 @@ vi.mock('@/hooks/useStockMovements', () => ({ useStockMovements: useStockMovemen
 vi.mock('@/context/AuthContext', () => ({ useAuth: useAuthMock }))
 vi.mock('sonner', () => ({ toast: toastMock }))
 
+// Infraestrutura de foto principal (2026-09-06). A API é mockada; o campo de
+// upload vira um test double leve com dois botões — a orquestração
+// (criar-depois-enviar, substituir, remover, sem F5) é o que esta suíte
+// exercita, não o processamento de imagem em si.
+vi.mock('@/lib/api/entityImages', () => ({
+  uploadEntityImage: uploadEntityImageMock,
+  removeEntityImage: removeEntityImageMock,
+  signEntityImageUrls: signEntityImageUrlsMock,
+  purgeEntityImages: purgeEntityImagesMock,
+}))
+vi.mock('@/components/inventory/EntityImageUploadField', () => ({
+  EntityImageUploadField: ({
+    savedPreviewUrl,
+    isUploading,
+    disabled,
+    onImageSelected,
+    onImageRemoved,
+  }: {
+    savedPreviewUrl?: string | null
+    isUploading?: boolean
+    disabled?: boolean
+    onImageSelected: (p: typeof FAKE_PROCESSED) => void
+    onImageRemoved: () => void
+  }) => (
+    <div data-testid="entity-image-upload-field">
+      {savedPreviewUrl ? <img src={savedPreviewUrl} alt="Prévia da foto de referência" /> : null}
+      {isUploading ? <span>Enviando foto...</span> : null}
+      <button type="button" disabled={disabled} onClick={() => onImageSelected(FAKE_PROCESSED)}>
+        Escolher foto (teste)
+      </button>
+      <button type="button" disabled={disabled} onClick={() => onImageRemoved()}>
+        Remover foto (teste)
+      </button>
+    </div>
+  ),
+}))
+
 import { InventoryPage } from './InventoryPage'
 
 function accessoryFixture(overrides: Partial<Accessory> = {}): Accessory {
@@ -53,6 +112,8 @@ function accessoryFixture(overrides: Partial<Accessory> = {}): Accessory {
     minimum_stock: 10,
     current_stock: 0,
     is_active: true,
+    image_path: null,
+    image_thumb_path: null,
     created_at: '',
     updated_at: '',
     ...overrides,
@@ -70,6 +131,8 @@ function packagingFixture(overrides: Partial<Packaging> = {}): Packaging {
     minimum_stock: 5,
     current_stock: 0,
     is_active: true,
+    image_path: null,
+    image_thumb_path: null,
     created_at: '',
     updated_at: '',
     ...overrides,
@@ -86,6 +149,7 @@ function mockAccessories(
     update: ReturnType<typeof vi.fn>
     delete: ReturnType<typeof vi.fn>
     setLocalStock: ReturnType<typeof vi.fn>
+    setLocalImage: ReturnType<typeof vi.fn>
   }> = {},
 ) {
   useAccessoriesMock.mockReturnValue({
@@ -97,6 +161,7 @@ function mockAccessories(
     update: overrides.update ?? vi.fn().mockResolvedValue(accessoryFixture()),
     delete: overrides.delete ?? vi.fn().mockResolvedValue(undefined),
     setLocalStock: overrides.setLocalStock ?? vi.fn(),
+    setLocalImage: overrides.setLocalImage ?? vi.fn(),
   })
 }
 
@@ -2531,5 +2596,342 @@ describe('InventoryPage — colunas redimensionáveis e persistidas (padronizaç
 
     await applySort(user, 'Acessório', 'Ordenar crescente')
     expect(within(getTableBody()).getByText('Ímã 6x2')).toBeInTheDocument()
+  })
+})
+
+// ===========================================================================
+// Módulo 3 — foto principal do acessório (infraestrutura compartilhada,
+// 2026-09-06). Integração só em Acessórios nesta rodada. O test double de
+// EntityImageUploadField (topo do arquivo) expõe "Escolher foto (teste)" /
+// "Remover foto (teste)"; a API entity-images é mockada.
+// ===========================================================================
+describe('InventoryPage — Acessórios: foto de referência (2026-09-06)', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+    uploadEntityImageMock.mockReset()
+    removeEntityImageMock.mockReset()
+    signEntityImageUrlsMock.mockReset()
+    signEntityImageUrlsMock.mockResolvedValue({ urls: {}, expires_in: 3600 })
+    uploadEntityImageMock.mockResolvedValue({
+      entity: 'accessories',
+      id: 'a-new',
+      image_path: 'accessories/a-new/v-original.webp',
+      image_thumb_path: 'accessories/a-new/v-thumb.webp',
+      image_url: 'https://signed/original',
+      image_thumb_url: 'https://signed/thumb',
+    })
+    removeEntityImageMock.mockResolvedValue({ entity: 'accessories', id: 'a1', success: true })
+    purgeEntityImagesMock.mockReset()
+    purgeEntityImagesMock.mockResolvedValue({ entity: 'accessories', id: 'a1', success: true, purged: 2 })
+  })
+
+  it('listagem: acessório sem foto mostra placeholder; com foto mostra a miniatura assinada em lote', async () => {
+    signEntityImageUrlsMock.mockResolvedValue({
+      urls: { 'accessories/a2/t.webp': 'https://signed/a2-thumb' },
+      expires_in: 3600,
+    })
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Sem foto' }),
+      accessoryFixture({
+        id: 'a2',
+        name: 'Com foto',
+        image_path: 'accessories/a2/o.webp',
+        image_thumb_path: 'accessories/a2/t.webp',
+      }),
+    ])
+    renderPage('acessorios')
+
+    // uma única chamada de assinatura em lote, com o caminho distinto
+    await waitFor(() => expect(signEntityImageUrlsMock).toHaveBeenCalledWith(['accessories/a2/t.webp']))
+
+    const comFotoRow = within(getTableBody()).getByText('Com foto').closest('tr') as HTMLElement
+    await waitFor(() =>
+      expect(within(comFotoRow).getByRole('img')).toHaveAttribute('src', 'https://signed/a2-thumb'),
+    )
+
+    const semFotoRow = within(getTableBody()).getByText('Sem foto').closest('tr') as HTMLElement
+    expect(within(semFotoRow).queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  it('criar COM foto: cria o acessório primeiro e só então envia/vincula a foto pelo id retornado', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn().mockResolvedValue(accessoryFixture({ id: 'a-new', name: 'Fivela' }))
+    const setLocalImage = vi.fn()
+    mockAccessories([], { create, setLocalImage })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Novo acessório' }))
+    await user.type(screen.getByLabelText('Nome'), 'Fivela')
+    await user.type(screen.getByLabelText('Estoque mínimo'), '3')
+    await user.click(screen.getByRole('button', { name: 'Escolher foto (teste)' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(uploadEntityImageMock).toHaveBeenCalledWith(
+        'accessories',
+        'a-new',
+        expect.objectContaining({ original: expect.any(Blob), thumb: expect.any(Blob) }),
+      ),
+    )
+    // a criação aconteceu ANTES do upload
+    expect(create.mock.invocationCallOrder[0]).toBeLessThan(uploadEntityImageMock.mock.invocationCallOrder[0])
+    expect(setLocalImage).toHaveBeenCalledWith(
+      'a-new',
+      'accessories/a-new/v-original.webp',
+      'accessories/a-new/v-thumb.webp',
+    )
+    expect(toastMock.success).toHaveBeenCalledWith('Acessório cadastrado.')
+  })
+
+  it('criar: falha no upload da foto NÃO desfaz a criação — acessório fica cadastrado, com aviso claro', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn().mockResolvedValue(accessoryFixture({ id: 'a-new', name: 'Fivela' }))
+    mockAccessories([], { create })
+    uploadEntityImageMock.mockRejectedValue(new ApiError('database', 502, 'storage down'))
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Novo acessório' }))
+    await user.type(screen.getByLabelText('Nome'), 'Fivela')
+    await user.type(screen.getByLabelText('Estoque mínimo'), '3')
+    await user.click(screen.getByRole('button', { name: 'Escolher foto (teste)' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith(
+        'O acessório foi criado, mas a foto não pôde ser salva. Você pode adicioná-la pela edição.',
+      ),
+    )
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(toastMock.success).not.toHaveBeenCalled()
+  })
+
+  it('criar SEM foto: não chama a API de imagens', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn().mockResolvedValue(accessoryFixture({ id: 'a-new' }))
+    mockAccessories([], { create })
+    renderPage('acessorios')
+
+    await user.click(screen.getByRole('button', { name: 'Novo acessório' }))
+    await user.type(screen.getByLabelText('Nome'), 'Sem foto')
+    await user.type(screen.getByLabelText('Estoque mínimo'), '1')
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Acessório cadastrado.'))
+    expect(uploadEntityImageMock).not.toHaveBeenCalled()
+  })
+
+  it('editar: só abrir e cancelar não dispara nenhuma alteração de foto', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture({ id: 'a1' }))
+    mockAccessories(
+      [
+        accessoryFixture({
+          id: 'a1',
+          name: 'Ímã 6x2',
+          image_path: 'accessories/a1/o.webp',
+          image_thumb_path: 'accessories/a1/t.webp',
+        }),
+      ],
+      { update },
+    )
+    renderPage('acessorios')
+
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancelar' }))
+
+    expect(update).not.toHaveBeenCalled()
+    expect(uploadEntityImageMock).not.toHaveBeenCalled()
+    expect(removeEntityImageMock).not.toHaveBeenCalled()
+  })
+
+  it('editar: salvar sem mexer na foto preserva os caminhos (nenhuma chamada de imagem)', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture({ id: 'a1' }))
+    mockAccessories(
+      [
+        accessoryFixture({
+          id: 'a1',
+          name: 'Ímã 6x2',
+          image_path: 'accessories/a1/o.webp',
+          image_thumb_path: 'accessories/a1/t.webp',
+        }),
+      ],
+      { update },
+    )
+    renderPage('acessorios')
+
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1))
+    expect(uploadEntityImageMock).not.toHaveBeenCalled()
+    expect(removeEntityImageMock).not.toHaveBeenCalled()
+  })
+
+  it('editar: escolher uma nova foto envia a substituição e atualiza a listagem sem F5', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture({ id: 'a1' }))
+    const setLocalImage = vi.fn()
+    uploadEntityImageMock.mockResolvedValue({
+      entity: 'accessories',
+      id: 'a1',
+      image_path: 'accessories/a1/new-original.webp',
+      image_thumb_path: 'accessories/a1/new-thumb.webp',
+      image_url: 'u',
+      image_thumb_url: 'tu',
+    })
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2' })], { update, setLocalImage })
+    renderPage('acessorios')
+
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Escolher foto (teste)' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    await waitFor(() =>
+      expect(uploadEntityImageMock).toHaveBeenCalledWith('accessories', 'a1', expect.any(Object)),
+    )
+    expect(setLocalImage).toHaveBeenCalledWith(
+      'a1',
+      'accessories/a1/new-original.webp',
+      'accessories/a1/new-thumb.webp',
+    )
+    expect(toastMock.success).toHaveBeenCalledWith('Acessório atualizado.')
+  })
+
+  it('editar: remover a foto de um acessório que tem foto chama removeEntityImage e limpa a miniatura', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture({ id: 'a1' }))
+    const setLocalImage = vi.fn()
+    mockAccessories(
+      [
+        accessoryFixture({
+          id: 'a1',
+          name: 'Ímã 6x2',
+          image_path: 'accessories/a1/o.webp',
+          image_thumb_path: 'accessories/a1/t.webp',
+        }),
+      ],
+      { update, setLocalImage },
+    )
+    renderPage('acessorios')
+
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remover foto (teste)' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    await waitFor(() => expect(removeEntityImageMock).toHaveBeenCalledWith('accessories', 'a1'))
+    expect(setLocalImage).toHaveBeenCalledWith('a1', null, null)
+    expect(uploadEntityImageMock).not.toHaveBeenCalled()
+  })
+
+  it('editar: falha ao enviar a nova foto preserva a foto anterior (sem setLocalImage) e avisa', async () => {
+    const user = userEvent.setup()
+    const update = vi.fn().mockResolvedValue(accessoryFixture({ id: 'a1' }))
+    const setLocalImage = vi.fn()
+    uploadEntityImageMock.mockRejectedValue(new ApiError('database', 502, 'storage down'))
+    mockAccessories(
+      [
+        accessoryFixture({
+          id: 'a1',
+          name: 'Ímã 6x2',
+          image_path: 'accessories/a1/o.webp',
+          image_thumb_path: 'accessories/a1/t.webp',
+        }),
+      ],
+      { update, setLocalImage },
+    )
+    renderPage('acessorios')
+
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Editar')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Escolher foto (teste)' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith(
+        'Os dados foram salvos, mas a nova foto não pôde ser enviada. A foto anterior foi mantida.',
+      ),
+    )
+    expect(setLocalImage).not.toHaveBeenCalled()
+  })
+
+  it('excluir um acessório COM foto: só depois da exclusão confirmada limpa a foto no bucket', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi.fn().mockResolvedValue(undefined)
+    mockAccessories(
+      [
+        accessoryFixture({
+          id: 'a1',
+          name: 'Ímã 6x2',
+          image_path: 'accessories/a1/o.webp',
+          image_thumb_path: 'accessories/a1/t.webp',
+        }),
+      ],
+      { delete: deleteFn },
+    )
+    renderPage('acessorios')
+
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Excluir')
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+
+    await waitFor(() => expect(deleteFn).toHaveBeenCalledWith('a1'))
+    await waitFor(() => expect(purgeEntityImagesMock).toHaveBeenCalledWith('accessories', 'a1'))
+    // a exclusão do registro veio ANTES da limpeza da foto
+    expect(deleteFn.mock.invocationCallOrder[0]).toBeLessThan(purgeEntityImagesMock.mock.invocationCallOrder[0])
+    expect(toastMock.success).toHaveBeenCalledWith('Acessório excluído.')
+  })
+
+  it('exclusão BLOQUEADA (409): a foto é preservada — purge nunca é chamado', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi
+      .fn()
+      .mockRejectedValue(new ApiError('business_rule', 409, 'Este acessório já teve movimentação de estoque registrada. Desative o item.'))
+    mockAccessories(
+      [
+        accessoryFixture({
+          id: 'a1',
+          name: 'Ímã 6x2',
+          image_path: 'accessories/a1/o.webp',
+          image_thumb_path: 'accessories/a1/t.webp',
+        }),
+      ],
+      { delete: deleteFn },
+    )
+    renderPage('acessorios')
+
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Excluir')
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+
+    await waitFor(() => expect(deleteFn).toHaveBeenCalledWith('a1'))
+    expect(purgeEntityImagesMock).not.toHaveBeenCalled()
+    expect(await screen.findByText(/Desative o item/)).toBeInTheDocument()
+  })
+
+  it('excluir um acessório SEM foto: não chama purge', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi.fn().mockResolvedValue(undefined)
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2' })], { delete: deleteFn })
+    renderPage('acessorios')
+
+    await clickAccessoryRowAction(user, 'Ímã 6x2', 'Excluir')
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Acessório excluído.'))
+    expect(purgeEntityImagesMock).not.toHaveBeenCalled()
+  })
+
+  it('Embalagens: nenhuma miniatura na listagem e nenhum campo de foto no cadastro', async () => {
+    const user = userEvent.setup()
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M' })])
+    renderPage('embalagens')
+
+    expect(within(getTableBody()).queryByRole('img')).not.toBeInTheDocument()
+    expect(signEntityImageUrlsMock).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Nova embalagem' }))
+    expect(screen.queryByTestId('entity-image-upload-field')).not.toBeInTheDocument()
   })
 })

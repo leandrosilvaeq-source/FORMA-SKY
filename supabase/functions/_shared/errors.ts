@@ -424,6 +424,14 @@ const RAISE_EXCEPTION_PATTERNS: Array<[string, (message: string) => AppError]> =
   // com um único padrão — todas começam com o mesmo prefixo.
   ["set_product_production:", (message) => new ValidationError(message)],
   ["Plate ", (message) => new ValidationError(message)],
+  // set_entity_image (migration 20260906120000, infraestrutura de foto
+  // principal por cadastro): defesa em profundidade — a Edge Function
+  // `entity-images` valida entidade/id/caminhos ANTES de chamar a RPC;
+  // estas mensagens só aparecem numa chamada direta. Todas começam com o
+  // prefixo da função e são erros de entrada inválida (400). A variante
+  // "set_entity_image: <entity> id <uuid> não encontrado" casa antes com o
+  // padrão genérico "não encontrado" (primeiro da lista) -> 404.
+  ["set_entity_image:", (message) => new ValidationError(message)],
 ];
 
 export function mapPgError(err: PgErrorLike): AppError {

@@ -40,6 +40,11 @@ export type EdgeFunctionName =
   | 'filament-movements'
   | 'inventory-purchases'
   | 'customers'
+  // Módulo 3 — infraestrutura compartilhada de "uma foto principal por
+  // cadastro" (2026-09-06). Upload/remoção/assinatura em lote/limpeza
+  // pós-exclusão da foto de accessories/packaging/filament-types/products.
+  // Ainda NÃO publicada — roda só localmente nesta rodada.
+  | 'entity-images'
 
 type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
 

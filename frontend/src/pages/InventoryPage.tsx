@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { EllipsisIcon, HistoryIcon, SlidersHorizontalIcon } from 'lucide-react'
+import { EllipsisIcon, HistoryIcon, ImageIcon, SlidersHorizontalIcon } from 'lucide-react'
 import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
 import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
@@ -15,6 +15,7 @@ import { InventoryPageShell, type InventoryArea } from '@/components/inventory/I
 import { StockMovementPanel, StockLevelBadge, getStockLevel } from '@/components/inventory/StockMovementPanel'
 import { AccessoryStockAdjustDialog } from '@/components/inventory/AccessoryStockAdjustDialog'
 import { AccessoryHistoryDialog } from '@/components/inventory/AccessoryHistoryDialog'
+import { EntityImageUploadField } from '@/components/inventory/EntityImageUploadField'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
@@ -30,6 +31,9 @@ import { useAccessories } from '@/hooks/useAccessories'
 import { useAuth } from '@/context/AuthContext'
 import { usePackaging } from '@/hooks/usePackaging'
 import { usePersistentColumnWidths } from '@/hooks/usePersistentColumnWidths'
+import { useEntityImageThumbnails } from '@/hooks/useEntityImageThumbnails'
+import { purgeEntityImages, removeEntityImage, uploadEntityImage } from '@/lib/api/entityImages'
+import type { ProcessedEntityImage } from '@/lib/images/processEntityImage'
 import { ApiError } from '@/lib/api/errors'
 import { normalizeForSearch } from '@/lib/forms/textSearch'
 import type { ColumnWidthSpec } from '@/lib/tables/columnWidths'
@@ -105,6 +109,12 @@ interface InventoryItem {
   // "Movimentar estoque" -> register_stock_movement).
   current_stock: number
   is_active: boolean
+  // Módulo 3 — infraestrutura de foto principal (2026-09-06). Só a listagem
+  // de Acessórios (variant 'accessory') exibe a miniatura; Embalagens não
+  // consome este campo. Caminho INTERNO do objeto (nunca uma URL) — a
+  // listagem resolve as URLs assinadas em lote (useEntityImageThumbnails).
+  image_path?: string | null
+  image_thumb_path?: string | null
 }
 
 // size nulo ou vazio vira "Não se aplica"; um valor legado fora de
@@ -122,6 +132,51 @@ function formatCost(unitCost: number | null): string {
 
 function formatMinimumStock(value: number | null): string {
   return value !== null ? String(value) : '—'
+}
+
+// Miniatura da foto principal, ao lado do nome na listagem de Acessórios
+// (2026-09-06). Tamanho compacto e fixo (28px), nunca uma coluna própria.
+// Estados: sem foto -> placeholder neutro; com foto mas URL ainda
+// carregando em lote -> skeleton; com foto e URL -> a imagem; com foto mas
+// a assinatura falhou (URL null e já não carrega) -> placeholder (a
+// listagem nunca quebra por causa da foto). `alt` vazio: a miniatura é
+// decorativa ao lado do nome textual completo, que já identifica a linha.
+function AccessoryRowThumbnail({
+  name,
+  thumbPath,
+  url,
+  loading,
+}: {
+  name: string
+  thumbPath: string | null | undefined
+  url: string | null | undefined
+  loading: boolean
+}) {
+  const base = 'size-7 shrink-0 rounded-md object-cover ring-1 ring-black/5'
+  if (!thumbPath) {
+    return (
+      <span
+        className="bg-muted text-muted-foreground flex size-7 shrink-0 items-center justify-center rounded-md ring-1 ring-black/5"
+        aria-hidden="true"
+      >
+        <ImageIcon className="size-3.5" />
+      </span>
+    )
+  }
+  if (loading && !url) {
+    return <Skeleton className="size-7 shrink-0 rounded-md" />
+  }
+  if (!url) {
+    return (
+      <span
+        className="bg-muted text-muted-foreground flex size-7 shrink-0 items-center justify-center rounded-md ring-1 ring-black/5"
+        aria-hidden="true"
+      >
+        <ImageIcon className="size-3.5" />
+      </span>
+    )
+  }
+  return <img src={url} alt={`Foto de ${name}`} loading="lazy" className={base} />
 }
 
 type InventorySortColumn = 'name' | 'size' | 'variant' | 'unit_cost' | 'minimum_stock' | 'current_stock' | 'is_active'
@@ -293,6 +348,12 @@ interface InventoryAreaPanelProps {
   // quantidade absoluta / a janela dedicada de histórico.
   onAdjustStock?: (item: InventoryItem) => void
   onOpenHistory?: (item: InventoryItem) => void
+  // Variante 'accessory' (2026-09-06): mapa image_thumb_path -> URL assinada
+  // já resolvido em lote pelo pai (useEntityImageThumbnails). A célula do
+  // nome exibe a miniatura; enquanto `thumbnailsLoading` é true e o item tem
+  // foto, mostra um placeholder de carregamento. Embalagens não passa nada.
+  thumbnailUrls?: Record<string, string | null>
+  thumbnailsLoading?: boolean
 }
 
 // Painel completo de uma área (busca + filtro + ordenação + tabela +
@@ -330,6 +391,8 @@ function InventoryAreaPanel({
   onManageStock,
   onAdjustStock,
   onOpenHistory,
+  thumbnailUrls,
+  thumbnailsLoading = false,
 }: InventoryAreaPanelProps) {
   const isAccessoryVariant = variant === 'accessory'
   const [searchTerm, setSearchTerm] = useState('')
@@ -533,7 +596,19 @@ function InventoryAreaPanel({
                   const costText = formatCost(item.unit_cost)
                   const stockLevel = getStockLevel(item.current_stock, item.minimum_stock)
 
-                  const nameCell = (
+                  const nameCell = isAccessoryVariant ? (
+                    <TableCell title={item.name}>
+                      <div className="flex items-center gap-2">
+                        <AccessoryRowThumbnail
+                          name={item.name}
+                          thumbPath={item.image_thumb_path}
+                          url={item.image_thumb_path ? thumbnailUrls?.[item.image_thumb_path] : null}
+                          loading={thumbnailsLoading}
+                        />
+                        <span className="truncate">{item.name}</span>
+                      </div>
+                    </TableCell>
+                  ) : (
                     <TableCell className="truncate" title={item.name}>
                       {item.name}
                     </TableCell>
@@ -743,10 +818,23 @@ function AccessoriesInventoryPage() {
     update,
     delete: deleteAccessoryItem,
     setLocalStock,
+    setLocalImage,
   } = useAccessories()
+
+  // Miniaturas da listagem — URLs assinadas resolvidas EM LOTE (nunca uma
+  // requisição por linha). O diálogo de edição reaproveita este mesmo mapa
+  // para pré-visualizar a foto atual do acessório sem uma chamada extra.
+  const accessoryThumbnails = useEntityImageThumbnails(
+    accessories.map((accessory) => accessory.image_thumb_path),
+  )
+
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  // Foto escolhida no "Novo acessório" — já processada (WebP + thumb), ainda
+  // NÃO enviada: o acessório é criado primeiro; só depois, com o id
+  // retornado, a foto é enviada. Falha no envio nunca impede a criação.
+  const [createPhoto, setCreatePhoto] = useState<ProcessedEntityImage | null>(null)
 
   // Diálogo de edição: estado separado do de criação — nunca abertos ao
   // mesmo tempo, mas cada um com seu próprio ciclo de vida/erro/submitting,
@@ -755,6 +843,11 @@ function AccessoriesInventoryPage() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
+  // Alteração de foto na EDIÇÃO — nova foto processada (substituição) OU
+  // remoção explícita. Só abrir e cancelar não toca em nada; salvar sem
+  // mexer na foto preserva os caminhos atuais.
+  const [editPhoto, setEditPhoto] = useState<ProcessedEntityImage | null>(null)
+  const [editPhotoRemoved, setEditPhotoRemoved] = useState(false)
 
   // Ativação/desativação: estado próprio desta área, independente do de
   // criação/edição. pendingToggleId só é setado durante a requisição de
@@ -785,15 +878,38 @@ function AccessoriesInventoryPage() {
 
   function openCreateDialog() {
     setCreateError(null)
+    setCreatePhoto(null)
     setIsCreateDialogOpen(true)
   }
 
+  // Fluxo seguro da foto na CRIAÇÃO: (1) cria o acessório; (2) só com o id
+  // retornado envia a foto e vincula; (3) falha no envio NÃO desfaz a
+  // criação — o acessório fica cadastrado sem foto, com aviso claro, e a
+  // foto pode ser adicionada depois pela edição. Escolher uma foto nunca
+  // cria um registro incompleto: nada acontece antes do submit.
   async function handleCreateSubmit(values: InventoryItemFormValues) {
     setIsSubmittingCreate(true)
     setCreateError(null)
     try {
-      await create(values)
-      toast.success('Acessório cadastrado.')
+      const created = await create(values)
+
+      if (createPhoto) {
+        try {
+          const linked = await uploadEntityImage('accessories', created.id, {
+            original: createPhoto.original,
+            thumb: createPhoto.thumb,
+          })
+          setLocalImage(created.id, linked.image_path, linked.image_thumb_path)
+          toast.success('Acessório cadastrado.')
+        } catch {
+          toast.error(
+            'O acessório foi criado, mas a foto não pôde ser salva. Você pode adicioná-la pela edição.',
+          )
+        }
+      } else {
+        toast.success('Acessório cadastrado.')
+      }
+
       setIsCreateDialogOpen(false)
     } catch (err) {
       const message = toErrorMessage(err)
@@ -857,10 +973,25 @@ function AccessoriesInventoryPage() {
   // funcional para o usuário decidir o próximo passo.
   async function handleConfirmDelete() {
     if (!deletingItem) return
+    const target = deletingItem
     setIsDeleting(true)
     setDeleteError(null)
     try {
-      await deleteAccessoryItem(deletingItem.id)
+      await deleteAccessoryItem(target.id)
+
+      // Só DEPOIS da exclusão confirmada: limpa a foto e a miniatura do
+      // acessário no bucket privado. Best-effort — o acessório já foi
+      // excluído, uma falha de limpeza física não é revertida nem
+      // bloqueia o fluxo (o backend recusa o purge, preservando a foto, se
+      // por algum motivo o registro ainda existir). Se a exclusão for
+      // BLOQUEADA (409 por histórico/vínculo), o catch abaixo assume e o
+      // purge nunca é chamado — a foto é preservada.
+      if (target.image_path) {
+        void purgeEntityImages('accessories', target.id).catch(() => {
+          /* limpeza física é best-effort — nunca desfaz a exclusão já concluída */
+        })
+      }
+
       toast.success('Acessório excluído.')
       setIsDeleteDialogOpen(false)
     } catch (err) {
@@ -873,6 +1004,8 @@ function AccessoriesInventoryPage() {
   function openEditDialog(item: InventoryItem) {
     setEditingItem(item)
     setEditError(null)
+    setEditPhoto(null)
+    setEditPhotoRemoved(false)
     setIsEditDialogOpen(true)
   }
 
@@ -882,6 +1015,35 @@ function AccessoriesInventoryPage() {
     setEditError(null)
     try {
       await update(editingItem.id, values)
+
+      // Alteração de foto (se houver) é um passo SEPARADO, depois dos
+      // campos. Uma falha aqui nunca apaga a foto anterior nem reverte os
+      // campos já salvos — só avisa.
+      if (editPhoto) {
+        try {
+          const linked = await uploadEntityImage('accessories', editingItem.id, {
+            original: editPhoto.original,
+            thumb: editPhoto.thumb,
+          })
+          setLocalImage(editingItem.id, linked.image_path, linked.image_thumb_path)
+        } catch {
+          toast.error('Os dados foram salvos, mas a nova foto não pôde ser enviada. A foto anterior foi mantida.')
+          setIsSubmittingEdit(false)
+          setIsEditDialogOpen(false)
+          return
+        }
+      } else if (editPhotoRemoved && editingItem.image_path) {
+        try {
+          await removeEntityImage('accessories', editingItem.id)
+          setLocalImage(editingItem.id, null, null)
+        } catch {
+          toast.error('Os dados foram salvos, mas a foto não pôde ser removida. Tente novamente pela edição.')
+          setIsSubmittingEdit(false)
+          setIsEditDialogOpen(false)
+          return
+        }
+      }
+
       toast.success('Acessório atualizado.')
       setIsEditDialogOpen(false)
     } catch (err) {
@@ -930,6 +1092,8 @@ function AccessoriesInventoryPage() {
         onDeleteItem={openDeleteDialog}
         onAdjustStock={setAdjustingItem}
         onOpenHistory={setHistoryItem}
+        thumbnailUrls={accessoryThumbnails.urls}
+        thumbnailsLoading={accessoryThumbnails.isLoading}
       />
 
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
@@ -938,6 +1102,16 @@ function AccessoriesInventoryPage() {
             <DialogTitle>Novo acessório</DialogTitle>
             <DialogDescription>Preencha os dados para cadastrar um novo acessório.</DialogDescription>
           </DialogHeader>
+          {/* Seção "Foto de referência" — opcional. A imagem é processada
+              localmente aqui (WebP + thumb) e só enviada após a criação, com
+              o id retornado (ver handleCreateSubmit). */}
+          <EntityImageUploadField
+            idPrefix="accessory-create-photo"
+            isUploading={isSubmittingCreate && createPhoto !== null}
+            disabled={isSubmittingCreate}
+            onImageSelected={setCreatePhoto}
+            onImageRemoved={() => setCreatePhoto(null)}
+          />
           <InventoryItemForm
             idPrefix="accessory"
             isSubmitting={isSubmittingCreate}
@@ -999,21 +1173,45 @@ function AccessoriesInventoryPage() {
             <DialogDescription>Atualize os dados do acessório.</DialogDescription>
           </DialogHeader>
           {editingItem && (
-            <InventoryItemForm
-              key={editingItem.id}
-              idPrefix="accessory-edit"
-              mode="edit"
-              initialValues={{
-                name: editingItem.name,
-                size: editingItem.size,
-                variant: editingItem.variant,
-                minimum_stock: editingItem.minimum_stock,
-              }}
-              isSubmitting={isSubmittingEdit}
-              submitError={editError}
-              onSubmit={(values) => void handleEditSubmit(values)}
-              onCancel={() => setIsEditDialogOpen(false)}
-            />
+            <>
+              {/* Foto atual pré-visualizada pela URL já assinada em lote pela
+                  listagem (sem chamada extra). Substituir/remover só têm
+                  efeito ao salvar; só abrir e cancelar não altera nada. */}
+              <EntityImageUploadField
+                key={`${editingItem.id}-photo`}
+                idPrefix="accessory-edit-photo"
+                savedPreviewUrl={
+                  !editPhotoRemoved && editingItem.image_thumb_path
+                    ? (accessoryThumbnails.urls[editingItem.image_thumb_path] ?? null)
+                    : null
+                }
+                isUploading={isSubmittingEdit && (editPhoto !== null || editPhotoRemoved)}
+                disabled={isSubmittingEdit}
+                onImageSelected={(processed) => {
+                  setEditPhoto(processed)
+                  setEditPhotoRemoved(false)
+                }}
+                onImageRemoved={() => {
+                  setEditPhoto(null)
+                  setEditPhotoRemoved(true)
+                }}
+              />
+              <InventoryItemForm
+                key={editingItem.id}
+                idPrefix="accessory-edit"
+                mode="edit"
+                initialValues={{
+                  name: editingItem.name,
+                  size: editingItem.size,
+                  variant: editingItem.variant,
+                  minimum_stock: editingItem.minimum_stock,
+                }}
+                isSubmitting={isSubmittingEdit}
+                submitError={editError}
+                onSubmit={(values) => void handleEditSubmit(values)}
+                onCancel={() => setIsEditDialogOpen(false)}
+              />
+            </>
           )}
         </DialogContent>
       </Dialog>
