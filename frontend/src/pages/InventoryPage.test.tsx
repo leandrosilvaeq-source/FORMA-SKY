@@ -2646,12 +2646,18 @@ describe('InventoryPage — Acessórios: foto de referência (2026-09-06)', () =
     await waitFor(() => expect(signEntityImageUrlsMock).toHaveBeenCalledWith(['accessories/a2/t.webp']))
 
     const comFotoRow = within(getTableBody()).getByText('Com foto').closest('tr') as HTMLElement
+    // A miniatura assinada vira o conteúdo do botão "Ampliar foto de ..."
+    // (a <img> interna é decorativa: alt="", role=presentation).
     await waitFor(() =>
-      expect(within(comFotoRow).getByRole('img')).toHaveAttribute('src', 'https://signed/a2-thumb'),
+      expect(
+        within(comFotoRow).getByRole('button', { name: 'Ampliar foto de Com foto' }).querySelector('img'),
+      ).toHaveAttribute('src', 'https://signed/a2-thumb'),
     )
 
     const semFotoRow = within(getTableBody()).getByText('Sem foto').closest('tr') as HTMLElement
     expect(within(semFotoRow).queryByRole('img')).not.toBeInTheDocument()
+    expect(semFotoRow.querySelector('img')).toBeNull()
+    expect(within(semFotoRow).queryByRole('button', { name: /Ampliar foto/ })).not.toBeInTheDocument()
   })
 
   it('criar COM foto: cria o acessório primeiro e só então envia/vincula a foto pelo id retornado', async () => {
@@ -2933,5 +2939,163 @@ describe('InventoryPage — Acessórios: foto de referência (2026-09-06)', () =
 
     await user.click(screen.getByRole('button', { name: 'Nova embalagem' }))
     expect(screen.queryByTestId('entity-image-upload-field')).not.toBeInTheDocument()
+  })
+})
+
+describe('InventoryPage — Acessórios: pop-up de foto ampliada (2026-09-06)', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+    signEntityImageUrlsMock.mockReset()
+    // Assina qualquer lote/caminho pedido (miniaturas em lote + original sob
+    // demanda) devolvendo uma URL derivada do caminho.
+    signEntityImageUrlsMock.mockImplementation((paths: string[]) =>
+      Promise.resolve({
+        urls: Object.fromEntries(paths.map((p) => [p, `https://signed/${p}`])),
+        expires_in: 3600,
+      }),
+    )
+  })
+
+  const withPhoto = (overrides: Partial<Accessory> = {}) =>
+    accessoryFixture({
+      image_path: 'accessories/a1/o.webp',
+      image_thumb_path: 'accessories/a1/t.webp',
+      ...overrides,
+    })
+
+  async function findZoomButton(name: string): Promise<HTMLElement> {
+    return screen.findByRole('button', { name: `Ampliar foto de ${name}` })
+  }
+
+  it('miniatura de um acessório com foto é um botão com aria-label contendo o nome', async () => {
+    mockAccessories([withPhoto({ id: 'a1', name: 'Ímã 6x2' })])
+    renderPage('acessorios')
+
+    const zoom = await findZoomButton('Ímã 6x2')
+    expect(zoom.tagName).toBe('BUTTON')
+    expect(zoom).toHaveAttribute('aria-label', 'Ampliar foto de Ímã 6x2')
+    // a miniatura em si continua sendo mostrada dentro do botão
+    expect(within(zoom).getByRole('presentation', { hidden: true })).toBeInTheDocument()
+  })
+
+  it('acessório SEM foto mostra placeholder e NÃO abre o pop-up', async () => {
+    mockAccessories([accessoryFixture({ id: 'a1', name: 'Sem foto' })])
+    renderPage('acessorios')
+
+    const row = within(getTableBody()).getByText('Sem foto').closest('tr') as HTMLElement
+    expect(within(row).queryByRole('button', { name: /Ampliar foto/ })).not.toBeInTheDocument()
+    expect(within(row).queryByRole('img')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('assina o ORIGINAL (image_path) somente após o clique — nunca com a listagem', async () => {
+    mockAccessories([withPhoto({ id: 'a1', name: 'Ímã 6x2' })])
+    renderPage('acessorios')
+
+    // a listagem assina a miniatura em lote...
+    await waitFor(() => expect(signEntityImageUrlsMock).toHaveBeenCalledWith(['accessories/a1/t.webp']))
+    // ...mas nunca o original antes do clique
+    expect(signEntityImageUrlsMock).not.toHaveBeenCalledWith(['accessories/a1/o.webp'])
+
+    await userEvent.click(await findZoomButton('Ímã 6x2'))
+
+    await waitFor(() => expect(signEntityImageUrlsMock).toHaveBeenCalledWith(['accessories/a1/o.webp']))
+    const dialog = await screen.findByRole('dialog')
+    const img = await within(dialog).findByRole('img')
+    expect(img).toHaveAttribute('src', 'https://signed/accessories/a1/o.webp')
+    expect(img).toHaveAttribute('alt', 'Foto de Ímã 6x2')
+    expect(within(dialog).getByText('Ímã 6x2')).toBeInTheDocument()
+  })
+
+  it('clique abre o pop-up do acessório correto quando há vários', async () => {
+    mockAccessories([
+      withPhoto({ id: 'a1', name: 'Primeiro', image_path: 'accessories/a1/o.webp', image_thumb_path: 'accessories/a1/t.webp' }),
+      withPhoto({ id: 'a2', name: 'Segundo', image_path: 'accessories/a2/o.webp', image_thumb_path: 'accessories/a2/t.webp' }),
+    ])
+    renderPage('acessorios')
+
+    await userEvent.click(await findZoomButton('Segundo'))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Segundo')).toBeInTheDocument()
+    expect(within(dialog).queryByText('Primeiro')).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(within(dialog).getByRole('img')).toHaveAttribute('src', 'https://signed/accessories/a2/o.webp'),
+    )
+    expect(signEntityImageUrlsMock).toHaveBeenCalledWith(['accessories/a2/o.webp'])
+    expect(signEntityImageUrlsMock).not.toHaveBeenCalledWith(['accessories/a1/o.webp'])
+  })
+
+  it('a imagem ampliada usa object-contain e tetos de viewport (sem rolagem horizontal)', async () => {
+    mockAccessories([withPhoto({ id: 'a1', name: 'Ímã 6x2' })])
+    renderPage('acessorios')
+
+    await userEvent.click(await findZoomButton('Ímã 6x2'))
+    const img = await within(await screen.findByRole('dialog')).findByRole('img')
+    expect(img.className).toContain('object-contain')
+    expect(img.className).toContain('max-w-[90vw]')
+    expect(img.className).toContain('max-h-[85vh]')
+  })
+
+  it('fechar o pop-up (X) volta para a listagem sem efeitos colaterais', async () => {
+    mockAccessories([withPhoto({ id: 'a1', name: 'Ímã 6x2' })])
+    renderPage('acessorios')
+
+    await userEvent.click(await findZoomButton('Ímã 6x2'))
+    const dialog = await screen.findByRole('dialog')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(uploadEntityImageMock).not.toHaveBeenCalled()
+    expect(removeEntityImageMock).not.toHaveBeenCalled()
+    expect(purgeEntityImagesMock).not.toHaveBeenCalled()
+  })
+
+  it('clicar na miniatura não abre o diálogo de edição do acessório', async () => {
+    mockAccessories([withPhoto({ id: 'a1', name: 'Ímã 6x2' })])
+    renderPage('acessorios')
+
+    await userEvent.click(await findZoomButton('Ímã 6x2'))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).queryByText('Editar acessório')).not.toBeInTheDocument()
+    expect(within(dialog).getByText('Ímã 6x2')).toBeInTheDocument()
+  })
+
+  it('as ações e a ordem das colunas da linha permanecem inalteradas', async () => {
+    mockAccessories([withPhoto({ id: 'a1', name: 'Ímã 6x2' })])
+    renderPage('acessorios')
+
+    await findZoomButton('Ímã 6x2')
+    const headerCells = within(getTable())
+      .getAllByRole('row')[0]
+      .querySelectorAll('th')
+    expect(Array.from(headerCells).map((th) => th.textContent?.trim())).toEqual([
+      'Acessório',
+      'Tamanho',
+      'Variante',
+      'Estoque mínimo',
+      'Disponível',
+      'Custo unitário',
+      'Ações',
+    ])
+    expect(screen.getByRole('button', { name: 'Ajustar quantidade' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Histórico' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Mais ações — acessório Ímã 6x2' })).toBeInTheDocument()
+  })
+
+  it('Embalagens não ganhou miniatura clicável nem assinatura em lote', async () => {
+    mockPackaging([
+      packagingFixture({
+        id: 'k1',
+        name: 'Caixa M',
+        image_path: 'packaging/k1/o.webp',
+        image_thumb_path: 'packaging/k1/t.webp',
+      }),
+    ])
+    renderPage('embalagens')
+
+    expect(screen.queryByRole('button', { name: /Ampliar foto/ })).not.toBeInTheDocument()
+    expect(signEntityImageUrlsMock).not.toHaveBeenCalled()
   })
 })

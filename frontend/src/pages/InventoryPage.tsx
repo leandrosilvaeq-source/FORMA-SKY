@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { EllipsisIcon, HistoryIcon, ImageIcon, SlidersHorizontalIcon } from 'lucide-react'
+import { EllipsisIcon, HistoryIcon, ImageIcon, SlidersHorizontalIcon, ZoomInIcon } from 'lucide-react'
 import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
 import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
@@ -16,6 +16,7 @@ import { StockMovementPanel, StockLevelBadge, getStockLevel } from '@/components
 import { AccessoryStockAdjustDialog } from '@/components/inventory/AccessoryStockAdjustDialog'
 import { AccessoryHistoryDialog } from '@/components/inventory/AccessoryHistoryDialog'
 import { EntityImageUploadField } from '@/components/inventory/EntityImageUploadField'
+import { EntityImagePreviewDialog } from '@/components/inventory/EntityImagePreviewDialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
@@ -139,20 +140,25 @@ function formatMinimumStock(value: number | null): string {
 // Estados: sem foto -> placeholder neutro; com foto mas URL ainda
 // carregando em lote -> skeleton; com foto e URL -> a imagem; com foto mas
 // a assinatura falhou (URL null e já não carrega) -> placeholder (a
-// listagem nunca quebra por causa da foto). `alt` vazio: a miniatura é
-// decorativa ao lado do nome textual completo, que já identifica a linha.
+// listagem nunca quebra por causa da foto).
+//
+// Quando há foto E `onZoom` é fornecido, a miniatura vira um <button> que
+// abre o pop-up de foto ampliada (EntityImagePreviewDialog). O placeholder
+// (sem foto) e os estados de carregamento/erro NUNCA são clicáveis. O clique
+// para a propagação para não disparar nenhuma ação da linha.
 function AccessoryRowThumbnail({
   name,
   thumbPath,
   url,
   loading,
+  onZoom,
 }: {
   name: string
   thumbPath: string | null | undefined
   url: string | null | undefined
   loading: boolean
+  onZoom?: () => void
 }) {
-  const base = 'size-7 shrink-0 rounded-md object-cover ring-1 ring-black/5'
   if (!thumbPath) {
     return (
       <span
@@ -176,7 +182,36 @@ function AccessoryRowThumbnail({
       </span>
     )
   }
-  return <img src={url} alt={`Foto de ${name}`} loading="lazy" className={base} />
+  if (!onZoom) {
+    return (
+      <img
+        src={url}
+        alt={`Foto de ${name}`}
+        loading="lazy"
+        className="size-7 shrink-0 rounded-md object-cover ring-1 ring-black/5"
+      />
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation()
+        onZoom()
+      }}
+      aria-label={`Ampliar foto de ${name}`}
+      className="group focus-visible:ring-brand-accent relative size-7 shrink-0 cursor-zoom-in overflow-hidden rounded-md ring-1 ring-black/5 outline-none focus-visible:ring-2"
+    >
+      <img src={url} alt="" loading="lazy" className="size-7 object-cover" />
+      {/* Indicação discreta de que a foto pode ser ampliada. */}
+      <span
+        aria-hidden="true"
+        className="absolute right-0 bottom-0 flex items-center justify-center rounded-tl-md bg-black/55 p-0.5 text-white opacity-60 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+      >
+        <ZoomInIcon className="size-2.5" />
+      </span>
+    </button>
+  )
 }
 
 type InventorySortColumn = 'name' | 'size' | 'variant' | 'unit_cost' | 'minimum_stock' | 'current_stock' | 'is_active'
@@ -354,6 +389,10 @@ interface InventoryAreaPanelProps {
   // foto, mostra um placeholder de carregamento. Embalagens não passa nada.
   thumbnailUrls?: Record<string, string | null>
   thumbnailsLoading?: boolean
+  // Variante 'accessory' (2026-09-06): clicar na miniatura de um acessório
+  // que tem foto abre o pop-up de foto ampliada. Só é chamado para itens com
+  // `image_path`; o placeholder (sem foto) nunca dispara.
+  onPreviewImage?: (item: InventoryItem) => void
 }
 
 // Painel completo de uma área (busca + filtro + ordenação + tabela +
@@ -393,6 +432,7 @@ function InventoryAreaPanel({
   onOpenHistory,
   thumbnailUrls,
   thumbnailsLoading = false,
+  onPreviewImage,
 }: InventoryAreaPanelProps) {
   const isAccessoryVariant = variant === 'accessory'
   const [searchTerm, setSearchTerm] = useState('')
@@ -604,6 +644,7 @@ function InventoryAreaPanel({
                           thumbPath={item.image_thumb_path}
                           url={item.image_thumb_path ? thumbnailUrls?.[item.image_thumb_path] : null}
                           loading={thumbnailsLoading}
+                          onZoom={item.image_path && onPreviewImage ? () => onPreviewImage(item) : undefined}
                         />
                         <span className="truncate">{item.name}</span>
                       </div>
@@ -876,6 +917,12 @@ function AccessoriesInventoryPage() {
   const [adjustingItem, setAdjustingItem] = useState<InventoryItem | null>(null)
   const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null)
 
+  // Foto ampliada (2026-09-06): clicar na miniatura de um acessório com foto
+  // abre o EntityImagePreviewDialog, que assina a URL do ORIGINAL sob
+  // demanda (nunca em lote com a listagem). Estado independente dos demais
+  // diálogos.
+  const [previewItem, setPreviewItem] = useState<InventoryItem | null>(null)
+
   function openCreateDialog() {
     setCreateError(null)
     setCreatePhoto(null)
@@ -1092,6 +1139,7 @@ function AccessoriesInventoryPage() {
         onDeleteItem={openDeleteDialog}
         onAdjustStock={setAdjustingItem}
         onOpenHistory={setHistoryItem}
+        onPreviewImage={setPreviewItem}
         thumbnailUrls={accessoryThumbnails.urls}
         thumbnailsLoading={accessoryThumbnails.isLoading}
       />
@@ -1273,6 +1321,16 @@ function AccessoriesInventoryPage() {
             : null
         }
         onClose={() => setHistoryItem(null)}
+      />
+
+      <EntityImagePreviewDialog
+        open={previewItem !== null}
+        onOpenChange={(open) => {
+          if (!open) setPreviewItem(null)
+        }}
+        title={previewItem?.name ?? ''}
+        alt={previewItem ? `Foto de ${previewItem.name}` : ''}
+        imagePath={previewItem?.image_path ?? null}
       />
     </InventoryPageShell>
   )
