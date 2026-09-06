@@ -961,16 +961,53 @@ describe('FilamentsInventoryPage — alinhamento horizontal Busca/Material/Linha
     expect(row.className).toContain('md:items-start')
   })
 
-  it('Linha ocupa o espaço restante (md:flex-1 + min-w-0); Busca, Material e Cor ficam com a largura do conteúdo (md:shrink-0)', () => {
+  it('Linha NÃO cresce artificialmente — nenhum grupo usa flex-grow/flex-1; Linha só tem min-w-0 (largura de conteúdo)', () => {
     renderPage()
     const [buscaWrap, materialWrap, lineWrap, colorWrap] = Array.from(
       filtersRow().children,
     ) as HTMLElement[]
+    // nenhum wrapper tem flex-grow / flex-1 / grow — o espaço livre sobra à
+    // direita de Cor, nunca entre Linha e Cor
+    for (const wrap of [buscaWrap, materialWrap, lineWrap, colorWrap]) {
+      expect(wrap.className).not.toMatch(/(^|\s|:)flex-1(\s|$)/)
+      expect(wrap.className).not.toMatch(/(^|\s|:)(flex-)?grow(\s|$)/)
+    }
+    // Busca, Material e Cor ficam com a largura do conteúdo
     expect(buscaWrap.className).toContain('md:shrink-0')
     expect(materialWrap.className).toContain('md:shrink-0')
-    expect(lineWrap.className).toContain('md:flex-1')
-    expect(lineWrap.className).toContain('min-w-0')
     expect(colorWrap.className).toContain('md:shrink-0')
+    // Linha: largura baseada no conteúdo, com min-w-0 para os botões
+    // quebrarem dentro do grupo quando aperta
+    expect(lineWrap.className).toContain('min-w-0')
+    expect(lineWrap.className).not.toContain('md:flex-1')
+  })
+
+  it('Cor não é empurrado para a direita — sem margem automática nem alinhamento de fim', () => {
+    renderPage()
+    const wrappers = Array.from(filtersRow().children) as HTMLElement[]
+    const colorWrap = wrappers[wrappers.length - 1]
+    // nada que jogue Cor para a extremidade direita
+    expect(colorWrap.className).not.toMatch(/\bm[lsx]?-auto\b/)
+    expect(colorWrap.className).not.toMatch(/\bms-auto\b/)
+    expect(colorWrap.className).not.toMatch(/\bself-end\b/)
+    expect(colorWrap.className).not.toMatch(/\bjustify-self-end\b/)
+    // e o grupo Linha também não força um empurrão via margem à direita
+    const lineWrap = wrappers[wrappers.length - 2]
+    expect(lineWrap.className).not.toMatch(/\bmr-auto\b/)
+    expect(lineWrap.className).not.toMatch(/\bme-auto\b/)
+  })
+
+  it('entre Linha e Cor há só o espaçamento padrão do container (md:gap-4) — sem margem própria', () => {
+    renderPage()
+    const row = filtersRow()
+    expect(row.className).toContain('md:gap-4')
+    const wrappers = Array.from(row.children) as HTMLElement[]
+    const lineWrap = wrappers[wrappers.length - 2]
+    const colorWrap = wrappers[wrappers.length - 1]
+    // o espaçamento entre Linha e Cor vem só do gap do flex — nenhum dos
+    // dois wrappers acrescenta qualquer utilitário de margem (m*-…)
+    expect(lineWrap.className).not.toMatch(/(^|\s)-?m[lrtbxsey]?-/)
+    expect(colorWrap.className).not.toMatch(/(^|\s)-?m[lrtbxsey]?-/)
   })
 
   it('o container dos filtros não cria rolagem horizontal própria (nem nenhum ancestral até o body)', () => {

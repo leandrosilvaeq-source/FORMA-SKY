@@ -661,15 +661,20 @@ export function FilamentsInventoryPage() {
           </Button>
         </div>
 
-        {/* Busca | Material | Linha | Cor na MESMA linha no desktop largo —
-            Busca, Material e Cor com a largura do próprio conteúdo
-            (shrink-0), Linha ocupando o resto do espaço (flex-1 + min-w-0,
-            para os botões internos quebrarem DENTRO da própria área em vez
-            de esticar a linha e gerar rolagem horizontal). `md:flex-wrap`
-            deixa a linha quebrar em duas em telas intermediárias; abaixo de
-            `md` tudo empilha (flex-col). `md:items-start` alinha os quatro
-            rótulos no mesmo topo. Sem nenhuma largura rígida — só
-            shrink/grow do flex. */}
+        {/* Busca | Material | Linha | Cor na MESMA linha no desktop —
+            TODOS os grupos têm a largura do próprio conteúdo (nenhum
+            `flex-1`/`grow`): sem o crescimento artificial de Linha, o grupo
+            Cor fica logo depois de Linha, separado só pelo gap padrão
+            (`md:gap-4`), e o espaço livre sobra à direita de Cor — nunca
+            entre Linha e Cor. `min-w-0` no grupo Linha deixa os 8 botões
+            internos quebrarem DENTRO da própria área quando o espaço aperta,
+            em vez de esticar a linha ou gerar rolagem horizontal.
+            `md:flex-wrap` permite a quebra organizada em telas
+            intermediárias (Cor passa para a linha de baixo, mas continua
+            logo depois de Linha na ordem); abaixo de `md` tudo empilha
+            (flex-col). `md:items-start` alinha os quatro rótulos no mesmo
+            topo. Sem largura rígida, sem position absolute, sem margem
+            negativa, sem margem automática. */}
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-start md:gap-4">
             <div className="flex flex-col items-start gap-1.5 md:shrink-0">
@@ -696,7 +701,7 @@ export function FilamentsInventoryPage() {
                 onSelect={(value) => setSingleFilterValue('materials', value)}
               />
             </div>
-            <div className="min-w-0 md:flex-1">
+            <div className="min-w-0">
               <SingleSelectActionFilter
                 label="Linha"
                 ariaLabel="Filtrar por linha"
@@ -707,7 +712,9 @@ export function FilamentsInventoryPage() {
             </div>
             <div className="md:shrink-0">
               {/* Cor continua o mesmo Popover multisseleção — só ganhou um
-                  rótulo próprio, para alinhar com Busca/Material/Linha no topo. */}
+                  rótulo próprio, para alinhar com Busca/Material/Linha no topo.
+                  Fica imediatamente depois de Linha (nenhum `ml-auto`/
+                  `self-end`/`justify-*` empurrando para a direita). */}
               <div className="flex flex-col items-start gap-1.5">
                 <Label>Cor</Label>
                 <MultiSelectFilterButton
