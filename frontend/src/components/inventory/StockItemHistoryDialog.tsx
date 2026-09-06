@@ -7,19 +7,25 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { StockLevelBadge, getStockLevel } from './StockMovementPanel'
+import { StockLevelBadge, getStockLevel } from './stockLevel'
 import { StockMovementHistory } from './StockMovementHistory'
 import { useStockMovements } from '@/hooks/useStockMovements'
+import type { StockItemType } from '@/types/domain'
 
-export interface AccessoryHistoryItem {
+export interface StockHistoryItem {
   id: string
   name: string
   current_stock: number
   minimum_stock: number | null
 }
 
-export interface AccessoryHistoryDialogProps {
-  item: AccessoryHistoryItem | null
+export interface StockItemHistoryDialogProps {
+  // ACCESSORY ou PACKAGING — filtra o histórico por item_type + item_id.
+  itemType: StockItemType
+  // Título completo já formatado pelo chamador ("Histórico do acessório" /
+  // "Histórico da embalagem") — o componente nunca deriva artigo/gênero.
+  title: string
+  item: StockHistoryItem | null
   onClose: () => void
 }
 
@@ -32,11 +38,17 @@ function SummaryField({ label, value }: { label: string; value: string }) {
   )
 }
 
-// Montado só enquanto `item` existe (key={item.id} no wrapper) — useStockMovements
-// nunca é chamado com um id vazio/trocado sob o mesmo componente, então os
-// históricos de acessórios diferentes nunca se misturam.
-function AccessoryHistoryContent({ item }: { item: AccessoryHistoryItem }) {
-  const { movements, isLoading, loadError, refetch } = useStockMovements('ACCESSORY', item.id)
+// Montado só enquanto `item` existe (key={item.id} no wrapper) —
+// useStockMovements nunca é chamado com um id vazio/trocado sob o mesmo
+// componente, então os históricos de itens diferentes nunca se misturam.
+function StockItemHistoryContent({
+  itemType,
+  item,
+}: {
+  itemType: StockItemType
+  item: StockHistoryItem
+}) {
+  const { movements, isLoading, loadError, refetch } = useStockMovements(itemType, item.id)
   const level = getStockLevel(item.current_stock, item.minimum_stock)
 
   return (
@@ -67,14 +79,14 @@ function AccessoryHistoryContent({ item }: { item: AccessoryHistoryItem }) {
   )
 }
 
-// Janela EXCLUSIVAMENTE de consulta (2026-09-06) — substitui, só em
-// Acessórios, o antigo "Movimentar estoque" (que trazia o formulário de
-// movimentação). Nenhum formulário aqui: só o resumo (Disponível / Estoque
-// mínimo / Situação) e o histórico do acessório selecionado. Reaproveita a
-// MESMA consulta (useStockMovements/listStockMovements, filtrada por
-// item_type+item_id) e o MESMO componente de exibição (StockMovementHistory,
-// em modo `responsive` — sem rolagem horizontal, cards em tela estreita).
-export function AccessoryHistoryDialog({ item, onClose }: AccessoryHistoryDialogProps) {
+// Janela EXCLUSIVAMENTE de consulta (2026-09-06) — usada por Acessórios e
+// Embalagens (itemType). Nenhum formulário de movimentação: só o resumo
+// (Disponível / Estoque mínimo / Situação) e o histórico do item
+// selecionado. Reaproveita a MESMA consulta (useStockMovements/
+// listStockMovements, filtrada por item_type+item_id) e o MESMO componente
+// de exibição (StockMovementHistory, em modo `responsive` — sem rolagem
+// horizontal, cards em tela estreita).
+export function StockItemHistoryDialog({ itemType, title, item, onClose }: StockItemHistoryDialogProps) {
   return (
     <Dialog
       open={item !== null}
@@ -84,10 +96,10 @@ export function AccessoryHistoryDialog({ item, onClose }: AccessoryHistoryDialog
     >
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Histórico do acessório</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{item?.name}</DialogDescription>
         </DialogHeader>
-        {item && <AccessoryHistoryContent key={item.id} item={item} />}
+        {item && <StockItemHistoryContent key={item.id} itemType={itemType} item={item} />}
         <DialogFooter>
           <Button
             type="button"

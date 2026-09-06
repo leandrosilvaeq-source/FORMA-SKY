@@ -2,6 +2,9 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { StockMovementForm, type StockMovementFormValues } from './StockMovementForm'
 import { StockMovementHistory } from './StockMovementHistory'
+// StockLevel/getStockLevel/StockLevelBadge foram extraídos para ./stockLevel
+// (2026-09-06) — importe-os DE LÁ. Este painel só os consome internamente.
+import { getStockLevel, StockLevelBadge } from './stockLevel'
 import { useStockMovements } from '@/hooks/useStockMovements'
 import { ApiError } from '@/lib/api/errors'
 import type { StockItemType } from '@/types/domain'
@@ -17,43 +20,6 @@ function Field({ label, value }: { label: string; value: string }) {
       <p className="text-muted-foreground text-xs">{label}</p>
       <p className="text-sm font-medium">{value}</p>
     </div>
-  )
-}
-
-export type StockLevel = 'empty' | 'low' | 'normal'
-
-// Estoque baixo somente quando minimum_stock > 0 E current_stock <=
-// minimum_stock (requisito explícito do pedido) — minimum_stock null ou 0
-// nunca produz "baixo" (0/null significa "sem limiar definido", não
-// "qualquer saldo conta como baixo"). Saldo zero é sempre "sem estoque",
-// independente de minimum_stock.
-export function getStockLevel(currentStock: number, minimumStock: number | null): StockLevel {
-  if (currentStock <= 0) return 'empty'
-  if (minimumStock !== null && minimumStock > 0 && currentStock <= minimumStock) return 'low'
-  return 'normal'
-}
-
-const STOCK_LEVEL_LABELS: Record<StockLevel, string> = {
-  empty: 'Sem estoque',
-  low: 'Estoque baixo',
-  normal: 'Estoque normal',
-}
-
-// "Destacar discretamente" (requisito do pedido) — badges pequenos, texto
-// sempre presente (nunca só cor, para não depender de percepção de cor).
-const STOCK_LEVEL_CLASSNAMES: Record<StockLevel, string> = {
-  empty: 'border-destructive/40 bg-destructive/10 text-destructive',
-  low: 'border-amber-300 bg-amber-50 text-amber-800',
-  normal: 'border-input text-muted-foreground',
-}
-
-export function StockLevelBadge({ level }: { level: StockLevel }) {
-  return (
-    <span
-      className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${STOCK_LEVEL_CLASSNAMES[level]}`}
-    >
-      {STOCK_LEVEL_LABELS[level]}
-    </span>
   )
 }
 

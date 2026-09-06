@@ -5,16 +5,13 @@ import { ResizableTableHead } from '@/components/dataTable/ResizableTableHead'
 import { RestoreColumnWidthsButton } from '@/components/dataTable/RestoreColumnWidthsButton'
 import { SortableColumnHeader } from '@/components/dataTable/SortableColumnHeader'
 import { sortByColumn, type SortState } from '@/components/dataTable/sorting'
-import {
-  TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
-  TABLE_COMPACT_TEXT_CLASSNAME,
-} from '@/components/dataTable/tableTypography'
+import { TABLE_COMPACT_TEXT_CLASSNAME } from '@/components/dataTable/tableTypography'
 import { SearchAutocomplete } from '@/components/search/SearchAutocomplete'
 import { InventoryItemForm, type InventoryItemFormValues } from '@/components/inventory/InventoryItemForm'
 import { InventoryPageShell, type InventoryArea } from '@/components/inventory/InventoryPageShell'
-import { StockMovementPanel, StockLevelBadge, getStockLevel } from '@/components/inventory/StockMovementPanel'
-import { AccessoryStockAdjustDialog } from '@/components/inventory/AccessoryStockAdjustDialog'
-import { AccessoryHistoryDialog } from '@/components/inventory/AccessoryHistoryDialog'
+import { StockLevelBadge, getStockLevel } from '@/components/inventory/stockLevel'
+import { StockItemAdjustDialog } from '@/components/inventory/StockItemAdjustDialog'
+import { StockItemHistoryDialog } from '@/components/inventory/StockItemHistoryDialog'
 import { EntityImageUploadField } from '@/components/inventory/EntityImageUploadField'
 import { EntityImagePreviewDialog } from '@/components/inventory/EntityImagePreviewDialog'
 import { Button } from '@/components/ui/button'
@@ -26,13 +23,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table'
 import { useAccessories } from '@/hooks/useAccessories'
 import { useAuth } from '@/context/AuthContext'
 import { usePackaging } from '@/hooks/usePackaging'
 import { usePersistentColumnWidths } from '@/hooks/usePersistentColumnWidths'
 import { useEntityImageThumbnails } from '@/hooks/useEntityImageThumbnails'
+import { getAccessoryCurrentStock } from '@/lib/api/accessories'
+import { getPackagingCurrentStock } from '@/lib/api/packaging'
 import { purgeEntityImages, removeEntityImage, uploadEntityImage } from '@/lib/api/entityImages'
 import type { ProcessedEntityImage } from '@/lib/images/processEntityImage'
 import { ApiError } from '@/lib/api/errors'
@@ -40,34 +38,17 @@ import { normalizeForSearch } from '@/lib/forms/textSearch'
 import type { ColumnWidthSpec } from '@/lib/tables/columnWidths'
 import { cn } from '@/lib/utils'
 
-// tableId varia por área (inventory-accessories/inventory-packaging) —
-// InventoryAreaPanel é a MESMA instância de componente usada pelas duas
-// sub-rotas, então a largura persistida nunca pode ser compartilhada entre
-// Acessórios e Embalagens; cada wrapper (AccessoriesInventoryPage/
-// PackagingInventoryPage) passa seu próprio tableId.
-// minWidth de "actions" (300px) garante que "Editar" + "Movimentar
-// estoque" + "Excluir" nunca quebrem em 2 linhas mesmo no menor arraste
-// possível — mesmo raciocínio já aplicado à coluna Ações de Pedidos.
-const INVENTORY_COLUMN_SPECS: ColumnWidthSpec[] = [
-  { id: 'name', defaultWidth: 175, minWidth: 100, maxWidth: 400 },
-  { id: 'size', defaultWidth: 95, minWidth: 75, maxWidth: 180 },
-  { id: 'variant', defaultWidth: 140, minWidth: 90, maxWidth: 320 },
-  { id: 'unit_cost', defaultWidth: 115, minWidth: 85, maxWidth: 220 },
-  { id: 'minimum_stock', defaultWidth: 115, minWidth: 85, maxWidth: 220 },
-  { id: 'current_stock', defaultWidth: 150, minWidth: 100, maxWidth: 280 },
-  { id: 'is_active', defaultWidth: 90, minWidth: 75, maxWidth: 180 },
-  { id: 'actions', defaultWidth: 340, minWidth: 300, maxWidth: 500 },
-]
-
-// Acessórios (2026-09-06): ordem própria (Acessório · Tamanho · Variante ·
-// Estoque mínimo · Disponível · Custo unitário · Ações), SEM a coluna
-// "Ativo" (o Switch saiu — Ativar/Desativar vive no menu de três pontos) e
-// com "Ações" mais estreita (só "Ajuste" + 2 botões-ícone, nunca mais 3
-// botões de texto). Larguras persistidas continuam por id (tableId
-// 'inventory-accessories') — a largura antiga de 'is_active' é descartada
-// por normalizeColumnWidths, as demais são preservadas. Embalagens seguem
-// usando INVENTORY_COLUMN_SPECS acima, intactas.
-const ACCESSORY_COLUMN_SPECS: ColumnWidthSpec[] = [
+// Especificação ÚNICA de 7 colunas para Acessórios E Embalagens (2026-09-06 —
+// Embalagens passou a usar o mesmo padrão de Acessórios): Nome · Tamanho ·
+// Variante · Estoque mínimo · Disponível · Custo unitário · Ações. SEM a
+// coluna "Ativo" (Ativar/Desativar vive no menu de três pontos). Ações
+// compacta (2 botões-ícone + menu ⋯, nunca 3 botões de texto).
+// `tableId` ('inventory-accessories'/'inventory-packaging') mantém a largura
+// persistida SEPARADA por área — InventoryAreaPanel é a mesma instância de
+// componente nas duas sub-rotas. Uma largura antiga de 'is_active' gravada
+// por Embalagens é descartada por normalizeColumnWidths; as demais são
+// preservadas.
+const INVENTORY_ITEM_COLUMN_SPECS: ColumnWidthSpec[] = [
   { id: 'name', defaultWidth: 175, minWidth: 100, maxWidth: 400 },
   { id: 'size', defaultWidth: 95, minWidth: 75, maxWidth: 180 },
   { id: 'variant', defaultWidth: 140, minWidth: 90, maxWidth: 320 },
@@ -110,10 +91,10 @@ interface InventoryItem {
   // "Movimentar estoque" -> register_stock_movement).
   current_stock: number
   is_active: boolean
-  // Módulo 3 — infraestrutura de foto principal (2026-09-06). Só a listagem
-  // de Acessórios (variant 'accessory') exibe a miniatura; Embalagens não
-  // consome este campo. Caminho INTERNO do objeto (nunca uma URL) — a
-  // listagem resolve as URLs assinadas em lote (useEntityImageThumbnails).
+  // Módulo 3 — infraestrutura de foto principal. A listagem de Acessórios E
+  // de Embalagens (2026-09-06) exibe a miniatura ao lado do nome. Caminho
+  // INTERNO do objeto (nunca uma URL) — a listagem resolve as URLs assinadas
+  // em lote (useEntityImageThumbnails).
   image_path?: string | null
   image_thumb_path?: string | null
 }
@@ -135,18 +116,18 @@ function formatMinimumStock(value: number | null): string {
   return value !== null ? String(value) : '—'
 }
 
-// Miniatura da foto principal, ao lado do nome na listagem de Acessórios
-// (2026-09-06). Tamanho compacto e fixo (28px), nunca uma coluna própria.
-// Estados: sem foto -> placeholder neutro; com foto mas URL ainda
-// carregando em lote -> skeleton; com foto e URL -> a imagem; com foto mas
-// a assinatura falhou (URL null e já não carrega) -> placeholder (a
+// Miniatura da foto principal, ao lado do nome na listagem de Acessórios E
+// de Embalagens (2026-09-06). Tamanho compacto e fixo (28px), nunca uma
+// coluna própria. Estados: sem foto -> placeholder neutro; com foto mas URL
+// ainda carregando em lote -> skeleton; com foto e URL -> a imagem; com foto
+// mas a assinatura falhou (URL null e já não carrega) -> placeholder (a
 // listagem nunca quebra por causa da foto).
 //
 // Quando há foto E `onZoom` é fornecido, a miniatura vira um <button> que
 // abre o pop-up de foto ampliada (EntityImagePreviewDialog). O placeholder
 // (sem foto) e os estados de carregamento/erro NUNCA são clicáveis. O clique
 // para a propagação para não disparar nenhuma ação da linha.
-function AccessoryRowThumbnail({
+function InventoryRowThumbnail({
   name,
   thumbPath,
   url,
@@ -260,55 +241,10 @@ function matchesInventorySearch(item: InventoryItem, normalizedTerm: string): bo
   )
 }
 
-type StatusFilterValue = 'all' | 'active' | 'inactive'
-
-const STATUS_FILTER_OPTIONS: Array<{ value: StatusFilterValue; label: string }> = [
-  { value: 'all', label: 'Todos' },
-  { value: 'active', label: 'Ativos' },
-  { value: 'inactive', label: 'Inativos' },
-]
-
-function matchesStatusFilter(item: InventoryItem, filter: StatusFilterValue): boolean {
-  if (filter === 'all') return true
-  return filter === 'active' ? item.is_active : !item.is_active
-}
-
-// Mesmo idioma de radiogroup-com-botões já aprovado em ProductForm.tsx
-// ("Tipo do produto"/"Categoria") — reaproveitado aqui em vez de inventar
-// um componente de filtro novo. Botões nativos: focáveis e ativáveis por
-// teclado (Tab + Enter/Espaço) sem necessidade de roving tabindex, mesmo
-// padrão já em produção.
-function StatusFilter({
-  value,
-  onChange,
-  ariaLabel,
-}: {
-  value: StatusFilterValue
-  onChange: (next: StatusFilterValue) => void
-  ariaLabel: string
-}) {
-  return (
-    <div role="radiogroup" aria-label={ariaLabel} className="flex flex-wrap gap-2">
-      {STATUS_FILTER_OPTIONS.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          role="radio"
-          aria-checked={value === option.value}
-          onClick={() => onChange(option.value)}
-          className={cn(
-            'focus-visible:ring-brand-accent rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2',
-            value === option.value
-              ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
-              : 'border-input text-muted-foreground hover:bg-muted hover:text-foreground',
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  )
-}
+// 2026-09-06: o filtro visual Todos/Ativos/Inativos foi removido das DUAS
+// áreas (Acessórios já não tinha; Embalagens deixou de ter). A listagem
+// sempre mostra ativos E inativos; a distinção fica no menu de três pontos
+// (Ativar/Desativar) e no próprio estilo da linha.
 
 interface InventoryAreaPanelProps {
   // Distingue a largura persistida de Acessórios da de Embalagens — mesmo
@@ -334,39 +270,24 @@ interface InventoryAreaPanelProps {
   searchAriaLabel: string
   listboxId: string
   listboxAriaLabel: string
-  // Acessórios (2026-09-06) removeu o filtro visual Todos/Ativos/Inativos —
-  // Embalagens continua com ele. Quando `showStatusFilter` é false o
-  // <StatusFilter> não é renderizado e a listagem mostra sempre todos os
-  // itens (statusFilter permanece 'all', nunca deixa de exibir inativos).
-  // Default true (Embalagens). `statusFilterAriaLabel` só é lido quando o
-  // filtro é exibido.
-  showStatusFilter?: boolean
-  statusFilterAriaLabel?: string
-  // Rótulos das colunas que Acessórios renomeia: "Nome" -> "Acessório",
-  // "Custo" -> "Custo unitário", "Saldo atual" -> "Disponível". Embalagens
-  // mantém os padrões. NUNCA muda a chave de ordenação
+  // Rótulos das colunas que cada área nomeia à sua maneira:
+  //   Nome -> "Acessório"/"Embalagem"; Custo -> "Custo unitário";
+  //   Saldo atual -> "Disponível". NUNCA muda a chave de ordenação
   // (column="name"/"unit_cost"/"current_stock") nem nada no banco/API — só o
   // texto do cabeçalho.
   nameColumnLabel?: string
   costColumnLabel?: string
   currentStockColumnLabel?: string
-  // 'accessory' (2026-09-06): ordem de colunas própria, SEM a coluna
-  // "Ativo", e coluna "Ações" compacta ("Ajuste" + Histórico só-ícone +
-  // menu de três pontos com Editar / Ativar-Desativar / Excluir). 'default'
-  // (Embalagens) permanece exatamente como antes: 7 colunas + coluna
-  // "Ativo" (Switch) + 3 botões de texto (Editar / Movimentar estoque /
-  // Excluir).
-  variant?: 'default' | 'accessory'
   createButtonLabel: string
   onOpenCreateDialog: () => void
   onEditItem: (item: InventoryItem) => void
-  // Usado para montar o nome acessível do Switch ("Ativar acessório Nome"/
-  // "Desativar embalagem Nome") — cada área passa o substantivo no singular
-  // que a identifica.
+  // Usado para montar o nome acessível do gatilho do menu de três pontos
+  // ("Mais ações — acessório Nome" / "— embalagem Nome") — cada área passa o
+  // substantivo no singular que a identifica.
   itemNounSingular: string
   onToggleActive: (item: InventoryItem) => void
-  // Só o item com a mutation em andamento fica com o Switch desabilitado —
-  // nunca a listagem inteira (mesmo padrão já aprovado em
+  // Só o item com a mutation em andamento fica com o item "Desativar/Ativar"
+  // desabilitado — nunca a listagem inteira (mesmo padrão já aprovado em
   // CompaniesPage.tsx: pendingToggleId).
   pendingToggleId: string | null
   // Abre o diálogo de confirmação — nunca chama a API diretamente a partir
@@ -374,33 +295,26 @@ interface InventoryAreaPanelProps {
   // definitivamente" no diálogo (ver AccessoriesInventoryPage/
   // PackagingInventoryPage).
   onDeleteItem: (item: InventoryItem) => void
-  // Abre o painel de movimentação de estoque (Embalagens) — um único botão
-  // por linha, nunca uma ação direta na tabela. Opcional: a variante
-  // 'accessory' não usa ("Movimentar estoque" foi substituído por "Ajuste"
-  // + "Histórico").
-  onManageStock?: (item: InventoryItem) => void
-  // Variante 'accessory' (2026-09-06): abre a janela de ajuste por
-  // quantidade absoluta / a janela dedicada de histórico.
-  onAdjustStock?: (item: InventoryItem) => void
-  onOpenHistory?: (item: InventoryItem) => void
-  // Variante 'accessory' (2026-09-06): mapa image_thumb_path -> URL assinada
-  // já resolvido em lote pelo pai (useEntityImageThumbnails). A célula do
-  // nome exibe a miniatura; enquanto `thumbnailsLoading` é true e o item tem
-  // foto, mostra um placeholder de carregamento. Embalagens não passa nada.
+  // Abre a janela de ajuste por quantidade absoluta / a janela dedicada de
+  // histórico (StockItemAdjustDialog / StockItemHistoryDialog).
+  onAdjustStock: (item: InventoryItem) => void
+  onOpenHistory: (item: InventoryItem) => void
+  // Mapa image_thumb_path -> URL assinada já resolvido em lote pelo pai
+  // (useEntityImageThumbnails). A célula do nome exibe a miniatura; enquanto
+  // `thumbnailsLoading` é true e o item tem foto, mostra um placeholder de
+  // carregamento.
   thumbnailUrls?: Record<string, string | null>
   thumbnailsLoading?: boolean
-  // Variante 'accessory' (2026-09-06): clicar na miniatura de um acessório
-  // que tem foto abre o pop-up de foto ampliada. Só é chamado para itens com
-  // `image_path`; o placeholder (sem foto) nunca dispara.
-  onPreviewImage?: (item: InventoryItem) => void
+  // Clicar na miniatura de um item que tem foto abre o pop-up de foto
+  // ampliada. Só é chamado para itens com `image_path`; o placeholder (sem
+  // foto) nunca dispara.
+  onPreviewImage: (item: InventoryItem) => void
 }
 
-// Painel completo de uma área (busca + filtro + ordenação + tabela +
-// estados) — usado tanto por Acessórios quanto por Embalagens, nunca
-// duplicado entre as duas. Cada instância deste componente tem seu próprio
-// estado local (searchTerm/statusFilter/sort), então Acessórios e
-// Embalagens nunca compartilham busca/filtro/ordenação entre si — são
-// montados em sub-rotas diferentes, nunca ao mesmo tempo.
+// Painel completo de uma área (busca + ordenação + tabela + estados) — usado
+// tanto por Acessórios quanto por Embalagens, com layout IDÊNTICO
+// (2026-09-06). Cada instância tem seu próprio estado local
+// (searchTerm/sort), montadas em sub-rotas diferentes, nunca ao mesmo tempo.
 function InventoryAreaPanel({
   tableId,
   items,
@@ -414,12 +328,9 @@ function InventoryAreaPanel({
   searchAriaLabel,
   listboxId,
   listboxAriaLabel,
-  showStatusFilter = true,
-  statusFilterAriaLabel,
   nameColumnLabel = 'Nome',
   costColumnLabel = 'Custo',
   currentStockColumnLabel = 'Saldo atual',
-  variant = 'default',
   createButtonLabel,
   onOpenCreateDialog,
   onEditItem,
@@ -427,25 +338,20 @@ function InventoryAreaPanel({
   onToggleActive,
   pendingToggleId,
   onDeleteItem,
-  onManageStock,
   onAdjustStock,
   onOpenHistory,
   thumbnailUrls,
   thumbnailsLoading = false,
   onPreviewImage,
 }: InventoryAreaPanelProps) {
-  const isAccessoryVariant = variant === 'accessory'
   const [searchTerm, setSearchTerm] = useState('')
-  const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all')
   const [sort, setSort] = useState<SortState<InventorySortColumn> | null>(null)
   const { session } = useAuth()
   const userId = session?.user.id ?? null
-  const columnSpecs = isAccessoryVariant ? ACCESSORY_COLUMN_SPECS : INVENTORY_COLUMN_SPECS
-  const columnWidths = usePersistentColumnWidths(tableId, userId, columnSpecs)
+  const columnWidths = usePersistentColumnWidths(tableId, userId, INVENTORY_ITEM_COLUMN_SPECS)
 
   // Cabeçalho ordenável reutilizável — evita repetir o bloco `resize={{…}}`
-  // por coluna, e mantém as duas variantes (default/accessory) montando a
-  // mesma peça, só em ordem diferente.
+  // por coluna.
   const sortableHeader = (column: InventorySortColumn, label: string) => (
     <SortableColumnHeader
       column={column}
@@ -461,14 +367,12 @@ function InventoryAreaPanel({
     />
   )
 
-  // Busca e filtro combinados: primeiro busca, depois filtro de status —
-  // ordem não importa matematicamente (é um AND lógico), mas mantém a
-  // mesma sequência já usada nas demais listagens (busca → filtro →
-  // ordenação).
+  // Só busca (nome/tamanho/variante) — o filtro Todos/Ativos/Inativos foi
+  // removido (2026-09-06); a listagem sempre mostra ativos E inativos.
   const filteredItems = useMemo(() => {
     const term = normalizeForSearch(searchTerm)
-    return items.filter((item) => matchesInventorySearch(item, term)).filter((item) => matchesStatusFilter(item, statusFilter))
-  }, [items, searchTerm, statusFilter])
+    return items.filter((item) => matchesInventorySearch(item, term))
+  }, [items, searchTerm])
 
   // Nunca muta `items` (o array vindo do hook) — sortByColumn sempre
   // retorna uma cópia nova.
@@ -500,28 +404,19 @@ function InventoryAreaPanel({
       )}
 
       <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <SearchAutocomplete
-            className="max-w-xs"
-            value={searchTerm}
-            onValueChange={setSearchTerm}
-            suggestions={suggestions}
-            onSelect={setSearchTerm}
-            ariaLabel={searchAriaLabel}
-            placeholder={searchPlaceholder}
-            clearLabel="Limpar busca"
-            listboxId={listboxId}
-            listboxAriaLabel={listboxAriaLabel}
-            noResultsText={searchNoSuggestionsText}
-          />
-          {showStatusFilter && statusFilterAriaLabel && (
-            <StatusFilter
-              value={statusFilter}
-              onChange={setStatusFilter}
-              ariaLabel={statusFilterAriaLabel}
-            />
-          )}
-        </div>
+        <SearchAutocomplete
+          className="max-w-xs"
+          value={searchTerm}
+          onValueChange={setSearchTerm}
+          suggestions={suggestions}
+          onSelect={setSearchTerm}
+          ariaLabel={searchAriaLabel}
+          placeholder={searchPlaceholder}
+          clearLabel="Limpar busca"
+          listboxId={listboxId}
+          listboxAriaLabel={listboxAriaLabel}
+          noResultsText={searchNoSuggestionsText}
+        />
         <Button
           onClick={onOpenCreateDialog}
           className="bg-brand-primary text-brand-primary-foreground hover:bg-brand-primary-dark shrink-0"
@@ -530,29 +425,16 @@ function InventoryAreaPanel({
         </Button>
       </div>
 
-      {/* Contador de resultados + "Limpar filtros": só aparece quando há
-          algo para contar/limpar — nunca junto do estado de carregamento
-          nem quando o cadastro mestre está completamente vazio (o texto
-          "Nenhum X cadastrado." já comunica isso sozinho, sem precisar de
-          um "0 resultados" redundante ao lado). "Limpar filtros" só reseta
-          o filtro de Status (statusFilter) — a busca já tem seu próprio
-          controle dedicado ("Limpar busca", built-in no SearchAutocomplete
-          acima), então os dois nunca se sobrepõem. */}
+      {/* Contador de resultados: só aparece quando há algo para contar —
+          nunca junto do estado de carregamento nem quando o cadastro mestre
+          está completamente vazio (o texto "Nenhum X cadastrado." já
+          comunica isso sozinho). A busca tem seu próprio controle
+          ("Limpar busca", built-in no SearchAutocomplete acima). */}
       {!isLoading && items.length > 0 && (
-        <div className="mt-2 flex items-center justify-between gap-3">
+        <div className="mt-2">
           <p className="text-muted-foreground text-sm" aria-live="polite">
             {sortedItems.length} {sortedItems.length === 1 ? 'resultado' : 'resultados'}
           </p>
-          {statusFilter !== 'all' && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setStatusFilter('all')}
-              className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-            >
-              Limpar filtros
-            </Button>
-          )}
         </div>
       )}
 
@@ -586,32 +468,18 @@ function InventoryAreaPanel({
               style={{ minWidth: columnWidths.totalWidthPx }}
             >
               <colgroup>
-                {columnSpecs.map((spec) => (
+                {INVENTORY_ITEM_COLUMN_SPECS.map((spec) => (
                   <col key={spec.id} style={{ width: columnWidths.getWidth(spec.id) }} />
                 ))}
               </colgroup>
               <TableHeader>
                 <TableRow>
-                  {isAccessoryVariant ? (
-                    <>
-                      {sortableHeader('name', nameColumnLabel)}
-                      {sortableHeader('size', 'Tamanho')}
-                      {sortableHeader('variant', 'Variante')}
-                      {sortableHeader('minimum_stock', 'Estoque mínimo')}
-                      {sortableHeader('current_stock', currentStockColumnLabel)}
-                      {sortableHeader('unit_cost', costColumnLabel)}
-                    </>
-                  ) : (
-                    <>
-                      {sortableHeader('name', nameColumnLabel)}
-                      {sortableHeader('size', 'Tamanho')}
-                      {sortableHeader('variant', 'Variante')}
-                      {sortableHeader('unit_cost', costColumnLabel)}
-                      {sortableHeader('minimum_stock', 'Estoque mínimo')}
-                      {sortableHeader('current_stock', currentStockColumnLabel)}
-                      {sortableHeader('is_active', 'Ativo')}
-                    </>
-                  )}
+                  {sortableHeader('name', nameColumnLabel)}
+                  {sortableHeader('size', 'Tamanho')}
+                  {sortableHeader('variant', 'Variante')}
+                  {sortableHeader('minimum_stock', 'Estoque mínimo')}
+                  {sortableHeader('current_stock', currentStockColumnLabel)}
+                  {sortableHeader('unit_cost', costColumnLabel)}
                   <ResizableTableHead
                     columnId="actions"
                     columnLabel="Ações"
@@ -622,11 +490,9 @@ function InventoryAreaPanel({
                       onKeyboardResize: columnWidths.adjustByKeyboard,
                     }}
                   >
-                    {/* Acessórios (2026-09-06): "Ações" VISÍVEL no cabeçalho
-                        (TableHead já é text-left, coerente com os botões da
-                        coluna). Embalagens continua sem texto visível (só o
-                        nome acessível pela alça), inalterada. */}
-                    {isAccessoryVariant ? 'Ações' : null}
+                    {/* "Ações" VISÍVEL no cabeçalho (TableHead já é text-left,
+                        coerente com os botões-ícone da coluna). */}
+                    Ações
                   </ResizableTableHead>
                 </TableRow>
               </TableHeader>
@@ -636,49 +502,6 @@ function InventoryAreaPanel({
                   const costText = formatCost(item.unit_cost)
                   const stockLevel = getStockLevel(item.current_stock, item.minimum_stock)
 
-                  const nameCell = isAccessoryVariant ? (
-                    <TableCell title={item.name}>
-                      <div className="flex items-center gap-2">
-                        <AccessoryRowThumbnail
-                          name={item.name}
-                          thumbPath={item.image_thumb_path}
-                          url={item.image_thumb_path ? thumbnailUrls?.[item.image_thumb_path] : null}
-                          loading={thumbnailsLoading}
-                          onZoom={item.image_path && onPreviewImage ? () => onPreviewImage(item) : undefined}
-                        />
-                        <span className="truncate">{item.name}</span>
-                      </div>
-                    </TableCell>
-                  ) : (
-                    <TableCell className="truncate" title={item.name}>
-                      {item.name}
-                    </TableCell>
-                  )
-                  const sizeCell = (
-                    <TableCell className="truncate" title={sizeText}>
-                      {sizeText}
-                    </TableCell>
-                  )
-                  const variantCell = (
-                    <TableCell className="truncate" title={item.variant ?? undefined}>
-                      {item.variant ?? '—'}
-                    </TableCell>
-                  )
-                  const costCell = (
-                    <TableCell className="truncate" title={costText}>
-                      {costText}
-                    </TableCell>
-                  )
-                  const minimumStockCell = <TableCell>{formatMinimumStock(item.minimum_stock)}</TableCell>
-                  const currentStockCell = (
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <span className="tabular-nums">{item.current_stock}</span>
-                        <StockLevelBadge level={stockLevel} />
-                      </div>
-                    </TableCell>
-                  )
-
                   return (
                     <TableRow
                       key={item.id}
@@ -686,144 +509,91 @@ function InventoryAreaPanel({
                       // em Clientes/Produtos/Empresas/Pedidos.
                       className="odd:bg-brand-primary-soft/50 even:bg-white hover:bg-brand-primary-soft"
                     >
-                      {isAccessoryVariant ? (
-                        <>
-                          {nameCell}
-                          {sizeCell}
-                          {variantCell}
-                          {minimumStockCell}
-                          {currentStockCell}
-                          {costCell}
-                          <TableCell>
-                            {/* "Ações" compacta de Acessórios (2026-09-06):
-                                três botões-ícone de mesmo tamanho/formato —
-                                "Ajustar quantidade" (SlidersHorizontal) +
-                                "Histórico" + menu de três pontos, nesta
-                                ordem. Nunca "Movimentar estoque"/"Gerenciar".
-                                flex-nowrap + shrink-0 impedem quebra em 2
-                                linhas. */}
-                            <div className="flex flex-nowrap items-center gap-1.5">
-                              <Button
-                                variant="outline"
-                                size="icon-sm"
-                                onClick={() => onAdjustStock?.(item)}
-                                aria-label="Ajustar quantidade"
-                                title="Ajustar quantidade"
-                                className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                      <TableCell title={item.name}>
+                        <div className="flex items-center gap-2">
+                          <InventoryRowThumbnail
+                            name={item.name}
+                            thumbPath={item.image_thumb_path}
+                            url={item.image_thumb_path ? thumbnailUrls?.[item.image_thumb_path] : null}
+                            loading={thumbnailsLoading}
+                            onZoom={item.image_path ? () => onPreviewImage(item) : undefined}
+                          />
+                          <span className="truncate">{item.name}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="truncate" title={sizeText}>
+                        {sizeText}
+                      </TableCell>
+                      <TableCell className="truncate" title={item.variant ?? undefined}>
+                        {item.variant ?? '—'}
+                      </TableCell>
+                      <TableCell>{formatMinimumStock(item.minimum_stock)}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <span className="tabular-nums">{item.current_stock}</span>
+                          <StockLevelBadge level={stockLevel} />
+                        </div>
+                      </TableCell>
+                      <TableCell className="truncate" title={costText}>
+                        {costText}
+                      </TableCell>
+                      <TableCell>
+                        {/* "Ações" compacta: dois botões-ícone
+                            ("Ajustar quantidade" + "Histórico") + menu de três
+                            pontos (Editar / Ativar-Desativar / Excluir).
+                            flex-nowrap + shrink-0 impedem quebra em 2 linhas. */}
+                        <div className="flex flex-nowrap items-center gap-1.5">
+                          <Button
+                            variant="outline"
+                            size="icon-sm"
+                            onClick={() => onAdjustStock(item)}
+                            aria-label="Ajustar quantidade"
+                            title="Ajustar quantidade"
+                            className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                          >
+                            <SlidersHorizontalIcon className="size-4" aria-hidden="true" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="icon-sm"
+                            onClick={() => onOpenHistory(item)}
+                            aria-label="Histórico"
+                            title="Histórico"
+                            className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                          >
+                            <HistoryIcon className="size-4" aria-hidden="true" />
+                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger
+                              aria-label={`Mais ações — ${itemNounSingular} ${item.name}`}
+                              render={
+                                <Button
+                                  variant="outline"
+                                  size="icon-sm"
+                                  className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0"
+                                />
+                              }
+                            >
+                              <EllipsisIcon className="size-4" aria-hidden="true" />
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent>
+                              <DropdownMenuItem onClick={() => onEditItem(item)}>Editar</DropdownMenuItem>
+                              <DropdownMenuItem
+                                disabled={pendingToggleId === item.id}
+                                onClick={() => onToggleActive(item)}
                               >
-                                <SlidersHorizontalIcon className="size-4" aria-hidden="true" />
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="icon-sm"
-                                onClick={() => onOpenHistory?.(item)}
-                                aria-label="Histórico"
-                                title="Histórico"
-                                className="shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-                              >
-                                <HistoryIcon className="size-4" aria-hidden="true" />
-                              </Button>
-                              <DropdownMenu>
-                                <DropdownMenuTrigger
-                                  aria-label={`Mais ações — ${itemNounSingular} ${item.name}`}
-                                  render={
-                                    <Button
-                                      variant="outline"
-                                      size="icon-sm"
-                                      className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark shrink-0"
-                                    />
-                                  }
-                                >
-                                  <EllipsisIcon className="size-4" aria-hidden="true" />
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent>
-                                  <DropdownMenuItem onClick={() => onEditItem(item)}>Editar</DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    disabled={pendingToggleId === item.id}
-                                    onClick={() => onToggleActive(item)}
-                                  >
-                                    {item.is_active ? 'Desativar' : 'Ativar'}
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    onClick={() => onDeleteItem(item)}
-                                    className="text-destructive data-highlighted:text-destructive"
-                                  >
-                                    Excluir
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </div>
-                          </TableCell>
-                        </>
-                      ) : (
-                        <>
-                          {nameCell}
-                          {sizeCell}
-                          {variantCell}
-                          {costCell}
-                          {minimumStockCell}
-                          {currentStockCell}
-                          <TableCell>
-                            <Switch
-                              checked={item.is_active}
-                              disabled={pendingToggleId === item.id}
-                              onCheckedChange={() => onToggleActive(item)}
-                              aria-label={`${item.is_active ? 'Desativar' : 'Ativar'} ${itemNounSingular} ${item.name}`}
-                              className="data-checked:bg-brand-primary focus-visible:ring-brand-accent/50"
-                            />
-                          </TableCell>
-                          <TableCell>
-                            {/* flex-nowrap + shrink-0 (mesmo padrão de
-                                OrdersPage.tsx/ProductsPage.tsx): a coluna Ações
-                                nunca deve quebrar os 3 botões em 2 linhas, mesmo
-                                no menor arraste possível — minWidth de "actions"
-                                (300px, ver INVENTORY_COLUMN_SPECS) garante espaço
-                                suficiente. */}
-                            <div className="flex flex-nowrap items-center gap-1.5">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => onEditItem(item)}
-                                className={cn(
-                                  'shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
-                                  TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
-                                )}
-                              >
-                                Editar
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => onManageStock?.(item)}
-                                aria-label={`Movimentar estoque — ${itemNounSingular} ${item.name}`}
-                                className={cn(
-                                  'shrink-0 border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark',
-                                  TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
-                                )}
-                              >
-                                Movimentar estoque
-                              </Button>
-                              {/* variant="destructive" é intencionalmente sutil
-                                  (bg-destructive/10, não um vermelho sólido) —
-                                  não compete visualmente com "Editar"
-                                  (brand-primary) nem com o botão primário "Novo
-                                  X" da barra acima. aria-label sobrepõe o texto
-                                  visível "Excluir" com o nome completo do item,
-                                  mesmo idioma já usado no aria-label do Switch
-                                  acima. */}
-                              <Button
-                                variant="destructive"
-                                size="sm"
+                                {item.is_active ? 'Desativar' : 'Ativar'}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
                                 onClick={() => onDeleteItem(item)}
-                                aria-label={`Excluir ${itemNounSingular} ${item.name}`}
-                                className={cn('shrink-0', TABLE_COMPACT_ACTION_TEXT_CLASSNAME)}
+                                className="text-destructive data-highlighted:text-destructive"
                               >
                                 Excluir
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </>
-                      )}
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </TableCell>
                     </TableRow>
                   )
                 })}
@@ -912,8 +682,9 @@ function AccessoriesInventoryPage() {
 
   // Ajuste por quantidade absoluta / Histórico (2026-09-06): dois diálogos
   // próprios, independentes dos demais — substituem o antigo "Movimentar
-  // estoque" (StockMovementPanel) só em Acessórios. Embalagens continua com
-  // o painel de movimentação completo.
+  // estoque" (StockMovementPanel). O mesmo par (StockItemAdjustDialog /
+  // StockItemHistoryDialog, itemType='ACCESSORY') é usado por Embalagens
+  // (itemType='PACKAGING').
   const [adjustingItem, setAdjustingItem] = useState<InventoryItem | null>(null)
   const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null)
 
@@ -1114,7 +885,6 @@ function AccessoriesInventoryPage() {
     >
       <InventoryAreaPanel
         tableId="inventory-accessories"
-        variant="accessory"
         items={accessories}
         isLoading={isLoading}
         error={error}
@@ -1126,7 +896,6 @@ function AccessoriesInventoryPage() {
         searchAriaLabel="Buscar acessórios"
         listboxId="inventory-accessories-search-listbox"
         listboxAriaLabel="Sugestões de acessório"
-        showStatusFilter={false}
         nameColumnLabel="Acessório"
         costColumnLabel="Custo unitário"
         currentStockColumnLabel="Disponível"
@@ -1295,7 +1064,9 @@ function AccessoriesInventoryPage() {
         </DialogContent>
       </Dialog>
 
-      <AccessoryStockAdjustDialog
+      <StockItemAdjustDialog
+        itemType="ACCESSORY"
+        fetchCurrentStock={getAccessoryCurrentStock}
         item={
           adjustingItem
             ? {
@@ -1309,7 +1080,9 @@ function AccessoriesInventoryPage() {
         onAdjusted={(accessoryId, newStock) => setLocalStock(accessoryId, newStock)}
       />
 
-      <AccessoryHistoryDialog
+      <StockItemHistoryDialog
+        itemType="ACCESSORY"
+        title="Histórico do acessório"
         item={
           historyItem
             ? {
@@ -1336,6 +1109,12 @@ function AccessoriesInventoryPage() {
   )
 }
 
+// Espelho de AccessoriesInventoryPage (2026-09-06 — Embalagens passou a usar
+// o mesmo padrão visual/funcional): listagem com miniatura + pop-up de foto,
+// menu de três pontos, Ajuste por quantidade absoluta e Histórico só de
+// consulta. A COMPRA de Embalagens continua no fluxo antigo (item único,
+// register_inventory_purchase, sem atualizar unit_cost) — intocada nesta
+// rodada.
 function PackagingInventoryPage() {
   const {
     packaging,
@@ -1346,15 +1125,33 @@ function PackagingInventoryPage() {
     update,
     delete: deletePackagingItem,
     setLocalStock,
+    setLocalImage,
   } = usePackaging()
+
+  // Miniaturas da listagem — URLs assinadas resolvidas EM LOTE (nunca uma
+  // requisição por linha). O diálogo de edição reaproveita este mesmo mapa
+  // para pré-visualizar a foto atual da embalagem sem uma chamada extra.
+  const packagingThumbnails = useEntityImageThumbnails(
+    packaging.map((item) => item.image_thumb_path),
+  )
+
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  // Foto escolhida na "Nova embalagem" — já processada (WebP + thumb), ainda
+  // NÃO enviada: a embalagem é criada primeiro; só depois, com o id
+  // retornado, a foto é enviada. Falha no envio nunca impede a criação.
+  const [createPhoto, setCreatePhoto] = useState<ProcessedEntityImage | null>(null)
 
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
+  // Alteração de foto na EDIÇÃO — nova foto processada (substituição) OU
+  // remoção explícita. Só abrir e cancelar não toca em nada; salvar sem
+  // mexer na foto preserva os caminhos atuais.
+  const [editPhoto, setEditPhoto] = useState<ProcessedEntityImage | null>(null)
+  const [editPhotoRemoved, setEditPhotoRemoved] = useState(false)
 
   const [togglingItem, setTogglingItem] = useState<InventoryItem | null>(null)
   const [isToggleDialogOpen, setIsToggleDialogOpen] = useState(false)
@@ -1367,20 +1164,44 @@ function PackagingInventoryPage() {
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  const [managingItem, setManagingItem] = useState<InventoryItem | null>(null)
-  const [isManageStockDialogOpen, setIsManageStockDialogOpen] = useState(false)
+  // Ajuste por quantidade absoluta / Histórico / foto ampliada — mesmos
+  // diálogos compartilhados de Acessórios (itemType='PACKAGING').
+  const [adjustingItem, setAdjustingItem] = useState<InventoryItem | null>(null)
+  const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null)
+  const [previewItem, setPreviewItem] = useState<InventoryItem | null>(null)
 
   function openCreateDialog() {
     setCreateError(null)
+    setCreatePhoto(null)
     setIsCreateDialogOpen(true)
   }
 
+  // Fluxo seguro da foto na CRIAÇÃO: (1) cria a embalagem; (2) só com o id
+  // retornado envia a foto e vincula; (3) falha no envio NÃO desfaz a
+  // criação — a embalagem fica cadastrada sem foto, com aviso claro.
   async function handleCreateSubmit(values: InventoryItemFormValues) {
     setIsSubmittingCreate(true)
     setCreateError(null)
     try {
-      await create(values)
-      toast.success('Embalagem cadastrada.')
+      const created = await create(values)
+
+      if (createPhoto) {
+        try {
+          const linked = await uploadEntityImage('packaging', created.id, {
+            original: createPhoto.original,
+            thumb: createPhoto.thumb,
+          })
+          setLocalImage(created.id, linked.image_path, linked.image_thumb_path)
+          toast.success('Embalagem cadastrada.')
+        } catch {
+          toast.error(
+            'A embalagem foi criada, mas a foto não pôde ser salva. Você pode adicioná-la pela edição.',
+          )
+        }
+      } else {
+        toast.success('Embalagem cadastrada.')
+      }
+
       setIsCreateDialogOpen(false)
     } catch (err) {
       const message = toErrorMessage(err)
@@ -1424,12 +1245,26 @@ function PackagingInventoryPage() {
     setIsDeleteDialogOpen(true)
   }
 
+  // delete_packaging (Edge Function -> RPC) bloqueia com 409 quando a
+  // embalagem está vinculada a um produto (PACKAGING_IN_USE:) OU tem
+  // histórico de estoque (PACKAGING_HAS_STOCK_HISTORY:) — mensagem exibida
+  // tal qual. Só DEPOIS de a exclusão ser confirmada, limpa a foto no bucket
+  // privado (best-effort). Se a exclusão for BLOQUEADA, o catch assume e o
+  // purge nunca é chamado — a foto é preservada.
   async function handleConfirmDelete() {
     if (!deletingItem) return
+    const target = deletingItem
     setIsDeleting(true)
     setDeleteError(null)
     try {
-      await deletePackagingItem(deletingItem.id)
+      await deletePackagingItem(target.id)
+
+      if (target.image_path) {
+        void purgeEntityImages('packaging', target.id).catch(() => {
+          /* limpeza física é best-effort — nunca desfaz a exclusão já concluída */
+        })
+      }
+
       toast.success('Embalagem excluída.')
       setIsDeleteDialogOpen(false)
     } catch (err) {
@@ -1442,6 +1277,8 @@ function PackagingInventoryPage() {
   function openEditDialog(item: InventoryItem) {
     setEditingItem(item)
     setEditError(null)
+    setEditPhoto(null)
+    setEditPhotoRemoved(false)
     setIsEditDialogOpen(true)
   }
 
@@ -1451,6 +1288,35 @@ function PackagingInventoryPage() {
     setEditError(null)
     try {
       await update(editingItem.id, values)
+
+      // Alteração de foto (se houver) é um passo SEPARADO, depois dos
+      // campos. Uma falha aqui nunca apaga a foto anterior nem reverte os
+      // campos já salvos — só avisa.
+      if (editPhoto) {
+        try {
+          const linked = await uploadEntityImage('packaging', editingItem.id, {
+            original: editPhoto.original,
+            thumb: editPhoto.thumb,
+          })
+          setLocalImage(editingItem.id, linked.image_path, linked.image_thumb_path)
+        } catch {
+          toast.error('Os dados foram salvos, mas a nova foto não pôde ser enviada. A foto anterior foi mantida.')
+          setIsSubmittingEdit(false)
+          setIsEditDialogOpen(false)
+          return
+        }
+      } else if (editPhotoRemoved && editingItem.image_path) {
+        try {
+          await removeEntityImage('packaging', editingItem.id)
+          setLocalImage(editingItem.id, null, null)
+        } catch {
+          toast.error('Os dados foram salvos, mas a foto não pôde ser removida. Tente novamente pela edição.')
+          setIsSubmittingEdit(false)
+          setIsEditDialogOpen(false)
+          return
+        }
+      }
+
       toast.success('Embalagem atualizada.')
       setIsEditDialogOpen(false)
     } catch (err) {
@@ -1463,11 +1329,6 @@ function PackagingInventoryPage() {
     } finally {
       setIsSubmittingEdit(false)
     }
-  }
-
-  function openManageStockDialog(item: InventoryItem) {
-    setManagingItem(item)
-    setIsManageStockDialogOpen(true)
   }
 
   return (
@@ -1490,7 +1351,9 @@ function PackagingInventoryPage() {
         searchAriaLabel="Buscar embalagens"
         listboxId="inventory-packaging-search-listbox"
         listboxAriaLabel="Sugestões de embalagem"
-        statusFilterAriaLabel="Filtrar embalagens por status"
+        nameColumnLabel="Embalagem"
+        costColumnLabel="Custo unitário"
+        currentStockColumnLabel="Disponível"
         createButtonLabel="Nova embalagem"
         onOpenCreateDialog={openCreateDialog}
         onEditItem={openEditDialog}
@@ -1498,7 +1361,11 @@ function PackagingInventoryPage() {
         onToggleActive={openToggleDialog}
         pendingToggleId={pendingToggleId}
         onDeleteItem={openDeleteDialog}
-        onManageStock={openManageStockDialog}
+        onAdjustStock={setAdjustingItem}
+        onOpenHistory={setHistoryItem}
+        onPreviewImage={setPreviewItem}
+        thumbnailUrls={packagingThumbnails.urls}
+        thumbnailsLoading={packagingThumbnails.isLoading}
       />
 
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
@@ -1507,6 +1374,16 @@ function PackagingInventoryPage() {
             <DialogTitle>Nova embalagem</DialogTitle>
             <DialogDescription>Preencha os dados para cadastrar uma nova embalagem.</DialogDescription>
           </DialogHeader>
+          {/* Seção "Foto de referência" — opcional. A imagem é processada
+              localmente aqui (WebP + thumb) e só enviada após a criação, com
+              o id retornado (ver handleCreateSubmit). */}
+          <EntityImageUploadField
+            idPrefix="packaging-create-photo"
+            isUploading={isSubmittingCreate && createPhoto !== null}
+            disabled={isSubmittingCreate}
+            onImageSelected={setCreatePhoto}
+            onImageRemoved={() => setCreatePhoto(null)}
+          />
           <InventoryItemForm
             idPrefix="packaging"
             isSubmitting={isSubmittingCreate}
@@ -1568,21 +1445,45 @@ function PackagingInventoryPage() {
             <DialogDescription>Atualize os dados da embalagem.</DialogDescription>
           </DialogHeader>
           {editingItem && (
-            <InventoryItemForm
-              key={editingItem.id}
-              idPrefix="packaging-edit"
-              mode="edit"
-              initialValues={{
-                name: editingItem.name,
-                size: editingItem.size,
-                variant: editingItem.variant,
-                minimum_stock: editingItem.minimum_stock,
-              }}
-              isSubmitting={isSubmittingEdit}
-              submitError={editError}
-              onSubmit={(values) => void handleEditSubmit(values)}
-              onCancel={() => setIsEditDialogOpen(false)}
-            />
+            <>
+              {/* Foto atual pré-visualizada pela URL já assinada em lote pela
+                  listagem (sem chamada extra). Substituir/remover só têm
+                  efeito ao salvar; só abrir e cancelar não altera nada. */}
+              <EntityImageUploadField
+                key={`${editingItem.id}-photo`}
+                idPrefix="packaging-edit-photo"
+                savedPreviewUrl={
+                  !editPhotoRemoved && editingItem.image_thumb_path
+                    ? (packagingThumbnails.urls[editingItem.image_thumb_path] ?? null)
+                    : null
+                }
+                isUploading={isSubmittingEdit && (editPhoto !== null || editPhotoRemoved)}
+                disabled={isSubmittingEdit}
+                onImageSelected={(processed) => {
+                  setEditPhoto(processed)
+                  setEditPhotoRemoved(false)
+                }}
+                onImageRemoved={() => {
+                  setEditPhoto(null)
+                  setEditPhotoRemoved(true)
+                }}
+              />
+              <InventoryItemForm
+                key={editingItem.id}
+                idPrefix="packaging-edit"
+                mode="edit"
+                initialValues={{
+                  name: editingItem.name,
+                  size: editingItem.size,
+                  variant: editingItem.variant,
+                  minimum_stock: editingItem.minimum_stock,
+                }}
+                isSubmitting={isSubmittingEdit}
+                submitError={editError}
+                onSubmit={(values) => void handleEditSubmit(values)}
+                onCancel={() => setIsEditDialogOpen(false)}
+              />
+            </>
           )}
         </DialogContent>
       </Dialog>
@@ -1618,29 +1519,47 @@ function PackagingInventoryPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isManageStockDialogOpen} onOpenChange={setIsManageStockDialogOpen}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Movimentar estoque</DialogTitle>
-            <DialogDescription>{managingItem?.name}</DialogDescription>
-          </DialogHeader>
-          {managingItem && (
-            <StockMovementPanel
-              key={managingItem.id}
-              itemType="PACKAGING"
-              itemId={managingItem.id}
-              itemName={managingItem.name}
-              itemCategoryLabel="Embalagem"
-              currentStock={managingItem.current_stock}
-              minimumStock={managingItem.minimum_stock}
-              isActive={managingItem.is_active}
-              onStockChanged={(newStock) => setLocalStock(managingItem.id, newStock)}
-              onSuccess={() => setIsManageStockDialogOpen(false)}
-              onClose={() => setIsManageStockDialogOpen(false)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      <StockItemAdjustDialog
+        itemType="PACKAGING"
+        fetchCurrentStock={getPackagingCurrentStock}
+        item={
+          adjustingItem
+            ? {
+                id: adjustingItem.id,
+                name: adjustingItem.name,
+                current_stock: adjustingItem.current_stock,
+              }
+            : null
+        }
+        onClose={() => setAdjustingItem(null)}
+        onAdjusted={(packagingId, newStock) => setLocalStock(packagingId, newStock)}
+      />
+
+      <StockItemHistoryDialog
+        itemType="PACKAGING"
+        title="Histórico da embalagem"
+        item={
+          historyItem
+            ? {
+                id: historyItem.id,
+                name: historyItem.name,
+                current_stock: historyItem.current_stock,
+                minimum_stock: historyItem.minimum_stock,
+              }
+            : null
+        }
+        onClose={() => setHistoryItem(null)}
+      />
+
+      <EntityImagePreviewDialog
+        open={previewItem !== null}
+        onOpenChange={(open) => {
+          if (!open) setPreviewItem(null)
+        }}
+        title={previewItem?.name ?? ''}
+        alt={previewItem ? `Foto de ${previewItem.name}` : ''}
+        imagePath={previewItem?.image_path ?? null}
+      />
     </InventoryPageShell>
   )
 }

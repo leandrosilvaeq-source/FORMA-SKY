@@ -1053,6 +1053,33 @@ componentes" — efeito esperado, nenhuma mudança de código na Ficha Técnica.
 automático; a compra de Embalagem segue pelo fluxo de item único de `register_inventory_purchase`,
 que não toca `unit_cost`.
 
+### Alinhamento da interface de Embalagens ao padrão de Acessórios (2026-09-06, somente frontend)
+
+Rodada **exclusivamente de frontend** — nenhuma migration, RPC, Edge Function, grant ou dado
+oficial foi alterado. A aba **Estoque → Embalagens** passou a usar a mesma interface já aprovada
+para **Acessórios**:
+
+- A coluna **`Ativo`** deixou de ser exibida na listagem (vale para as duas áreas). **`is_active`
+  continua existindo no banco, nos tipos e em todas as APIs** (`update_accessory`/`update_packaging`
+  seguem aceitando `is_active` na whitelist) — Ativar/Desativar passou para o menu de três pontos
+  da linha, com a mesma confirmação e atualização sem recarregar a página.
+- O filtro visual **Todos/Ativos/Inativos** foi removido de Embalagens; a listagem exibe registros
+  ativos **e** inativos ao mesmo tempo.
+- **`unit_cost` continua somente leitura** e exibindo **"Não informado"** quando `NULL` — nenhum
+  cálculo provisório foi introduzido para Embalagens; a coluna `Custo unitário` foi mantida.
+- **Foto de referência (opcional)** no cadastro e na edição de Embalagens, reutilizando **sem
+  qualquer mudança de backend** a infraestrutura compartilhada de imagens (`entity='packaging'`):
+  colunas `packaging.image_path`/`packaging.image_thumb_path` (migration `20260906120000`), RPC
+  `set_entity_image` (ramo `packaging`), grant de `SELECT` a `service_role` (migration
+  `20260906130000`) e Edge Function `entity-images` (já ACTIVE, suportando `entity='packaging'`
+  ponta a ponta). A listagem mostra uma miniatura de 28px ao lado do nome, com pop-up de imagem
+  ampliada; a exclusão dispara `purgeEntityImages('packaging', id)` como best-effort **somente
+  após** a exclusão do registro ser confirmada.
+- Ajuste de quantidade e Histórico de Embalagens usam os mesmos componentes de Acessórios
+  (`StockItemAdjustDialog`/`StockItemHistoryDialog`, parametrizados por `itemType`), sempre via
+  `register_stock_movement` (`POSITIVE_ADJUSTMENT`/`NEGATIVE_ADJUSTMENT`) — **nunca** `UPDATE`
+  direto em `packaging.current_stock` — e sem tocar `unit_cost`.
+
 ### Exclusão
 
 A interface tem um botão "Excluir" com confirmação explícita. Exclusão física só é permitida para

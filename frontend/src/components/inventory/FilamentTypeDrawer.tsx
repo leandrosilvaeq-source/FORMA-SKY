@@ -5,7 +5,7 @@ import { FilamentSpoolForm, type FilamentSpoolFormValues } from './FilamentSpool
 import { FilamentSpoolHistoryDialog } from './FilamentSpoolHistoryDialog'
 import { FilamentSpoolStatusControl } from './FilamentSpoolStatusControl'
 import { FilamentSpoolWeightAdjustDialog } from './FilamentSpoolWeightAdjustDialog'
-import { StockLevelBadge, getStockLevel } from './StockMovementPanel'
+import { StockLevelBadge, getStockLevel } from './stockLevel'
 import { UNSPECIFIED_MANUFACTURER } from './FilamentTypeForm'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'

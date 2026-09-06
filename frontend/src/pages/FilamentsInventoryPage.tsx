@@ -15,7 +15,7 @@ import {
   TABLE_COMPACT_ACTION_TEXT_CLASSNAME,
   TABLE_COMPACT_TEXT_CLASSNAME,
 } from '@/components/dataTable/tableTypography'
-import { getStockLevel, type StockLevel } from '@/components/inventory/StockMovementPanel'
+import { getStockLevel, type StockLevel } from '@/components/inventory/stockLevel'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {

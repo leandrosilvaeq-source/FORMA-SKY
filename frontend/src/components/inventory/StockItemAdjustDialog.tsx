@@ -13,15 +13,14 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useStockMovements } from '@/hooks/useStockMovements'
-import { getAccessoryCurrentStock } from '@/lib/api/accessories'
 import { ApiError } from '@/lib/api/errors'
 import { parseNumberField } from '@/lib/forms/numberField'
+import type { StockItemType } from '@/types/domain'
 
 // Motivo padrão quando o usuário não digita nada — register_stock_movement
 // exige `reason` não vazio para POSITIVE_ADJUSTMENT/NEGATIVE_ADJUSTMENT
 // (stock_movements_reason_required_by_type, migration 20260827090000).
-// Mesmo recurso já usado em FilamentSpoolWeightAdjustDialog (ADJUST_REASON):
-// a "observação opcional" da interface vira sempre um motivo real no ledger.
+// A "observação opcional" da interface vira sempre um motivo real no ledger.
 const DEFAULT_REASON = 'Ajuste de saldo por contagem'
 
 function toErrorMessage(err: unknown): string {
@@ -37,34 +36,44 @@ function todayIsoDate(): string {
   return `${year}-${month}-${day}`
 }
 
-export interface AccessoryStockAdjustItem {
+export interface StockAdjustItem {
   id: string
   name: string
   current_stock: number
 }
 
-export interface AccessoryStockAdjustDialogProps {
-  item: AccessoryStockAdjustItem | null
+export interface StockItemAdjustDialogProps {
+  // ACCESSORY ou PACKAGING — decide o item_type do stock_movement.
+  itemType: StockItemType
+  item: StockAdjustItem | null
+  // Releitura segura do saldo materializado do item logo antes de enviar
+  // (getAccessoryCurrentStock / getPackagingCurrentStock) — espelha a mesma
+  // leitura direta usada em cada área.
+  fetchCurrentStock: (id: string) => Promise<number>
   onClose: () => void
   // Recebe o id explicitamente (nunca lido de volta de um estado do chamador
   // que pode já ter sido limpo) — fechar antes da resposta voltar nunca
-  // perde a atualização nem aplica no acessório errado. `newStock` é sempre
-  // o `balance_after` real devolvido pelo backend.
-  onAdjusted: (accessoryId: string, newStock: number) => void
+  // perde a atualização nem aplica no item errado. `newStock` é sempre o
+  // `balance_after` real devolvido pelo backend.
+  onAdjusted: (itemId: string, newStock: number) => void
 }
 
 // Só montado enquanto `item` existe (key={item.id} no wrapper) — o hook
 // nunca é chamado com um id vazio/trocado sob o mesmo componente.
-function AccessoryStockAdjustForm({
+function StockItemAdjustForm({
+  itemType,
   item,
+  fetchCurrentStock,
   onClose,
   onAdjusted,
 }: {
-  item: AccessoryStockAdjustItem
+  itemType: StockItemType
+  item: StockAdjustItem
+  fetchCurrentStock: (id: string) => Promise<number>
   onClose: () => void
-  onAdjusted: AccessoryStockAdjustDialogProps['onAdjusted']
+  onAdjusted: StockItemAdjustDialogProps['onAdjusted']
 }) {
-  const { register } = useStockMovements('ACCESSORY', item.id)
+  const { register } = useStockMovements(itemType, item.id)
   const [newQuantity, setNewQuantity] = useState('')
   const [observation, setObservation] = useState('')
   const [fieldError, setFieldError] = useState<string | null>(null)
@@ -114,13 +123,13 @@ function AccessoryStockAdjustForm({
 
     setIsSubmitting(true)
     try {
-      // 1. Reconsulta o saldo mais recente do acessório (estreita a janela
-      //    de corrida com uma alteração concorrente de outro usuário). Se a
+      // 1. Reconsulta o saldo mais recente do item (estreita a janela de
+      //    corrida com uma alteração concorrente de outro usuário). Se a
       //    releitura falhar, cai no valor exibido — o backend ainda protege
       //    (FOR UPDATE + balance_after >= 0).
       let latest: number
       try {
-        latest = await getAccessoryCurrentStock(item.id)
+        latest = await fetchCurrentStock(item.id)
       } catch {
         latest = currentStock
       }
@@ -139,7 +148,7 @@ function AccessoryStockAdjustForm({
       const movementType = delta > 0 ? 'POSITIVE_ADJUSTMENT' : 'NEGATIVE_ADJUSTMENT'
       const reason = observation.trim() || DEFAULT_REASON
       const occurredAt = todayIsoDate()
-      const fingerprint = JSON.stringify([movementType, Math.abs(delta), reason, occurredAt, latest])
+      const fingerprint = JSON.stringify([itemType, movementType, Math.abs(delta), reason, occurredAt, latest])
 
       const created = await register({
         movement_type: movementType,
@@ -173,16 +182,16 @@ function AccessoryStockAdjustForm({
 
   return (
     <form className="flex flex-col gap-4" onSubmit={(event) => void handleSubmit(event)}>
-      {/* Nome do acessório em destaque, logo abaixo do título — aparece uma
-          ÚNICA vez (nunca também no título/descrição do diálogo). */}
+      {/* Nome do item em destaque, logo abaixo do título — aparece uma ÚNICA
+          vez (nunca também no título/descrição do diálogo). */}
       <p className="text-base font-semibold">{item.name}</p>
 
       <p className="text-muted-foreground text-sm tabular-nums">Quantidade atual: {currentStock}</p>
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="accessory-stock-adjust-new-quantity">Nova quantidade</Label>
+        <Label htmlFor="stock-item-adjust-new-quantity">Nova quantidade</Label>
         <Input
-          id="accessory-stock-adjust-new-quantity"
+          id="stock-item-adjust-new-quantity"
           inputMode="numeric"
           value={newQuantity}
           onChange={(event) => {
@@ -201,9 +210,9 @@ function AccessoryStockAdjustForm({
         {/* Rótulo "Observação"; segue sendo opcional (sem validação) — sem
             observação, o backend recebe o motivo padrão
             "Ajuste de saldo por contagem". */}
-        <Label htmlFor="accessory-stock-adjust-observation">Observação</Label>
+        <Label htmlFor="stock-item-adjust-observation">Observação</Label>
         <Textarea
-          id="accessory-stock-adjust-observation"
+          id="stock-item-adjust-observation"
           value={observation}
           onChange={(event) => setObservation(event.target.value)}
           disabled={isSubmitting}
@@ -239,13 +248,18 @@ function AccessoryStockAdjustForm({
   )
 }
 
-// Janela simples de ajuste por quantidade ABSOLUTA (2026-09-06) — substitui,
-// só em Acessórios, o antigo "Movimentar estoque" com o formulário genérico
-// de movimentação. O usuário informa a nova quantidade total; a diferença é
-// registrada pela mesma RPC register_stock_movement
+// Janela simples de ajuste por quantidade ABSOLUTA (2026-09-06) — usada por
+// Acessórios e Embalagens (itemType). O usuário informa a nova quantidade
+// total; a diferença é registrada pela mesma RPC register_stock_movement
 // (POSITIVE_ADJUSTMENT/NEGATIVE_ADJUSTMENT), nunca um UPDATE direto do saldo.
 // Não altera unit_cost.
-export function AccessoryStockAdjustDialog({ item, onClose, onAdjusted }: AccessoryStockAdjustDialogProps) {
+export function StockItemAdjustDialog({
+  itemType,
+  item,
+  fetchCurrentStock,
+  onClose,
+  onAdjusted,
+}: StockItemAdjustDialogProps) {
   return (
     <Dialog
       open={item !== null}
@@ -256,14 +270,21 @@ export function AccessoryStockAdjustDialog({ item, onClose, onAdjusted }: Access
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>Ajustar Quantidade</DialogTitle>
-          {/* Descrição só para leitores de tela — o nome do acessório NÃO
-              entra aqui (aparece uma única vez, em destaque, no corpo). */}
+          {/* Descrição só para leitores de tela — o nome do item NÃO entra
+              aqui (aparece uma única vez, em destaque, no corpo). */}
           <DialogDescription className="sr-only">
-            Informe a nova quantidade total do acessório.
+            Informe a nova quantidade total do item.
           </DialogDescription>
         </DialogHeader>
         {item && (
-          <AccessoryStockAdjustForm key={item.id} item={item} onClose={onClose} onAdjusted={onAdjusted} />
+          <StockItemAdjustForm
+            key={item.id}
+            itemType={itemType}
+            item={item}
+            fetchCurrentStock={fetchCurrentStock}
+            onClose={onClose}
+            onAdjusted={onAdjusted}
+          />
         )}
       </DialogContent>
     </Dialog>

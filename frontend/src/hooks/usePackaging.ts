@@ -22,6 +22,11 @@ interface UsePackagingResult {
   // Mesmo raciocínio de useAccessories.setLocalStock: atualização local pura
   // (sem chamada de rede) depois de uma movimentação de estoque bem-sucedida.
   setLocalStock: (id: string, currentStock: number) => void
+  // Atualização local pura (sem rede) do par de caminhos da foto principal —
+  // usada depois de um upload/remoção bem-sucedido pela Edge Function
+  // `entity-images` (entity=packaging), para a listagem refletir a miniatura
+  // sem F5. `null`/`null` = foto removida. Espelha useAccessories.setLocalImage.
+  setLocalImage: (id: string, imagePath: string | null, imageThumbPath: string | null) => void
 }
 
 function toApiError(err: unknown): ApiError {
@@ -98,5 +103,26 @@ export function usePackaging(): UsePackagingResult {
     )
   }, [])
 
-  return { packaging, isLoading, error, refetch, create, update, delete: deleteItem, setLocalStock }
+  const setLocalImage = useCallback(
+    (id: string, imagePath: string | null, imageThumbPath: string | null) => {
+      setPackaging((current) =>
+        current.map((item) =>
+          item.id === id ? { ...item, image_path: imagePath, image_thumb_path: imageThumbPath } : item,
+        ),
+      )
+    },
+    [],
+  )
+
+  return {
+    packaging,
+    isLoading,
+    error,
+    refetch,
+    create,
+    update,
+    delete: deleteItem,
+    setLocalStock,
+    setLocalImage,
+  }
 }

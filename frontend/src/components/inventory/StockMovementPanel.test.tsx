@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { StockMovementPanel, getStockLevel } from './StockMovementPanel'
+import { StockMovementPanel } from './StockMovementPanel'
+import { getStockLevel } from './stockLevel'
 import { ApiError } from '@/lib/api/errors'
 import type { StockMovement } from '@/types/domain'
 

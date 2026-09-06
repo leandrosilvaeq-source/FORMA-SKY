@@ -12,6 +12,7 @@ const {
   useAuthMock,
   toastMock,
   getAccessoryCurrentStockMock,
+  getPackagingCurrentStockMock,
   uploadEntityImageMock,
   removeEntityImageMock,
   signEntityImageUrlsMock,
@@ -23,6 +24,7 @@ const {
   useAuthMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
   getAccessoryCurrentStockMock: vi.fn(),
+  getPackagingCurrentStockMock: vi.fn(),
   uploadEntityImageMock: vi.fn(),
   removeEntityImageMock: vi.fn(),
   signEntityImageUrlsMock: vi.fn(),
@@ -52,6 +54,12 @@ vi.mock('@/hooks/usePackaging', () => ({ usePackaging: usePackagingMock }))
 vi.mock('@/lib/api/accessories', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api/accessories')>()
   return { ...actual, getAccessoryCurrentStock: getAccessoryCurrentStockMock }
+})
+// getPackagingCurrentStock — releitura pré-envio do ajuste por quantidade
+// absoluta em Embalagens (StockItemAdjustDialog, itemType='PACKAGING').
+vi.mock('@/lib/api/packaging', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/packaging')>()
+  return { ...actual, getPackagingCurrentStock: getPackagingCurrentStockMock }
 })
 // StockMovementPanel (Módulo 3, Incremento 2) usa useStockMovements
 // internamente — mockado aqui para que abrir "Movimentar estoque" nesta
@@ -175,6 +183,7 @@ function mockPackaging(
     update: ReturnType<typeof vi.fn>
     delete: ReturnType<typeof vi.fn>
     setLocalStock: ReturnType<typeof vi.fn>
+    setLocalImage: ReturnType<typeof vi.fn>
   }> = {},
 ) {
   usePackagingMock.mockReturnValue({
@@ -186,6 +195,7 @@ function mockPackaging(
     update: overrides.update ?? vi.fn().mockResolvedValue(packagingFixture()),
     delete: overrides.delete ?? vi.fn().mockResolvedValue(undefined),
     setLocalStock: overrides.setLocalStock ?? vi.fn(),
+    setLocalImage: overrides.setLocalImage ?? vi.fn(),
   })
 }
 
@@ -235,6 +245,17 @@ async function clickAccessoryRowAction(
   action: 'Editar' | 'Ativar' | 'Desativar' | 'Excluir',
 ): Promise<void> {
   await user.click(screen.getByRole('button', { name: `Mais ações — acessório ${accessoryName}` }))
+  await user.click(await screen.findByRole('menuitem', { name: action }))
+}
+
+// Mesmo menu de três pontos por linha, agora também em Embalagens
+// (alinhamento 2026-09-06): "Editar" / "Ativar-Desativar" / "Excluir".
+async function clickPackagingRowAction(
+  user: ReturnType<typeof userEvent.setup>,
+  packagingName: string,
+  action: 'Editar' | 'Ativar' | 'Desativar' | 'Excluir',
+): Promise<void> {
+  await user.click(screen.getByRole('button', { name: `Mais ações — embalagem ${packagingName}` }))
   await user.click(await screen.findByRole('menuitem', { name: action }))
 }
 
@@ -556,23 +577,34 @@ describe('InventoryPage', () => {
     expect(getVisibleNamesInOrder()).toEqual(['Custo alto', 'Custo baixo', 'Sem custo'])
   })
 
-  it('a listagem de Embalagens usa o mesmo padrão de colunas e formatação', () => {
+  it('Embalagens: as 7 colunas na ordem de Acessórios (Embalagem·Tamanho·Variante·Estoque mínimo·Disponível·Custo unitário·Ações), sem "Ativo"', () => {
     mockPackaging([packagingFixture({ size: null, unit_cost: null })])
     renderPage('embalagens')
 
-    for (const label of ['Nome', 'Tamanho', 'Variante', 'Custo', 'Estoque mínimo', 'Ativo']) {
-      expect(screen.getByRole('button', { name: `Ordenar coluna ${label}` })).toBeInTheDocument()
-    }
+    const headerCells = within(getTable())
+      .getAllByRole('row')[0]
+      .querySelectorAll('th')
+    expect(Array.from(headerCells).map((th) => th.textContent?.trim())).toEqual([
+      'Embalagem',
+      'Tamanho',
+      'Variante',
+      'Estoque mínimo',
+      'Disponível',
+      'Custo unitário',
+      'Ações',
+    ])
+    expect(screen.queryByRole('button', { name: 'Ordenar coluna Ativo' })).not.toBeInTheDocument()
     expect(within(getTableBody()).getByText('Não se aplica')).toBeInTheDocument()
     expect(within(getTableBody()).getByText('Não informado')).toBeInTheDocument()
   })
 
-  it('busca e filtro de Embalagens usam placeholder/rótulos próprios de embalagens', () => {
+  it('busca de Embalagens usa placeholder próprio; NÃO há mais filtro Todos/Ativos/Inativos', () => {
     mockPackaging([packagingFixture()])
     renderPage('embalagens')
 
     expect(screen.getByRole('combobox', { name: 'Buscar embalagens' })).toBeInTheDocument()
-    expect(screen.getByRole('radiogroup', { name: 'Filtrar embalagens por status' })).toBeInTheDocument()
+    expect(screen.queryByRole('radiogroup', { name: 'Filtrar embalagens por status' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Ativos' })).not.toBeInTheDocument()
   })
 
   it('a busca de Acessórios e Embalagens é independente entre si', async () => {
@@ -667,64 +699,42 @@ describe('InventoryPage — área Embalagens (/estoque/embalagens)', () => {
     expect(screen.queryByText('Nenhuma embalagem cadastrada.')).not.toBeInTheDocument()
   })
 
-  it('filtros Todos/Ativos/Inativos filtram corretamente e "Limpar filtros" restaura "Todos"', async () => {
-    const user = userEvent.setup()
+  it('NÃO há mais filtro Todos/Ativos/Inativos — a listagem mostra ativos E inativos juntos', () => {
     mockPackaging([
       packagingFixture({ id: 'k1', name: 'Caixa ativa', is_active: true }),
       packagingFixture({ id: 'k2', name: 'Caixa inativa', is_active: false }),
     ])
     renderPage('embalagens')
 
-    const filterGroup = screen.getByRole('radiogroup', { name: 'Filtrar embalagens por status' })
-    expect(within(filterGroup).getByRole('radio', { name: 'Todos' })).toHaveAttribute('aria-checked', 'true')
-
-    // operável por teclado (foco + Enter) — cobertura antes exercida também
-    // pelo filtro de Acessórios, que foi removido nesta rodada.
-    const activeRadio = within(filterGroup).getByRole('radio', { name: 'Ativos' })
-    activeRadio.focus()
-    await user.keyboard('{Enter}')
-    expect(activeRadio).toHaveAttribute('aria-checked', 'true')
-    expect(within(getTable()).getByText('Caixa ativa')).toBeInTheDocument()
-    expect(within(getTable()).queryByText('Caixa inativa')).not.toBeInTheDocument()
-
-    await user.click(within(filterGroup).getByRole('radio', { name: 'Inativos' }))
-    expect(within(getTable()).getByText('Caixa inativa')).toBeInTheDocument()
-    expect(within(getTable()).queryByText('Caixa ativa')).not.toBeInTheDocument()
-
-    expect(screen.getByRole('button', { name: 'Limpar filtros' })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Limpar filtros' }))
-
-    expect(within(filterGroup).getByRole('radio', { name: 'Todos' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.queryByRole('radiogroup', { name: 'Filtrar embalagens por status' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Limpar filtros' })).not.toBeInTheDocument()
+    // ambos os registros ficam visíveis, sem nenhum filtro de status
     expect(within(getTable()).getByText('Caixa ativa')).toBeInTheDocument()
     expect(within(getTable()).getByText('Caixa inativa')).toBeInTheDocument()
+    expect(screen.getByText('2 resultados')).toBeInTheDocument()
   })
 
-  it('com o filtro "Ativos", um item que vira inativo some da listagem assim que o array local é atualizado', async () => {
-    // Cobertura antes feita na área Acessórios (filtro removido nesta
-    // rodada) — o filtro de Embalagens continua e a mesma reatividade via
-    // useMemo precisa seguir valendo.
+  it('desativar pelo menu de três pontos chama update e o item continua na listagem (sem filtro)', async () => {
     const user = userEvent.setup()
     const update = vi.fn().mockResolvedValue(packagingFixture({ id: 'k1', name: 'Caixa M', is_active: false }))
     mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', is_active: true })], { update })
     const { rerender } = renderPage('embalagens')
 
-    await user.click(screen.getByRole('radio', { name: 'Ativos' }))
-    expect(within(getTableBody()).getByText('Caixa M')).toBeInTheDocument()
-
-    await user.click(screen.getByRole('switch', { name: 'Desativar embalagem Caixa M' }))
+    await user.click(screen.getByRole('button', { name: 'Mais ações — embalagem Caixa M' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Desativar' }))
     await user.click(screen.getByRole('button', { name: 'Desativar' }))
     await waitFor(() => expect(update).toHaveBeenCalledWith('k1', { is_active: false }))
 
     mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', is_active: false })], { update })
     rerender(<InventoryPage area="embalagens" />)
 
-    expect(screen.queryByRole('table')).not.toBeInTheDocument()
-    expect(screen.queryByText('Caixa M')).not.toBeInTheDocument()
-    expect(screen.getByText('Nenhum resultado encontrado.')).toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: 'Ativos' })).toHaveAttribute('aria-checked', 'true')
+    // sem filtro de status, o item inativo continua visível
+    expect(within(getTableBody()).getByText('Caixa M')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Mais ações — embalagem Caixa M' }))
+    expect(await screen.findByRole('menuitem', { name: 'Ativar' })).toBeInTheDocument()
   })
 
-  it('ordenação por Nome alterna crescente e decrescente', async () => {
+  it('ordenação pelo cabeçalho "Embalagem" alterna crescente e decrescente', async () => {
     const user = userEvent.setup()
     mockPackaging([
       packagingFixture({ id: 'k1', name: 'Sacola Kraft' }),
@@ -732,10 +742,10 @@ describe('InventoryPage — área Embalagens (/estoque/embalagens)', () => {
     ])
     renderPage('embalagens')
 
-    await applySort(user, 'Nome', 'Ordenar crescente')
+    await applySort(user, 'Embalagem', 'Ordenar crescente')
     expect(getVisibleNamesInOrder()).toEqual(['Caixa M', 'Sacola Kraft'])
 
-    await applySort(user, 'Nome', 'Ordenar decrescente')
+    await applySort(user, 'Embalagem', 'Ordenar decrescente')
     expect(getVisibleNamesInOrder()).toEqual(['Sacola Kraft', 'Caixa M'])
   })
 
@@ -761,34 +771,39 @@ describe('InventoryPage — área Embalagens (/estoque/embalagens)', () => {
     expect(within(getTable()).getByText(formatBRL(7.9))).toBeInTheDocument()
   })
 
-  it('Ativo é um Switch funcional: coluna de Ações sem rótulo, sem checkbox de seleção, sem botões de ativar/desativar', () => {
+  it('a linha não tem Switch nem coluna "Ativo"; o cabeçalho "Ações" é visível e Ativar/Desativar está no menu de três pontos', async () => {
+    const user = userEvent.setup()
     mockPackaging([
       packagingFixture({ id: 'k1', is_active: true }),
       packagingFixture({ id: 'k2', name: 'Sacola Kraft', is_active: false }),
     ])
     renderPage('embalagens')
 
-    expect(within(getTableBody()).getByRole('switch', { name: 'Desativar embalagem Caixa M' })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    )
-    expect(within(getTableBody()).getByRole('switch', { name: 'Ativar embalagem Sacola Kraft' })).toHaveAttribute(
-      'aria-checked',
-      'false',
-    )
+    expect(within(getTableBody()).queryByRole('switch')).not.toBeInTheDocument()
     expect(within(getTableBody()).queryByText('Ativo')).not.toBeInTheDocument()
     expect(within(getTableBody()).queryByText('Inativo')).not.toBeInTheDocument()
-    // A coluna de ações existe (botões "Editar"/"Excluir" por linha), mas o
-    // próprio cabeçalho não tem NENHUM texto visível "Ações" — o nome
-    // acessível do <th> (padronização das listagens, rodada 2026-08-31) vem
-    // só da alça de redimensionamento ("Redimensionar coluna Ações"), nunca
-    // de um rótulo de coluna próprio.
-    expect(within(getTable()).queryByText('Ações')).not.toBeInTheDocument()
-    expect(screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })).toBeInTheDocument()
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^ativar/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /desativar/i })).not.toBeInTheDocument()
-    expect(within(getTableBody()).getByRole('button', { name: 'Excluir embalagem Caixa M' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Movimentar estoque/i })).not.toBeInTheDocument()
+
+    // agora o cabeçalho de Ações TEM texto visível "Ações" (padrão de Acessórios)
+    const headerCells = Array.from(within(getTable()).getAllByRole('row')[0].querySelectorAll('th'))
+    expect(headerCells.map((cell) => cell.textContent?.trim())).toContain('Ações')
+
+    // botões de ícone Ajuste + Histórico por linha
+    const row = within(getTableBody()).getByText('Caixa M').closest('tr') as HTMLElement
+    expect(within(row).getByRole('button', { name: 'Ajustar quantidade' })).toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: 'Histórico' })).toBeInTheDocument()
+
+    // embalagem ATIVA -> menu oferece "Desativar"
+    await user.click(screen.getByRole('button', { name: 'Mais ações — embalagem Caixa M' }))
+    expect(await screen.findByRole('menuitem', { name: 'Editar' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Desativar' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Excluir' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+
+    // embalagem INATIVA -> menu oferece "Ativar"
+    await user.click(screen.getByRole('button', { name: 'Mais ações — embalagem Sacola Kraft' }))
+    expect(await screen.findByRole('menuitem', { name: 'Ativar' })).toBeInTheDocument()
   })
 })
 
@@ -1188,14 +1203,14 @@ describe('InventoryPage — edição de itens existentes', () => {
     expect(searchInput).toHaveValue('Ímã')
   })
 
-  it('botão "Editar" existe na listagem de Embalagens e abre "Editar embalagem" com payload correto', async () => {
+  it('"Editar" no menu de três pontos de Embalagens abre "Editar embalagem" com payload correto', async () => {
     const user = userEvent.setup()
     const update = vi.fn().mockResolvedValue(packagingFixture())
     mockPackaging([packagingFixture()], { update })
     renderPage('embalagens')
 
-    // Embalagens mantém o botão de texto "Editar" na coluna Ações (inalterado)
-    await user.click(within(getTableBody()).getByRole('button', { name: /^editar$/i }))
+    // Embalagens agora tem "Editar" no menu de três pontos (padrão de Acessórios)
+    await clickPackagingRowAction(user, 'Caixa M', 'Editar')
     expect(screen.getByRole('dialog', { name: 'Editar embalagem' })).toBeInTheDocument()
     expect(screen.getByLabelText('Nome')).toHaveValue('Caixa M')
 
@@ -1314,7 +1329,7 @@ describe('InventoryPage — ativação e desativação', () => {
     mockPackaging([packagingFixture({ is_active: false })], { update })
     renderPage('embalagens')
 
-    await user.click(screen.getByRole('switch', { name: 'Ativar embalagem Caixa M' }))
+    await clickPackagingRowAction(user, 'Caixa M', 'Ativar')
     expect(screen.getByRole('dialog', { name: 'Ativar embalagem' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Ativar' }))
 
@@ -1327,7 +1342,7 @@ describe('InventoryPage — ativação e desativação', () => {
     mockPackaging([packagingFixture({ is_active: true })], { update })
     renderPage('embalagens')
 
-    await user.click(screen.getByRole('switch', { name: 'Desativar embalagem Caixa M' }))
+    await clickPackagingRowAction(user, 'Caixa M', 'Desativar')
     await user.click(screen.getByRole('button', { name: 'Desativar' }))
 
     await waitFor(() => expect(update).toHaveBeenCalledWith('k1', { is_active: false }))
@@ -1698,7 +1713,7 @@ describe('InventoryPage — exclusão física segura', () => {
     mockPackaging([packagingFixture()], { delete: deleteFn })
     renderPage('embalagens')
 
-    await user.click(screen.getByRole('button', { name: 'Excluir embalagem Caixa M' }))
+    await clickPackagingRowAction(user, 'Caixa M', 'Excluir')
     expect(screen.getByRole('dialog', { name: 'Excluir embalagem' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
 
@@ -1721,7 +1736,7 @@ describe('InventoryPage — exclusão física segura', () => {
     mockPackaging([packagingFixture()], { delete: deleteFn })
     renderPage('embalagens')
 
-    await user.click(screen.getByRole('button', { name: 'Excluir embalagem Caixa M' }))
+    await clickPackagingRowAction(user, 'Caixa M', 'Excluir')
     await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
 
     expect(
@@ -1747,7 +1762,7 @@ describe('InventoryPage — exclusão física segura', () => {
     mockPackaging([packagingFixture()], { delete: deleteFn })
     renderPage('embalagens')
 
-    await user.click(screen.getByRole('button', { name: 'Excluir embalagem Caixa M' }))
+    await clickPackagingRowAction(user, 'Caixa M', 'Excluir')
     await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
 
     expect(
@@ -1916,24 +1931,335 @@ function mockStockMovements(
   })
 }
 
-describe('InventoryPage — Embalagens: painel "Movimentar estoque" (inalterado)', () => {
+// Alinhamento 2026-09-06: Embalagens deixou de ter o painel genérico
+// "Movimentar estoque" e passou a usar EXATAMENTE o mesmo par de Acessórios
+// — "Ajustar quantidade" (quantidade absoluta -> diferença ->
+// register_stock_movement, itemType='PACKAGING') e "Histórico" (só consulta).
+// O componente StockItemAdjustDialog/StockItemHistoryDialog é o mesmo dos
+// dois; aqui cobrimos a fiação em Embalagens.
+describe('InventoryPage — Embalagens: janela "Ajustar quantidade"', () => {
   beforeEach(() => {
     toastMock.success.mockReset()
     toastMock.error.mockReset()
+    getPackagingCurrentStockMock.mockReset()
     mockStockMovements()
   })
 
-  it('Embalagens abrem o painel completo com o formulário de movimentação e a categoria correta', async () => {
+  it('não há mais "Movimentar estoque" em Embalagens — o botão "Ajuste" abre a janela da embalagem correta, com a quantidade atual', async () => {
     const user = userEvent.setup()
-    mockPackaging([packagingFixture({ current_stock: 8 })])
+    getPackagingCurrentStockMock.mockResolvedValue(8)
+    mockPackaging([
+      packagingFixture({ id: 'k1', name: 'Caixa M', current_stock: 8 }),
+      packagingFixture({ id: 'k2', name: 'Sacola Kraft', current_stock: 3 }),
+    ])
     renderPage('embalagens')
 
-    await user.click(screen.getByRole('button', { name: 'Movimentar estoque — embalagem Caixa M' }))
+    expect(screen.queryByRole('button', { name: /Movimentar estoque/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radiogroup', { name: 'Movimentação' })).not.toBeInTheDocument()
 
-    const dialog = screen.getByRole('dialog', { name: 'Movimentar estoque' })
-    expect(within(dialog).getByText('Embalagem')).toBeInTheDocument()
-    // o formulário genérico de movimentação CONTINUA em Embalagens
-    expect(within(dialog).getByRole('radiogroup', { name: 'Movimentação' })).toBeInTheDocument()
+    const row = within(getTableBody()).getByText('Caixa M').closest('tr') as HTMLElement
+    await user.click(within(row).getByRole('button', { name: 'Ajustar quantidade' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Ajustar Quantidade' })
+    expect(within(dialog).getAllByText('Caixa M')).toHaveLength(1)
+    expect(within(dialog).getByText('Quantidade atual: 8')).toBeInTheDocument()
+    expect(within(dialog).queryByText('Sacola Kraft')).not.toBeInTheDocument()
+  })
+
+  it('aumento: registra POSITIVE_ADJUSTMENT com |diferença| e atualiza o saldo local sem F5', async () => {
+    const user = userEvent.setup()
+    getPackagingCurrentStockMock.mockResolvedValue(10)
+    const register = vi
+      .fn()
+      .mockResolvedValue(stockMovementRow({ balance_before: 10, balance_after: 15, quantity_delta: 5 }))
+    mockStockMovements({ register })
+    const setLocalStock = vi.fn()
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', current_stock: 10 })], { setLocalStock })
+    renderPage('embalagens')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '15')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    await waitFor(() => expect(register).toHaveBeenCalledTimes(1))
+    expect(register.mock.calls[0][0]).toMatchObject({
+      movement_type: 'POSITIVE_ADJUSTMENT',
+      quantity: 5,
+      reason: 'Ajuste de saldo por contagem',
+    })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Ajustar Quantidade' })).not.toBeInTheDocument())
+    expect(toastMock.success).toHaveBeenCalledWith('Ajuste registrado.')
+    expect(setLocalStock).toHaveBeenCalledWith('k1', 15)
+  })
+
+  it('redução: registra NEGATIVE_ADJUSTMENT com |diferença| (25 -> 18 => -7)', async () => {
+    const user = userEvent.setup()
+    getPackagingCurrentStockMock.mockResolvedValue(25)
+    const register = vi
+      .fn()
+      .mockResolvedValue(stockMovementRow({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity_delta: -7, balance_before: 25, balance_after: 18 }))
+    mockStockMovements({ register })
+    const setLocalStock = vi.fn()
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', current_stock: 25 })], { setLocalStock })
+    renderPage('embalagens')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '18')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    await waitFor(() => expect(register).toHaveBeenCalledTimes(1))
+    expect(register.mock.calls[0][0]).toMatchObject({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity: 7 })
+    expect(setLocalStock).toHaveBeenCalledWith('k1', 18)
+  })
+
+  it('aceita zero como nova quantidade (25 -> 0 => NEGATIVE_ADJUSTMENT de 25)', async () => {
+    const user = userEvent.setup()
+    getPackagingCurrentStockMock.mockResolvedValue(25)
+    const register = vi
+      .fn()
+      .mockResolvedValue(stockMovementRow({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity_delta: -25, balance_before: 25, balance_after: 0 }))
+    mockStockMovements({ register })
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', current_stock: 25 })])
+    renderPage('embalagens')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '0')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    await waitFor(() =>
+      expect(register).toHaveBeenCalledWith(expect.objectContaining({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity: 25 })),
+    )
+  })
+
+  it('recusa valor negativo e fracionado — nenhuma releitura, nenhum register', async () => {
+    const user = userEvent.setup()
+    const register = vi.fn()
+    mockStockMovements({ register })
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', current_stock: 10 })])
+    renderPage('embalagens')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '-3')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+    expect(register).not.toHaveBeenCalled()
+    expect(getPackagingCurrentStockMock).not.toHaveBeenCalled()
+
+    await user.clear(screen.getByLabelText('Nova quantidade'))
+    await user.type(screen.getByLabelText('Nova quantidade'), '10,5')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+    expect(register).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Ajustar Quantidade' })).toBeInTheDocument()
+  })
+
+  it('nova quantidade igual à atual: não cria movimentação e informa que não houve alteração', async () => {
+    const user = userEvent.setup()
+    getPackagingCurrentStockMock.mockResolvedValue(10)
+    const register = vi.fn()
+    mockStockMovements({ register })
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', current_stock: 10 })])
+    renderPage('embalagens')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '10')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    await waitFor(() => expect(getPackagingCurrentStockMock).toHaveBeenCalledWith('k1'))
+    expect(register).not.toHaveBeenCalled()
+    expect(await screen.findByText(/nenhum ajuste foi registrado/i)).toBeInTheDocument()
+    expect(toastMock.success).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Ajustar Quantidade' })).toBeInTheDocument()
+  })
+
+  it('reconsulta o saldo ANTES de enviar e recalcula a diferença sobre o valor mais recente', async () => {
+    const user = userEvent.setup()
+    getPackagingCurrentStockMock.mockResolvedValue(20) // tela mostra 25, backend já em 20
+    const register = vi
+      .fn()
+      .mockResolvedValue(stockMovementRow({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity_delta: -2, balance_before: 20, balance_after: 18 }))
+    mockStockMovements({ register })
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', current_stock: 25 })])
+    renderPage('embalagens')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '18')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    await waitFor(() => expect(getPackagingCurrentStockMock).toHaveBeenCalledWith('k1'))
+    expect(register.mock.calls[0][0]).toMatchObject({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity: 2 })
+  })
+
+  it('divergência concorrente (balance_after != pretendido): não mostra sucesso, atualiza o saldo retornado e mantém a janela aberta', async () => {
+    const user = userEvent.setup()
+    getPackagingCurrentStockMock.mockResolvedValue(25)
+    const register = vi
+      .fn()
+      .mockResolvedValue(stockMovementRow({ movement_type: 'NEGATIVE_ADJUSTMENT', quantity_delta: -7, balance_before: 27, balance_after: 20 }))
+    mockStockMovements({ register })
+    const setLocalStock = vi.fn()
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', current_stock: 25 })], { setLocalStock })
+    renderPage('embalagens')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '18')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    await waitFor(() => expect(register).toHaveBeenCalled())
+    expect(toastMock.success).not.toHaveBeenCalled()
+    expect(setLocalStock).toHaveBeenCalledWith('k1', 20)
+    expect(await screen.findByText(/alterado por outra pessoa/i)).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Ajustar Quantidade' })).toBeInTheDocument()
+  })
+
+  it('bloqueia envio duplicado durante o salvamento', async () => {
+    const user = userEvent.setup()
+    getPackagingCurrentStockMock.mockResolvedValue(10)
+    let resolveRegister: (v: StockMovementRow) => void = () => {}
+    const register = vi.fn(
+      () =>
+        new Promise<StockMovementRow>((resolve) => {
+          resolveRegister = resolve
+        }),
+    )
+    mockStockMovements({ register })
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', current_stock: 10 })])
+    renderPage('embalagens')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '15')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+
+    const savingButton = await screen.findByRole('button', { name: 'Salvando...' })
+    expect(savingButton).toBeDisabled()
+    await user.click(savingButton)
+    expect(register).toHaveBeenCalledTimes(1)
+
+    resolveRegister(stockMovementRow({ balance_before: 10, balance_after: 15, quantity_delta: 5 }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Ajustar Quantidade' })).not.toBeInTheDocument())
+  })
+
+  it('o ajuste NUNCA altera o Custo unitário exibido na listagem', async () => {
+    const user = userEvent.setup()
+    getPackagingCurrentStockMock.mockResolvedValue(10)
+    mockStockMovements({
+      register: vi.fn().mockResolvedValue(stockMovementRow({ balance_before: 10, balance_after: 15, quantity_delta: 5 })),
+    })
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', current_stock: 10, unit_cost: 12.5 })])
+    renderPage('embalagens')
+
+    expect(within(getTableBody()).getByText(formatBRL(12.5))).toBeInTheDocument()
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' }))
+    await user.type(screen.getByLabelText('Nova quantidade'), '15')
+    await user.click(screen.getByRole('button', { name: 'Salvar ajuste' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Ajustar Quantidade' })).not.toBeInTheDocument())
+
+    expect(within(getTableBody()).getByText(formatBRL(12.5))).toBeInTheDocument()
+  })
+})
+
+describe('InventoryPage — Embalagens: janela "Histórico"', () => {
+  beforeEach(() => {
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
+  })
+
+  it('o botão de Histórico é só ícone, com aria-label "Histórico", e abre "Histórico da embalagem" da embalagem correta', async () => {
+    const user = userEvent.setup()
+    mockStockMovements({ movements: [] })
+    mockPackaging([
+      packagingFixture({ id: 'k1', name: 'Caixa M', current_stock: 4, minimum_stock: 10 }),
+      packagingFixture({ id: 'k2', name: 'Sacola Kraft', current_stock: 30 }),
+    ])
+    renderPage('embalagens')
+
+    const row = within(getTableBody()).getByText('Caixa M').closest('tr') as HTMLElement
+    const historyButton = within(row).getByRole('button', { name: 'Histórico' })
+    expect(historyButton).toHaveAttribute('title', 'Histórico')
+    expect(historyButton).toHaveTextContent('')
+
+    await user.click(historyButton)
+    const dialog = screen.getByRole('dialog', { name: 'Histórico da embalagem' })
+    expect(within(dialog).getAllByText('Caixa M').length).toBeGreaterThanOrEqual(1)
+    expect(within(dialog).queryByText('Sacola Kraft')).not.toBeInTheDocument()
+  })
+
+  it('mostra o resumo Disponível / Estoque mínimo / Situação e NÃO tem formulário de movimentação', async () => {
+    const user = userEvent.setup()
+    mockStockMovements({ movements: [] })
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', current_stock: 4, minimum_stock: 10 })])
+    renderPage('embalagens')
+
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Histórico' }))
+    const dialog = screen.getByRole('dialog', { name: 'Histórico da embalagem' })
+
+    expect(within(dialog).getByText('Disponível')).toBeInTheDocument()
+    expect(within(dialog).getByText('Estoque mínimo')).toBeInTheDocument()
+    expect(within(dialog).getByText('Situação')).toBeInTheDocument()
+    expect(within(dialog).getByText('Estoque baixo')).toBeInTheDocument()
+
+    expect(within(dialog).queryByRole('radiogroup', { name: 'Movimentação' })).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: /registrar movimenta/i })).not.toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Fechar' })).toBeInTheDocument()
+  })
+
+  it('estados carregando, vazio e erro', async () => {
+    const user = userEvent.setup()
+
+    mockStockMovements({ isLoading: true })
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M' })])
+    const first = renderPage('embalagens')
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Histórico' }))
+    expect(screen.getAllByRole('status').length).toBeGreaterThan(0)
+    first.unmount()
+
+    mockStockMovements({ movements: [] })
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M' })])
+    const second = renderPage('embalagens')
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Histórico' }))
+    expect(screen.getByText('Nenhuma movimentação registrada.')).toBeInTheDocument()
+    second.unmount()
+
+    mockStockMovements({ loadError: new ApiError('database', 500, 'Falha ao carregar o histórico.') })
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M' })])
+    renderPage('embalagens')
+    await user.click(within(getTableBody()).getByRole('button', { name: 'Histórico' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Falha ao carregar o histórico.')
+  })
+
+  it('lista as movimentações mais recentes primeiro, sem rolagem horizontal, e nunca mistura embalagens diferentes', async () => {
+    const user = userEvent.setup()
+    mockStockMovements({
+      movements: [
+        stockMovementRow({ id: 'm2', movement_type: 'NEGATIVE_ADJUSTMENT', quantity_delta: -3, balance_before: 25, balance_after: 22, occurred_at: '2026-09-06T15:00:00Z' }),
+        stockMovementRow({ id: 'm1', movement_type: 'POSITIVE_ADJUSTMENT', quantity_delta: 5, balance_before: 20, balance_after: 25, occurred_at: '2026-09-06T09:00:00Z' }),
+      ],
+    })
+    mockPackaging([
+      packagingFixture({ id: 'k1', name: 'Caixa M', current_stock: 22 }),
+      packagingFixture({ id: 'k2', name: 'Sacola Kraft', current_stock: 30 }),
+    ])
+    renderPage('embalagens')
+
+    const caixaRow = within(getTableBody()).getByText('Caixa M').closest('tr') as HTMLElement
+    await user.click(within(caixaRow).getByRole('button', { name: 'Histórico' }))
+    const dialog = screen.getByRole('dialog', { name: 'Histórico da embalagem' })
+
+    const historyTable = within(dialog).getByRole('table')
+    expect(historyTable.className).toMatch(/\bw-full\b/)
+    expect(historyTable.className).not.toMatch(/\bmin-w/)
+    const rowsText = within(historyTable)
+      .getAllByRole('row')
+      .slice(1)
+      .map((r) => r.textContent ?? '')
+    expect(rowsText[0]).toContain('-3')
+    expect(rowsText[1]).toContain('+5')
+
+    await user.click(within(dialog).getByRole('button', { name: 'Fechar' }))
+    const kraftRow = within(getTableBody()).getByText('Sacola Kraft').closest('tr') as HTMLElement
+    await user.click(within(kraftRow).getByRole('button', { name: 'Histórico' }))
+    const dialog2 = screen.getByRole('dialog', { name: 'Histórico da embalagem' })
+    expect(within(dialog2).getByText('Sacola Kraft')).toBeInTheDocument()
+    expect(within(dialog2).queryByText('Caixa M')).not.toBeInTheDocument()
   })
 })
 
@@ -2256,15 +2582,23 @@ describe('InventoryPage — Acessórios: janela "Ajustar quantidade"', () => {
     expect(within(dialog).getByRole('button', { name: 'Salvar ajuste' })).toBeInTheDocument()
   })
 
-  it('interface refinada (2026-09-06): Embalagens não sofreu alteração — cabeçalho de Ações sem texto visível e sem botão de ajuste', () => {
+  it('interface alinhada (2026-09-06): Embalagens agora tem o MESMO padrão — cabeçalho "Ações" visível e botão de ajuste só ícone', () => {
     mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M' })])
     renderPage('embalagens')
 
-    expect(within(getTable()).queryByText('Ações')).not.toBeInTheDocument()
+    // "Ações" agora aparece visivelmente no cabeçalho (paridade com Acessórios)
+    expect(within(getTable()).getByText('Ações')).toBeInTheDocument()
     expect(screen.getByRole('separator', { name: 'Redimensionar coluna Ações' })).toBeInTheDocument()
-    expect(within(getTable()).queryByRole('button', { name: 'Ajustar quantidade' })).not.toBeInTheDocument()
-    // o fluxo antigo "Movimentar estoque" continua intacto em Embalagens
-    expect(within(getTableBody()).getByRole('button', { name: 'Movimentar estoque — embalagem Caixa M' })).toBeInTheDocument()
+
+    const adjustButton = within(getTableBody()).getByRole('button', { name: 'Ajustar quantidade' })
+    expect(adjustButton).toHaveAttribute('title', 'Ajustar quantidade')
+    expect(adjustButton).toHaveAttribute('aria-label', 'Ajustar quantidade')
+    expect(adjustButton).toHaveTextContent('')
+    expect(within(getTableBody()).getByRole('button', { name: 'Histórico' })).toBeInTheDocument()
+    expect(within(getTableBody()).getByRole('button', { name: 'Mais ações — embalagem Caixa M' })).toBeInTheDocument()
+
+    // o painel antigo "Movimentar estoque" não existe mais em Embalagens
+    expect(screen.queryByRole('button', { name: /Movimentar estoque/i })).not.toBeInTheDocument()
   })
 })
 
@@ -2929,16 +3263,147 @@ describe('InventoryPage — Acessórios: foto de referência (2026-09-06)', () =
     expect(purgeEntityImagesMock).not.toHaveBeenCalled()
   })
 
-  it('Embalagens: nenhuma miniatura na listagem e nenhum campo de foto no cadastro', async () => {
+  it('Embalagens: campo "Foto de referência" no cadastro e na edição (paridade com Acessórios)', async () => {
     const user = userEvent.setup()
-    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M' })])
+    const create = vi.fn().mockResolvedValue(packagingFixture({ id: 'k-new', name: 'Fivela' }))
+    const update = vi.fn().mockResolvedValue(packagingFixture({ id: 'k1', name: 'Caixa M' }))
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M' })], { create, update })
     renderPage('embalagens')
 
-    expect(within(getTableBody()).queryByRole('img')).not.toBeInTheDocument()
-    expect(signEntityImageUrlsMock).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Nova embalagem' }))
+    expect(screen.getByTestId('entity-image-upload-field')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancelar' }))
+
+    await clickPackagingRowAction(user, 'Caixa M', 'Editar')
+    expect(screen.getByTestId('entity-image-upload-field')).toBeInTheDocument()
+  })
+
+  it('Embalagens — criar COM foto: cria a embalagem primeiro e só então envia/vincula a foto pelo id retornado', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn().mockResolvedValue(packagingFixture({ id: 'k-new', name: 'Fivela' }))
+    const setLocalImage = vi.fn()
+    uploadEntityImageMock.mockResolvedValue({
+      entity: 'packaging',
+      id: 'k-new',
+      image_path: 'packaging/k-new/v-original.webp',
+      image_thumb_path: 'packaging/k-new/v-thumb.webp',
+      image_url: 'https://signed/original',
+      image_thumb_url: 'https://signed/thumb',
+    })
+    mockPackaging([], { create, setLocalImage })
+    renderPage('embalagens')
 
     await user.click(screen.getByRole('button', { name: 'Nova embalagem' }))
-    expect(screen.queryByTestId('entity-image-upload-field')).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('Nome'), 'Fivela')
+    await user.type(screen.getByLabelText('Estoque mínimo'), '3')
+    await user.click(screen.getByRole('button', { name: 'Escolher foto (teste)' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(uploadEntityImageMock).toHaveBeenCalledWith(
+        'packaging',
+        'k-new',
+        expect.objectContaining({ original: expect.any(Blob), thumb: expect.any(Blob) }),
+      ),
+    )
+    expect(create.mock.invocationCallOrder[0]).toBeLessThan(uploadEntityImageMock.mock.invocationCallOrder[0])
+    expect(setLocalImage).toHaveBeenCalledWith(
+      'k-new',
+      'packaging/k-new/v-original.webp',
+      'packaging/k-new/v-thumb.webp',
+    )
+    expect(toastMock.success).toHaveBeenCalledWith('Embalagem cadastrada.')
+  })
+
+  it('Embalagens — criar: falha no upload da foto NÃO desfaz a criação (aviso claro)', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn().mockResolvedValue(packagingFixture({ id: 'k-new', name: 'Fivela' }))
+    mockPackaging([], { create })
+    uploadEntityImageMock.mockRejectedValue(new ApiError('database', 502, 'storage down'))
+    renderPage('embalagens')
+
+    await user.click(screen.getByRole('button', { name: 'Nova embalagem' }))
+    await user.type(screen.getByLabelText('Nome'), 'Fivela')
+    await user.type(screen.getByLabelText('Estoque mínimo'), '3')
+    await user.click(screen.getByRole('button', { name: 'Escolher foto (teste)' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith(
+        'A embalagem foi criada, mas a foto não pôde ser salva. Você pode adicioná-la pela edição.',
+      ),
+    )
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(toastMock.success).not.toHaveBeenCalled()
+  })
+
+  it('Embalagens — criar SEM foto: não chama a API de imagens', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn().mockResolvedValue(packagingFixture({ id: 'k-new' }))
+    mockPackaging([], { create })
+    renderPage('embalagens')
+
+    await user.click(screen.getByRole('button', { name: 'Nova embalagem' }))
+    await user.type(screen.getByLabelText('Nome'), 'Sem foto')
+    await user.type(screen.getByLabelText('Estoque mínimo'), '1')
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Embalagem cadastrada.'))
+    expect(uploadEntityImageMock).not.toHaveBeenCalled()
+  })
+
+  it('Embalagens — excluir: purgeEntityImages("packaging", id) só APÓS a exclusão confirmada', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi.fn().mockResolvedValue(undefined)
+    purgeEntityImagesMock.mockResolvedValue({ entity: 'packaging', id: 'k1', success: true, purged: 2 })
+    mockPackaging(
+      [
+        packagingFixture({
+          id: 'k1',
+          name: 'Caixa M',
+          image_path: 'packaging/k1/o.webp',
+          image_thumb_path: 'packaging/k1/t.webp',
+        }),
+      ],
+      { delete: deleteFn },
+    )
+    renderPage('embalagens')
+
+    await clickPackagingRowAction(user, 'Caixa M', 'Excluir')
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+
+    await waitFor(() => expect(deleteFn).toHaveBeenCalledWith('k1'))
+    await waitFor(() => expect(purgeEntityImagesMock).toHaveBeenCalledWith('packaging', 'k1'))
+    expect(deleteFn.mock.invocationCallOrder[0]).toBeLessThan(purgeEntityImagesMock.mock.invocationCallOrder[0])
+    expect(toastMock.success).toHaveBeenCalledWith('Embalagem excluída.')
+  })
+
+  it('Embalagens — exclusão BLOQUEADA (409): a foto é preservada, purge nunca é chamado', async () => {
+    const user = userEvent.setup()
+    const deleteFn = vi
+      .fn()
+      .mockRejectedValue(new ApiError('business_rule', 409, 'Esta embalagem já teve movimentação de estoque registrada e não pode ser excluída. Desative o item.'))
+    mockPackaging(
+      [
+        packagingFixture({
+          id: 'k1',
+          name: 'Caixa M',
+          image_path: 'packaging/k1/o.webp',
+          image_thumb_path: 'packaging/k1/t.webp',
+        }),
+      ],
+      { delete: deleteFn },
+    )
+    renderPage('embalagens')
+
+    await clickPackagingRowAction(user, 'Caixa M', 'Excluir')
+    await user.click(screen.getByRole('button', { name: 'Excluir definitivamente' }))
+
+    await waitFor(() => expect(deleteFn).toHaveBeenCalledWith('k1'))
+    expect(purgeEntityImagesMock).not.toHaveBeenCalled()
+    expect(await screen.findByText(/Desative o item/)).toBeInTheDocument()
   })
 })
 
@@ -3084,7 +3549,8 @@ describe('InventoryPage — Acessórios: pop-up de foto ampliada (2026-09-06)', 
     expect(screen.getByRole('button', { name: 'Mais ações — acessório Ímã 6x2' })).toBeInTheDocument()
   })
 
-  it('Embalagens não ganhou miniatura clicável nem assinatura em lote', async () => {
+  it('Embalagens ganhou miniatura clicável + assinatura em lote; clicar abre o pop-up e assina o original só então', async () => {
+    const user = userEvent.setup()
     mockPackaging([
       packagingFixture({
         id: 'k1',
@@ -3092,10 +3558,28 @@ describe('InventoryPage — Acessórios: pop-up de foto ampliada (2026-09-06)', 
         image_path: 'packaging/k1/o.webp',
         image_thumb_path: 'packaging/k1/t.webp',
       }),
+      packagingFixture({ id: 'k2', name: 'Sacola sem foto' }),
     ])
     renderPage('embalagens')
 
-    expect(screen.queryByRole('button', { name: /Ampliar foto/ })).not.toBeInTheDocument()
-    expect(signEntityImageUrlsMock).not.toHaveBeenCalled()
+    // a listagem assina a miniatura em lote, nunca o original antes do clique
+    await waitFor(() => expect(signEntityImageUrlsMock).toHaveBeenCalledWith(['packaging/k1/t.webp']))
+    expect(signEntityImageUrlsMock).not.toHaveBeenCalledWith(['packaging/k1/o.webp'])
+
+    // embalagem sem foto: placeholder, sem botão "Ampliar foto"
+    const semFotoRow = within(getTableBody()).getByText('Sacola sem foto').closest('tr') as HTMLElement
+    expect(within(semFotoRow).queryByRole('button', { name: /Ampliar foto/ })).not.toBeInTheDocument()
+
+    const zoom = await screen.findByRole('button', { name: 'Ampliar foto de Caixa M' })
+    await user.click(zoom)
+
+    await waitFor(() => expect(signEntityImageUrlsMock).toHaveBeenCalledWith(['packaging/k1/o.webp']))
+    const dialog = await screen.findByRole('dialog')
+    const img = await within(dialog).findByRole('img')
+    expect(img).toHaveAttribute('src', 'https://signed/packaging/k1/o.webp')
+    expect(img).toHaveAttribute('alt', 'Foto de Caixa M')
+    expect(within(dialog).getByText('Caixa M')).toBeInTheDocument()
+    // clicar na miniatura não abre a edição da embalagem
+    expect(within(dialog).queryByText('Editar embalagem')).not.toBeInTheDocument()
   })
 })
