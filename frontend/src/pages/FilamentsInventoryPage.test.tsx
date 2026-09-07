@@ -3281,12 +3281,14 @@ describe('FilamentsInventoryPage — atualização automática sem F5', () => {
 
     const itemRow = within(dialog).getByRole('group', { name: 'Item 1' })
     // a área é "filamentos" -> a 1a linha já nasce como Filamento
-    await user.type(within(itemRow).getByRole('combobox', { name: 'Tipo de filamento — item 1' }), 'PLA')
+    await user.type(within(itemRow).getByRole('combobox', { name: 'Tipo de filamento' }), 'PLA')
     await user.click(await within(itemRow).findByRole('option', { name: typeOptionName }))
-    await user.click(within(itemRow).getByRole('radio', { name: '1.000 g' }))
-    await user.type(within(itemRow).getByLabelText('Fabricante — item 1'), 'Bambu Lab')
-    await user.type(within(itemRow).getByLabelText('Quantidade — item 1'), '1')
-    await user.type(within(itemRow).getByLabelText('Valor total — item 1'), '9500')
+    // Peso nominal é uma lista suspensa (opções portadas para o body)
+    await user.click(within(itemRow).getByRole('combobox', { name: 'Peso nominal' }))
+    await user.click(await screen.findByRole('option', { name: '1.000 g' }))
+    await user.type(within(itemRow).getByLabelText('Fabricante'), 'Bambu Lab')
+    await user.type(within(itemRow).getByLabelText('Quantidade'), '1')
+    await user.type(within(itemRow).getByLabelText('Valor total'), '9500')
 
     await user.click(within(dialog).getByRole('button', { name: /^registrar compra$/i }))
   }

@@ -5,6 +5,7 @@ import {
   type ChangeEvent,
   type ClipboardEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react'
 import { toast } from 'sonner'
 import { Disc3Icon, PackageIcon, PlusIcon, PuzzleIcon, ShoppingCartIcon, Trash2Icon } from 'lucide-react'
@@ -20,6 +21,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useAccessories } from '@/hooks/useAccessories'
 import { usePackaging } from '@/hooks/usePackaging'
 import { useFilamentTypes } from '@/hooks/useFilamentTypes'
@@ -91,8 +93,16 @@ const CATEGORY_LABEL: Record<LineCategory, string> = {
 const CATEGORY_ICON = { FILAMENT: Disc3Icon, ACCESSORY: PuzzleIcon, PACKAGING: PackageIcon }
 const CATEGORY_ORDER: LineCategory[] = ['FILAMENT', 'ACCESSORY', 'PACKAGING']
 
-// Peso nominal: só os 3 valores oficiais, como action buttons.
+// Peso nominal: só os 3 valores oficiais (250 / 500 / 1000 g), agora numa
+// lista suspensa. Os valores são exatamente os mesmos que os action buttons
+// antigos ofereciam — aceitos pelo register_mixed_inventory_purchase
+// (nominal_weight_grams numeric > 0) e pela Edge Function — e o número
+// enviado no payload continua em GRAMAS, inalterado.
 const NOMINAL_WEIGHT_OPTIONS = [250, 500, 1000] as const
+const NOMINAL_WEIGHT_ITEMS = NOMINAL_WEIGHT_OPTIONS.map((grams) => ({
+  label: formatGrams(grams),
+  value: String(grams),
+}))
 
 // Local da compra — ordem e rótulos aprovados. OUTRO_SITE / PRESENCIAL
 // exigem um complemento; os três primeiros não.
@@ -239,7 +249,7 @@ function ActiveItemPicker({
   return (
     <fieldset disabled={disabled} className="contents">
       <div className="flex flex-col gap-1">
-        <Label htmlFor={`purchase-item-${index}`} className="sr-only sm:not-sr-only">
+        <Label htmlFor={`purchase-item-${index}`} className={LINE_LABEL_CLASSNAME}>
           {fieldLabel}
         </Label>
         <SearchAutocomplete
@@ -296,7 +306,7 @@ function FilamentTypeItemPicker({
   const suggestions = normalizedTerm
     ? allSuggestions.filter((s) => normalizeForSearch(s.label).includes(normalizedTerm))
     : allSuggestions
-  const fieldLabel = `Tipo de filamento — item ${index}`
+  const fieldLabel = 'Tipo de filamento'
   function handleSelect(label: string) {
     const match = suggestions.find((s) => s.label === label)
     setSearchTerm(label)
@@ -305,7 +315,7 @@ function FilamentTypeItemPicker({
   return (
     <fieldset disabled={disabled} className="contents">
       <div className="flex flex-col gap-1">
-        <Label htmlFor={`purchase-filament-type-${index}`} className="sr-only sm:not-sr-only">
+        <Label htmlFor={`purchase-filament-type-${index}`} className={LINE_LABEL_CLASSNAME}>
           {fieldLabel}
         </Label>
         <SearchAutocomplete
@@ -384,9 +394,37 @@ function switchedCategory(item: MixedItemState, nextCategory: LineCategory): Mix
   }
 }
 
-const GRID_CLASSNAME =
-  'grid grid-cols-1 items-start gap-2 sm:grid-cols-[minmax(200px,2.4fr)_90px_130px_auto] sm:items-end sm:gap-2'
-const FILAMENT_EXTRA_GRID_CLASSNAME = 'grid grid-cols-1 gap-2 sm:grid-cols-[auto_minmax(140px,1fr)] sm:gap-2'
+// Rótulo curto de cada campo de linha: sempre no DOM (leitores de tela e
+// getByLabelText o enxergam), visível a partir de sm. Sem "— item N": a
+// numeração não aparece na tela, mas a ordem interna e o line_number
+// continuam valendo pela posição do item na lista.
+const LINE_LABEL_CLASSNAME = 'text-muted-foreground text-xs sr-only sm:not-sr-only'
+
+// Bloco visual de cada seção da janela (Dados Gerais / Itens / Frete /
+// Resumo). Mesma linguagem do FormSection de OrderForm.tsx
+// (border-input rounded-lg border) — nunca um components/ui/card novo — com
+// um fundo levemente diferenciado (bg-muted/30) para destacar os limites
+// entre as seções, e um slot opcional à direita do título (usado pelo "+"
+// de Itens).
+function FormSection({
+  title,
+  headerRight,
+  children,
+}: {
+  title: string
+  headerRight?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <section className="border-input bg-muted/30 flex flex-col gap-3 rounded-lg border p-4">
+      <div className="flex min-h-8 items-center justify-between gap-2">
+        <h3 className="text-muted-foreground text-xs font-semibold tracking-wide uppercase">{title}</h3>
+        {headerRight}
+      </div>
+      {children}
+    </section>
+  )
+}
 
 // Quantidade + Valor total da linha — comum às três categorias.
 function QuantityAndTotalFields({
@@ -410,9 +448,9 @@ function QuantityAndTotalFields({
 }) {
   return (
     <>
-      <div className="flex flex-col gap-1">
-        <Label htmlFor={`purchase-quantity-${lineNo}`} className="sr-only sm:not-sr-only">
-          Quantidade — item {lineNo}
+      <div className="flex flex-col gap-1 sm:w-20">
+        <Label htmlFor={`purchase-quantity-${lineNo}`} className={LINE_LABEL_CLASSNAME}>
+          Quantidade
         </Label>
         <Input
           id={`purchase-quantity-${lineNo}`}
@@ -426,15 +464,17 @@ function QuantityAndTotalFields({
         />
         {quantityError && <p className="text-destructive text-sm">{quantityError}</p>}
       </div>
-      <CurrencyInput
-        id={`purchase-total-value-${lineNo}`}
-        label={`Valor total — item ${lineNo}`}
-        state={totalValueField}
-        onChange={onTotalValueChange}
-        disabled={disabled}
-        error={totalValueError}
-        inputClassName="w-full"
-      />
+      <div className="sm:w-32">
+        <CurrencyInput
+          id={`purchase-total-value-${lineNo}`}
+          label="Valor total"
+          state={totalValueField}
+          onChange={onTotalValueChange}
+          disabled={disabled}
+          error={totalValueError}
+          inputClassName="w-full"
+        />
+      </div>
     </>
   )
 }
@@ -765,7 +805,7 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
       </Button>
 
       <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-        <DialogContent className="flex max-h-[90vh] flex-col gap-0 overflow-hidden sm:max-w-3xl">
+        <DialogContent className="flex max-h-[90vh] flex-col gap-0 overflow-hidden sm:max-w-4xl">
           <DialogHeader>
             <DialogTitle>Registrar compra</DialogTitle>
             <DialogDescription>
@@ -780,93 +820,114 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
               void handleSubmit()
             }}
           >
-            <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-1 py-2">
-              {/* 1. Dados Gerais */}
-              <section className="flex flex-col gap-3">
-                <h3 className="text-sm font-semibold">Dados Gerais</h3>
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="purchase-date">Data da compra</Label>
-                  <Input
-                    id="purchase-date"
-                    inputMode="numeric"
-                    maxLength={10}
-                    placeholder="dd/mm/aaaa"
-                    value={purchaseDateText}
-                    onChange={(event) => {
-                      setPurchaseDateText(maskBrDate(event.target.value))
-                      setFieldErrors((current) => ({ ...current, purchase_date: '' }))
-                    }}
-                    disabled={isSubmitting}
-                    aria-invalid={fieldErrors.purchase_date ? true : undefined}
-                    className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-40"
-                  />
-                  {fieldErrors.purchase_date && (
-                    <p className="text-destructive text-sm">{fieldErrors.purchase_date}</p>
-                  )}
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <Label>Local da compra</Label>
-                  <div role="radiogroup" aria-label="Local da compra" className="flex flex-wrap gap-2">
-                    {CHANNEL_OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        role="radio"
-                        aria-checked={channel === option.value}
-                        disabled={isSubmitting}
-                        onClick={() => {
-                          setChannel(option.value)
-                          // trocar para uma opção padrão limpa o complemento anterior
-                          if (!channelNeedsComplement(option.value)) setComplement('')
-                          setFieldErrors((current) => ({ ...current, channel: '', complement: '' }))
-                        }}
-                        className={cn(
-                          ACTION_BUTTON_CLASSNAME,
-                          channel === option.value
-                            ? ACTION_BUTTON_SELECTED_CLASSNAME
-                            : ACTION_BUTTON_UNSELECTED_CLASSNAME,
-                        )}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
+            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-1 py-2">
+              {/* 1. Dados Gerais — Data e Local lado a lado em telas largas
+                  (grade de 2 colunas); empilham sem rolagem horizontal no
+                  estreito. Máscara dd/mm/aaaa e validações preservadas. */}
+              <FormSection title="Dados Gerais">
+                <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="purchase-date">Data da compra</Label>
+                    <Input
+                      id="purchase-date"
+                      inputMode="numeric"
+                      maxLength={10}
+                      placeholder="dd/mm/aaaa"
+                      value={purchaseDateText}
+                      onChange={(event) => {
+                        setPurchaseDateText(maskBrDate(event.target.value))
+                        setFieldErrors((current) => ({ ...current, purchase_date: '' }))
+                      }}
+                      disabled={isSubmitting}
+                      aria-invalid={fieldErrors.purchase_date ? true : undefined}
+                      className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-full sm:w-44"
+                    />
+                    {fieldErrors.purchase_date && (
+                      <p className="text-destructive text-sm">{fieldErrors.purchase_date}</p>
+                    )}
                   </div>
-                  {fieldErrors.channel && <p className="text-destructive text-sm">{fieldErrors.channel}</p>}
-                  {channelNeedsComplement(channel) && (
-                    <div className="flex flex-col gap-2">
-                      <Label htmlFor="purchase-complement">{complementLabel(channel)}</Label>
-                      <Input
-                        id="purchase-complement"
-                        value={complement}
-                        maxLength={200}
-                        onChange={(event) => {
-                          setComplement(event.target.value)
-                          setFieldErrors((current) => ({ ...current, complement: '' }))
-                        }}
-                        disabled={isSubmitting}
-                        aria-invalid={fieldErrors.complement ? true : undefined}
-                        className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 max-w-sm"
-                      />
-                      {fieldErrors.complement && (
-                        <p className="text-destructive text-sm">{fieldErrors.complement}</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </section>
 
-              {/* 2. Itens */}
-              <section className="flex flex-col gap-3">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold">Itens</h3>
-                  <span className="text-muted-foreground text-xs">
-                    {items.length}/{MIXED_PURCHASE_MAX_ITEMS}
-                  </span>
+                  <div className="flex flex-col gap-2">
+                    <Label>Local da compra</Label>
+                    <div role="radiogroup" aria-label="Local da compra" className="flex flex-wrap gap-2">
+                      {CHANNEL_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          role="radio"
+                          aria-checked={channel === option.value}
+                          disabled={isSubmitting}
+                          onClick={() => {
+                            setChannel(option.value)
+                            // trocar para uma opção padrão limpa o complemento anterior
+                            if (!channelNeedsComplement(option.value)) setComplement('')
+                            setFieldErrors((current) => ({ ...current, channel: '', complement: '' }))
+                          }}
+                          className={cn(
+                            ACTION_BUTTON_CLASSNAME,
+                            channel === option.value
+                              ? ACTION_BUTTON_SELECTED_CLASSNAME
+                              : ACTION_BUTTON_UNSELECTED_CLASSNAME,
+                          )}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                    {fieldErrors.channel && <p className="text-destructive text-sm">{fieldErrors.channel}</p>}
+                    {channelNeedsComplement(channel) && (
+                      <div className="flex flex-col gap-2">
+                        <Label htmlFor="purchase-complement">{complementLabel(channel)}</Label>
+                        <Input
+                          id="purchase-complement"
+                          value={complement}
+                          maxLength={200}
+                          onChange={(event) => {
+                            setComplement(event.target.value)
+                            setFieldErrors((current) => ({ ...current, complement: '' }))
+                          }}
+                          disabled={isSubmitting}
+                          aria-invalid={fieldErrors.complement ? true : undefined}
+                          className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-full"
+                        />
+                        {fieldErrors.complement && (
+                          <p className="text-destructive text-sm">{fieldErrors.complement}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
+              </FormSection>
+
+              {/* 2. Itens — "+" só ícone no canto direito do cabeçalho da
+                  seção. Cada linha é uma faixa compacta: quebra organizada
+                  no médio/estreito, uma única linha a partir de lg, sem
+                  rolagem horizontal. */}
+              <FormSection
+                title="Itens"
+                headerRight={
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground text-xs tabular-nums">
+                      {items.length}/{MIXED_PURCHASE_MAX_ITEMS}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      onClick={handleAddItem}
+                      disabled={isSubmitting || items.length >= MIXED_PURCHASE_MAX_ITEMS}
+                      aria-label="Adicionar item"
+                      title="Adicionar item"
+                      className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
+                    >
+                      <PlusIcon className="size-4" aria-hidden="true" />
+                    </Button>
+                  </div>
+                }
+              >
                 {fieldErrors.items && <p className="text-destructive text-sm">{fieldErrors.items}</p>}
 
-                <ul className="flex flex-col gap-4">
+                <ul className="flex flex-col gap-3">
                   {items.map((item, index) => {
                     const lineNo = index + 1
                     return (
@@ -874,69 +935,71 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
                         key={item.key}
                         role="group"
                         aria-label={`Item ${lineNo}`}
-                        className="border-border flex flex-col gap-2 rounded-lg border p-3"
+                        className="border-border bg-background rounded-lg border p-3"
                       >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div
-                            role="radiogroup"
-                            aria-label={`Categoria — item ${lineNo}`}
-                            className="flex flex-wrap gap-1.5"
-                          >
-                            {CATEGORY_ORDER.map((category) => {
-                              const Icon = CATEGORY_ICON[category]
-                              return (
-                                <button
-                                  key={category}
-                                  type="button"
-                                  role="radio"
-                                  aria-checked={item.category === category}
-                                  disabled={isSubmitting}
-                                  onClick={() => requestCategoryChange(item.key, category)}
-                                  className={cn(
-                                    ACTION_BUTTON_CLASSNAME,
-                                    'px-2.5 py-1 text-xs',
-                                    item.category === category
-                                      ? ACTION_BUTTON_SELECTED_CLASSNAME
-                                      : ACTION_BUTTON_UNSELECTED_CLASSNAME,
-                                  )}
-                                >
-                                  <Icon className="size-3.5" aria-hidden="true" />
-                                  {CATEGORY_LABEL[category]}
-                                </button>
-                              )
-                            })}
+                        <div
+                          data-line-fields="true"
+                          className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:gap-2 lg:flex-nowrap"
+                        >
+                          {/* Categoria — na MESMA linha dos demais campos,
+                              agora só ícones (Filamento / Acessório /
+                              Embalagem), mantendo o modelo de radiogroup. */}
+                          <div className="flex shrink-0 flex-col gap-1">
+                            <Label className={LINE_LABEL_CLASSNAME}>Categoria</Label>
+                            <div
+                              role="radiogroup"
+                              aria-label={`Categoria — item ${lineNo}`}
+                              className="flex gap-1"
+                            >
+                              {CATEGORY_ORDER.map((category) => {
+                                const Icon = CATEGORY_ICON[category]
+                                const selected = item.category === category
+                                return (
+                                  <button
+                                    key={category}
+                                    type="button"
+                                    role="radio"
+                                    aria-checked={selected}
+                                    aria-label={CATEGORY_LABEL[category]}
+                                    title={CATEGORY_LABEL[category]}
+                                    disabled={isSubmitting}
+                                    onClick={() => requestCategoryChange(item.key, category)}
+                                    className={cn(
+                                      'focus-visible:ring-brand-accent inline-flex size-9 items-center justify-center rounded-md border transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50',
+                                      selected
+                                        ? ACTION_BUTTON_SELECTED_CLASSNAME
+                                        : ACTION_BUTTON_UNSELECTED_CLASSNAME,
+                                    )}
+                                  >
+                                    <Icon className="size-4" aria-hidden="true" />
+                                  </button>
+                                )
+                              })}
+                            </div>
                           </div>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-sm"
-                            onClick={() => handleRemoveItem(item.key)}
-                            disabled={isSubmitting || items.length <= 1}
-                            aria-label={`Remover item ${lineNo}`}
-                            className="text-muted-foreground hover:text-destructive shrink-0"
-                          >
-                            <Trash2Icon className="size-4" aria-hidden="true" />
-                          </Button>
-                        </div>
 
-                        {item.category === 'FILAMENT' ? (
-                          <div className="flex flex-col gap-2">
-                            <div className={FILAMENT_EXTRA_GRID_CLASSNAME}>
-                              <FilamentTypeItemPicker
-                                index={lineNo}
-                                types={activeFilamentTypes}
-                                selectedId={item.filamentTypeId}
-                                onSelect={(id) => {
-                                  updateItem(item.key, { filamentTypeId: id })
-                                  clearItemError(item.key, 'filament_type_id')
-                                }}
-                                disabled={isSubmitting}
-                                error={fieldErrors[`item_${item.key}_filament_type_id`]}
-                                autoFocus={autoFocusItemKey === item.key}
-                              />
-                              <div className="flex flex-col gap-1">
-                                <Label htmlFor={`purchase-manufacturer-${lineNo}`} className="sr-only sm:not-sr-only">
-                                  Fabricante — item {lineNo}
+                          {item.category === 'FILAMENT' ? (
+                            <>
+                              <div className="min-w-0 flex-1 sm:min-w-48 lg:min-w-0">
+                                <FilamentTypeItemPicker
+                                  index={lineNo}
+                                  types={activeFilamentTypes}
+                                  selectedId={item.filamentTypeId}
+                                  onSelect={(id) => {
+                                    updateItem(item.key, { filamentTypeId: id })
+                                    clearItemError(item.key, 'filament_type_id')
+                                  }}
+                                  disabled={isSubmitting}
+                                  error={fieldErrors[`item_${item.key}_filament_type_id`]}
+                                  autoFocus={autoFocusItemKey === item.key}
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1 sm:w-36">
+                                <Label
+                                  htmlFor={`purchase-manufacturer-${lineNo}`}
+                                  className={LINE_LABEL_CLASSNAME}
+                                >
+                                  Fabricante
                                 </Label>
                                 <Input
                                   id={`purchase-manufacturer-${lineNo}`}
@@ -956,45 +1019,45 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
                                   </p>
                                 )}
                               </div>
-                            </div>
-                            <div className="flex flex-col gap-1">
-                              <Label className="sr-only sm:not-sr-only">Peso nominal — item {lineNo}</Label>
-                              <div
-                                role="radiogroup"
-                                aria-label={`Peso nominal — item ${lineNo}`}
-                                className="flex flex-wrap gap-1.5"
-                              >
-                                {NOMINAL_WEIGHT_OPTIONS.map((weight) => (
-                                  <button
-                                    key={weight}
-                                    type="button"
-                                    role="radio"
-                                    aria-checked={item.nominalWeightGrams === weight}
+                              <div className="flex flex-col gap-1 sm:w-36">
+                                <Label className={LINE_LABEL_CLASSNAME}>Peso nominal</Label>
+                                <Select
+                                  items={NOMINAL_WEIGHT_ITEMS}
+                                  value={
+                                    item.nominalWeightGrams === null ? '' : String(item.nominalWeightGrams)
+                                  }
+                                  onValueChange={(value) => {
+                                    updateItem(item.key, {
+                                      nominalWeightGrams: value ? Number(value) : null,
+                                    })
+                                    clearItemError(item.key, 'nominal_weight_grams')
+                                  }}
+                                >
+                                  <SelectTrigger
+                                    id={`purchase-nominal-weight-${lineNo}`}
+                                    aria-label="Peso nominal"
                                     disabled={isSubmitting}
-                                    onClick={() => {
-                                      updateItem(item.key, { nominalWeightGrams: weight })
-                                      clearItemError(item.key, 'nominal_weight_grams')
-                                    }}
-                                    className={cn(
-                                      ACTION_BUTTON_CLASSNAME,
-                                      'px-2.5 py-1 text-xs',
-                                      item.nominalWeightGrams === weight
-                                        ? ACTION_BUTTON_SELECTED_CLASSNAME
-                                        : ACTION_BUTTON_UNSELECTED_CLASSNAME,
-                                    )}
+                                    aria-invalid={
+                                      fieldErrors[`item_${item.key}_nominal_weight_grams`] ? true : undefined
+                                    }
+                                    className="w-full"
                                   >
-                                    {formatGrams(weight)}
-                                  </button>
-                                ))}
+                                    <SelectValue placeholder="Selecione o peso" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {NOMINAL_WEIGHT_OPTIONS.map((weight) => (
+                                      <SelectItem key={weight} value={String(weight)}>
+                                        {formatGrams(weight)}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                {fieldErrors[`item_${item.key}_nominal_weight_grams`] && (
+                                  <p className="text-destructive text-sm">
+                                    {fieldErrors[`item_${item.key}_nominal_weight_grams`]}
+                                  </p>
+                                )}
                               </div>
-                              {fieldErrors[`item_${item.key}_nominal_weight_grams`] && (
-                                <p className="text-destructive text-sm">
-                                  {fieldErrors[`item_${item.key}_nominal_weight_grams`]}
-                                </p>
-                              )}
-                            </div>
-                            <div className={GRID_CLASSNAME}>
-                              <div aria-hidden="true" className="hidden sm:block" />
                               <QuantityAndTotalFields
                                 lineNo={lineNo}
                                 quantity={item.quantity}
@@ -1011,32 +1074,33 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
                                   clearItemError(item.key, 'total_value')
                                 }}
                               />
-                            </div>
-                          </div>
-                        ) : (
-                          <div className={GRID_CLASSNAME}>
-                            <ActiveItemPicker
-                              index={lineNo}
-                              fieldLabel={
-                                item.category === 'ACCESSORY'
-                                  ? `Acessório — item ${lineNo}`
-                                  : `Embalagem — item ${lineNo}`
-                              }
-                              placeholder={
-                                item.category === 'ACCESSORY' ? 'Buscar acessório ativo' : 'Buscar embalagem ativa'
-                              }
-                              items={item.category === 'ACCESSORY' ? accessoryOptions : packagingOptions}
-                              selectedId={item.itemId}
-                              excludeIds={item.category === 'ACCESSORY' ? excludeAccessoryIds : excludePackagingIds}
-                              onSelect={(id) => {
-                                updateItem(item.key, { itemId: id })
-                                clearItemError(item.key, 'item_id')
-                              }}
-                              disabled={isSubmitting}
-                              error={fieldErrors[`item_${item.key}_item_id`]}
-                              autoFocus={autoFocusItemKey === item.key}
-                            />
-                            <QuantityAndTotalFields
+                            </>
+                          ) : (
+                            <>
+                              <div className="min-w-0 flex-1 sm:min-w-48 lg:min-w-0">
+                                <ActiveItemPicker
+                                  index={lineNo}
+                                  fieldLabel={item.category === 'ACCESSORY' ? 'Acessório' : 'Embalagem'}
+                                  placeholder={
+                                    item.category === 'ACCESSORY'
+                                      ? 'Buscar acessório ativo'
+                                      : 'Buscar embalagem ativa'
+                                  }
+                                  items={item.category === 'ACCESSORY' ? accessoryOptions : packagingOptions}
+                                  selectedId={item.itemId}
+                                  excludeIds={
+                                    item.category === 'ACCESSORY' ? excludeAccessoryIds : excludePackagingIds
+                                  }
+                                  onSelect={(id) => {
+                                    updateItem(item.key, { itemId: id })
+                                    clearItemError(item.key, 'item_id')
+                                  }}
+                                  disabled={isSubmitting}
+                                  error={fieldErrors[`item_${item.key}_item_id`]}
+                                  autoFocus={autoFocusItemKey === item.key}
+                                />
+                              </div>
+                              <QuantityAndTotalFields
                                 lineNo={lineNo}
                                 quantity={item.quantity}
                                 totalValueField={item.totalValueField}
@@ -1052,30 +1116,37 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
                                   clearItemError(item.key, 'total_value')
                                 }}
                               />
+                            </>
+                          )}
+
+                          {/* Ações da linha — nunca confundidas com a seleção
+                              de categoria: ícone de lixeira, à direita, com
+                              aria-label próprio. */}
+                          <div className="flex shrink-0 flex-col gap-1">
+                            <span aria-hidden="true" className={cn(LINE_LABEL_CLASSNAME, 'select-none')}>
+                              &nbsp;
+                            </span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleRemoveItem(item.key)}
+                              disabled={isSubmitting || items.length <= 1}
+                              aria-label={`Remover item ${lineNo}`}
+                              className="text-muted-foreground hover:text-destructive"
+                            >
+                              <Trash2Icon className="size-4" aria-hidden="true" />
+                            </Button>
                           </div>
-                        )}
+                        </div>
                       </li>
                     )
                   })}
                 </ul>
-
-                <div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={handleAddItem}
-                    disabled={isSubmitting || items.length >= MIXED_PURCHASE_MAX_ITEMS}
-                    className="border-brand-primary text-brand-primary hover:bg-brand-primary-soft hover:text-brand-primary-dark"
-                  >
-                    <PlusIcon className="size-4" aria-hidden="true" />
-                    Adicionar item
-                  </Button>
-                </div>
-              </section>
+              </FormSection>
 
               {/* 3. Frete */}
-              <section className="flex flex-col gap-3">
-                <h3 className="text-sm font-semibold">Frete</h3>
+              <FormSection title="Frete">
                 <CurrencyInput
                   id="purchase-freight"
                   label="Valor do frete"
@@ -1086,11 +1157,10 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
                 <p className="text-muted-foreground text-xs">
                   O frete pertence ao pedido e é rateado proporcionalmente entre todas as linhas.
                 </p>
-              </section>
+              </FormSection>
 
               {/* 4. Resumo */}
-              <section className="flex flex-col gap-3">
-                <h3 className="text-sm font-semibold">Resumo</h3>
+              <FormSection title="Resumo">
                 <div className="border-brand-primary/20 bg-brand-primary-soft/40 grid grid-cols-3 gap-2 rounded-lg border px-3 py-2">
                   <div>
                     <p className="text-muted-foreground text-xs">Subtotal</p>
@@ -1145,7 +1215,7 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
                   Os custos abaixo são uma <strong>previsão</strong> — o valor final por unidade é
                   calculado pelo servidor ao registrar a compra.
                 </p>
-              </section>
+              </FormSection>
 
               {submitError && <p className="text-destructive text-sm">{submitError}</p>}
             </div>

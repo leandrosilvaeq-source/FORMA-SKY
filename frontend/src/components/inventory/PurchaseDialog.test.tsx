@@ -151,26 +151,32 @@ async function pickItem(user: ReturnType<typeof userEvent.setup>, dialog: HTMLEl
 }
 async function fillQtyTotal(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement, lineNo: number, quantity: string, totalDigits: string) {
   const r = row(dialog, lineNo)
-  await user.type(within(r).getByLabelText(`Quantidade — item ${lineNo}`), quantity)
-  await user.type(within(r).getByLabelText(`Valor total — item ${lineNo}`), totalDigits)
+  await user.type(within(r).getByLabelText('Quantidade'), quantity)
+  await user.type(within(r).getByLabelText('Valor total'), totalDigits)
+}
+// Peso nominal virou uma lista suspensa (base-ui Select): abre o combobox
+// "Peso nominal" da linha e clica na opção (portada para o body -> screen).
+async function pickWeight(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement, lineNo: number, weightLabel: string) {
+  await user.click(within(row(dialog, lineNo)).getByRole('combobox', { name: 'Peso nominal' }))
+  await user.click(await screen.findByRole('option', { name: weightLabel }))
 }
 async function fillAccessoryLine(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement, lineNo: number, opts: { search: string; option: string | RegExp; quantity: string; totalDigits: string }) {
   await setCategory(user, dialog, lineNo, 'Acessório')
-  await pickItem(user, dialog, lineNo, `Acessório — item ${lineNo}`, opts.search, opts.option)
+  await pickItem(user, dialog, lineNo, 'Acessório', opts.search, opts.option)
   await fillQtyTotal(user, dialog, lineNo, opts.quantity, opts.totalDigits)
 }
 async function fillPackagingLine(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement, lineNo: number, opts: { search: string; option: string | RegExp; quantity: string; totalDigits: string }) {
   await setCategory(user, dialog, lineNo, 'Embalagem')
-  await pickItem(user, dialog, lineNo, `Embalagem — item ${lineNo}`, opts.search, opts.option)
+  await pickItem(user, dialog, lineNo, 'Embalagem', opts.search, opts.option)
   await fillQtyTotal(user, dialog, lineNo, opts.quantity, opts.totalDigits)
 }
 async function fillFilamentLine(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement, lineNo: number, opts: { query: string; option: string | RegExp; weight: string; manufacturer: string; quantity: string; totalDigits: string }) {
   await setCategory(user, dialog, lineNo, 'Filamento')
   const r = row(dialog, lineNo)
-  await user.type(within(r).getByRole('combobox', { name: `Tipo de filamento — item ${lineNo}` }), opts.query)
+  await user.type(within(r).getByRole('combobox', { name: 'Tipo de filamento' }), opts.query)
   await user.click(await within(r).findByRole('option', { name: opts.option }))
-  await user.click(within(r).getByRole('radio', { name: opts.weight }))
-  await user.type(within(r).getByLabelText(`Fabricante — item ${lineNo}`), opts.manufacturer)
+  await pickWeight(user, dialog, lineNo, opts.weight)
+  await user.type(within(r).getByLabelText('Fabricante'), opts.manufacturer)
   await fillQtyTotal(user, dialog, lineNo, opts.quantity, opts.totalDigits)
 }
 
@@ -275,7 +281,7 @@ describe('PurchaseDialog — compra mista', () => {
 
     // preenche quantidade + valor (preservados) + fabricante (incompatível)
     await fillQtyTotal(user, dialog, 1, '3', '5000')
-    await user.type(within(row(dialog, 1)).getByLabelText('Fabricante — item 1'), 'Voolt')
+    await user.type(within(row(dialog, 1)).getByLabelText('Fabricante'), 'Voolt')
 
     await setCategory(user, dialog, 1, 'Acessório')
     const confirm = await screen.findByRole('dialog', { name: 'Trocar a categoria da linha?' })
@@ -291,8 +297,8 @@ describe('PurchaseDialog — compra mista', () => {
     )
     expect(within(row(dialog, 1)).getByRole('radio', { name: 'Acessório' })).toHaveAttribute('aria-checked', 'true')
     // quantidade e valor preservados
-    expect((within(row(dialog, 1)).getByLabelText('Quantidade — item 1') as HTMLInputElement).value).toBe('3')
-    expect((within(row(dialog, 1)).getByLabelText('Valor total — item 1') as HTMLInputElement).value).toContain('50,00')
+    expect((within(row(dialog, 1)).getByLabelText('Quantidade') as HTMLInputElement).value).toBe('3')
+    expect((within(row(dialog, 1)).getByLabelText('Valor total') as HTMLInputElement).value).toContain('50,00')
   })
 
   it('registra uma compra mista (Filamento + Acessório + Embalagem) com um único frete e chama a rota /mixed uma vez', async () => {
@@ -368,8 +374,8 @@ describe('PurchaseDialog — compra mista', () => {
 
     // acessório sem valor
     await setCategory(user, dialog, 1, 'Acessório')
-    await pickItem(user, dialog, 1, 'Acessório — item 1', 'Ímã', /Ímã 6x2/)
-    await user.type(within(row(dialog, 1)).getByLabelText('Quantidade — item 1'), '3')
+    await pickItem(user, dialog, 1, 'Acessório', 'Ímã', /Ímã 6x2/)
+    await user.type(within(row(dialog, 1)).getByLabelText('Quantidade'), '3')
     await user.click(within(dialog).getByRole('button', { name: 'Registrar compra' }))
     expect(within(dialog).getByText(/valor total do item, maior que zero/i)).toBeInTheDocument()
     expect(registerMixedInventoryPurchaseMock).not.toHaveBeenCalled()
@@ -384,7 +390,7 @@ describe('PurchaseDialog — compra mista', () => {
     // o mesmo acessório já não aparece nas sugestões da 2ª linha (excludeIds);
     // se forçado, a validação de envio recusa — cobrimos a exclusão da lista:
     await setCategory(user, dialog, 2, 'Acessório')
-    await user.type(within(row(dialog, 2)).getByRole('combobox', { name: 'Acessório — item 2' }), 'Ímã')
+    await user.type(within(row(dialog, 2)).getByRole('combobox', { name: 'Acessório' }), 'Ímã')
     expect(within(row(dialog, 2)).queryByRole('option', { name: /Ímã 6x2/ })).not.toBeInTheDocument()
   })
 
@@ -449,7 +455,7 @@ describe('PurchaseDialog — compra mista', () => {
     await waitFor(() => expect(within(dialog).getByText('Falha na validação da compra.')).toBeInTheDocument())
     // janela continua aberta, dados intactos
     expect(screen.getByRole('dialog', { name: 'Registrar compra' })).toBeInTheDocument()
-    expect((within(row(dialog, 1)).getByLabelText('Quantidade — item 1') as HTMLInputElement).value).toBe('7')
+    expect((within(row(dialog, 1)).getByLabelText('Quantidade') as HTMLInputElement).value).toBe('7')
     expect(within(row(dialog, 1)).getByRole('radio', { name: 'Acessório' })).toHaveAttribute('aria-checked', 'true')
   })
 
@@ -539,8 +545,8 @@ describe('PurchaseDialog — compra mista', () => {
     expect(registerMixedInventoryPurchaseMock.mock.calls[1][0].idempotency_key).toBe(key1)
 
     // muda a quantidade da linha 1 -> chave nova (payload diferente)
-    await user.clear(within(row(dialog, 1)).getByLabelText('Quantidade — item 1'))
-    await user.type(within(row(dialog, 1)).getByLabelText('Quantidade — item 1'), '9')
+    await user.clear(within(row(dialog, 1)).getByLabelText('Quantidade'))
+    await user.type(within(row(dialog, 1)).getByLabelText('Quantidade'), '9')
     await user.click(within(dialog).getByRole('button', { name: 'Registrar compra' }))
     await waitFor(() => expect(registerMixedInventoryPurchaseMock).toHaveBeenCalledTimes(3))
     expect(registerMixedInventoryPurchaseMock.mock.calls[2][0].idempotency_key).not.toBe(key1)
@@ -608,13 +614,13 @@ describe('PurchaseDialog — compra mista', () => {
     await setCategory(user, dialog, 2, 'Filamento')
 
     // linha 2, por teclado
-    const combo2 = within(row(dialog, 2)).getByRole('combobox', { name: 'Tipo de filamento — item 2' })
+    const combo2 = within(row(dialog, 2)).getByRole('combobox', { name: 'Tipo de filamento' })
     await user.type(combo2, 'PETG')
     await user.keyboard('{ArrowDown}{Enter}')
     expect((combo2 as HTMLInputElement).value).toContain('PETG - Matte - Azul')
 
     // linha 1, por mouse
-    const combo1 = within(row(dialog, 1)).getByRole('combobox', { name: 'Tipo de filamento — item 1' })
+    const combo1 = within(row(dialog, 1)).getByRole('combobox', { name: 'Tipo de filamento' })
     await user.type(combo1, 'PLA')
     await user.click(await within(row(dialog, 1)).findByRole('option', { name: 'PLA - Sólida - Preto' }))
     expect((combo1 as HTMLInputElement).value).toContain('PLA - Sólida - Preto')
@@ -627,10 +633,10 @@ describe('PurchaseDialog — compra mista', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Adicionar item' }))
 
     // linha 1 intacta
-    expect((within(row(dialog, 1)).getByLabelText('Quantidade — item 1') as HTMLInputElement).value).toBe('4')
+    expect((within(row(dialog, 1)).getByLabelText('Quantidade') as HTMLInputElement).value).toBe('4')
     // a nova linha 2 recebeu foco no seu primeiro campo (autoFocus)
     await waitFor(() =>
-      expect(within(row(dialog, 2)).getByRole('combobox', { name: 'Acessório — item 2' })).toHaveFocus(),
+      expect(within(row(dialog, 2)).getByRole('combobox', { name: 'Acessório' })).toHaveFocus(),
     )
   })
 
@@ -649,19 +655,25 @@ describe('PurchaseDialog — compra mista', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Remover item 2' }))
     expect(within(dialog).getAllByRole('group', { name: /^Item \d+$/ })).toHaveLength(2)
     // a linha 1 (Ímã, qtd 2) continua intacta
-    expect((within(row(dialog, 1)).getByLabelText('Quantidade — item 1') as HTMLInputElement).value).toBe('2')
+    expect((within(row(dialog, 1)).getByLabelText('Quantidade') as HTMLInputElement).value).toBe('2')
 
     await user.click(within(dialog).getByRole('button', { name: 'Remover item 2' }))
     expect(within(dialog).getAllByRole('group', { name: /^Item \d+$/ })).toHaveLength(1)
     expect(within(dialog).getByRole('button', { name: 'Remover item 1' })).toBeDisabled()
   })
 
-  it('Filamento: Peso nominal exibe "1.000 g" com ponto de milhar; a janela nunca mostra "Código da cor" nem "Peso bruto"', async () => {
+  it('Filamento: Peso nominal é uma lista suspensa "Selecione o peso" com 250 g / 500 g / 1.000 g (ponto de milhar), sem action buttons; a janela nunca mostra "Código da cor" nem "Peso bruto"', async () => {
     const user = userEvent.setup()
     const dialog = await openDialog(user, 'filamentos')
     const r = row(dialog, 1)
-    expect(within(r).getByRole('radio', { name: '1.000 g' })).toBeInTheDocument()
-    expect(within(r).getByRole('radio', { name: '250 g' })).toBeInTheDocument()
+    // não há mais action buttons de peso
+    expect(within(r).queryByRole('radio', { name: '1.000 g' })).not.toBeInTheDocument()
+    expect(within(r).queryByRole('radio', { name: '250 g' })).not.toBeInTheDocument()
+    const weight = within(r).getByRole('combobox', { name: 'Peso nominal' })
+    expect(weight).toHaveTextContent('Selecione o peso')
+    await user.click(weight)
+    const options = (await screen.findAllByRole('option')).map((o) => o.textContent?.trim())
+    expect(options).toEqual(['250 g', '500 g', '1.000 g'])
     expect(within(dialog).queryByText(/código da cor/i)).not.toBeInTheDocument()
     expect(within(dialog).queryByLabelText(/código da cor/i)).not.toBeInTheDocument()
     expect(within(dialog).queryByText(/peso bruto/i)).not.toBeInTheDocument()
@@ -716,14 +728,19 @@ describe('PurchaseDialog — compra mista', () => {
     expect(within(summary).queryByText(/NaN|Infinity/)).not.toBeInTheDocument()
   })
 
-  it('layout da linha: grade de 1 coluna no mobile (grid-cols-1) e multi-coluna a partir de sm', async () => {
+  it('layout da linha: empilha no mobile (flex-col), quebra organizada a partir de sm e vira uma única linha a partir de lg (lg:flex-nowrap), sem rolagem horizontal', async () => {
     const user = userEvent.setup()
     const dialog = await openDialog(user, 'acessorios')
     const r = row(dialog, 1)
-    // o contêiner da grade dos campos da linha
-    const grid = within(r).getByRole('combobox', { name: 'Acessório — item 1' }).closest('.grid') as HTMLElement
-    expect(grid.className).toContain('grid-cols-1')
-    expect(grid.className).toMatch(/sm:grid-cols-\[/)
+    // o contêiner dos campos da linha
+    const line = within(r).getByRole('combobox', { name: 'Acessório' }).closest('[data-line-fields]') as HTMLElement
+    expect(line).not.toBeNull()
+    expect(line.className).toMatch(/(^|\s)flex-col(\s|$)/)
+    expect(line.className).toMatch(/sm:flex-row/)
+    expect(line.className).toMatch(/sm:flex-wrap/)
+    expect(line.className).toMatch(/lg:flex-nowrap/)
+    // nenhum contêiner com overflow-x explícito dentro da janela
+    expect(dialog.querySelector('.overflow-x-auto, .overflow-x-scroll')).toBeNull()
   })
 
   it('erro de NEGÓCIO do backend (business_rule) vira toast e mantém a janela aberta com os dados', async () => {
@@ -738,7 +755,7 @@ describe('PurchaseDialog — compra mista', () => {
 
     await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Esta embalagem está inativa.'))
     expect(screen.getByRole('dialog', { name: 'Registrar compra' })).toBeInTheDocument()
-    expect((within(row(dialog, 1)).getByLabelText('Quantidade — item 1') as HTMLInputElement).value).toBe('2')
+    expect((within(row(dialog, 1)).getByLabelText('Quantidade') as HTMLInputElement).value).toBe('2')
   })
 
   it('o Resumo deixa claro que os custos são uma PREVISÃO (valor final vem do servidor)', async () => {
@@ -774,5 +791,143 @@ describe('PurchaseDialog — compra mista', () => {
     ])
     expect(onPurchaseCompleted).toHaveBeenCalledWith('PACKAGING')
     expect(onPurchaseCompleted).toHaveBeenCalledTimes(1)
+  })
+
+  // =========================================================================
+  // REFINAMENTO VISUAL E RESPONSIVO (2026-09-07) — separação das seções em
+  // blocos, Dados Gerais lado a lado, linha de item compacta, Peso nominal
+  // como lista suspensa, títulos sem "- item N", "+" só ícone no cabeçalho.
+  // Regras de negócio / payload / cálculos / idempotência: inalterados.
+  // =========================================================================
+
+  it('cada seção fica num bloco visual próprio: borda, cantos arredondados, fundo levemente diferenciado e título no topo', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    for (const name of ['Dados Gerais', 'Itens', 'Frete', 'Resumo']) {
+      const heading = within(dialog).getByRole('heading', { name })
+      const section = heading.closest('section') as HTMLElement
+      expect(section).not.toBeNull()
+      expect(section.className).toMatch(/\bborder\b/)
+      expect(section.className).toMatch(/rounded-lg/)
+      expect(section.className).toMatch(/bg-muted/)
+      // título é o primeiro bloco da seção (topo)
+      expect(section.firstElementChild).toContainElement(heading)
+    }
+  })
+
+  it('Dados Gerais: Data da compra e Local da compra ficam no mesmo grid de 2 colunas em telas largas e empilham no estreito', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    const section = within(dialog).getByRole('heading', { name: 'Dados Gerais' }).closest('section') as HTMLElement
+    const grid = within(section).getByLabelText('Data da compra').closest('.grid') as HTMLElement
+    expect(grid).not.toBeNull()
+    expect(grid.className).toMatch(/grid-cols-1/)
+    expect(grid.className).toMatch(/sm:grid-cols-2/)
+    // o Local da compra vive no MESMO grid (lado a lado, não abaixo)
+    expect(grid).toContainElement(within(section).getByRole('radiogroup', { name: 'Local da compra' }))
+  })
+
+  it('Dados Gerais: "Outro Site"/"Presencial" mostram o campo complementar ocupando a largura da coluna, sem desalinhar', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await setChannel(user, dialog, 'Outro Site')
+    const complement = within(dialog).getByLabelText('Nome do site') as HTMLInputElement
+    expect(complement.className).toMatch(/w-full/)
+    // segue dentro da mesma coluna do radiogroup de Local
+    const localColumn = within(dialog).getByRole('radiogroup', { name: 'Local da compra' }).parentElement as HTMLElement
+    expect(localColumn).toContainElement(complement)
+  })
+
+  it('Itens: o botão de adicionar é só ícone, fica no cabeçalho da seção, tem tooltip + aria-label e responde a clique, Enter e Espaço', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'acessorios')
+    const section = within(dialog).getByRole('heading', { name: 'Itens' }).closest('section') as HTMLElement
+    const add = within(section).getByRole('button', { name: 'Adicionar item' })
+    expect(add).toHaveAttribute('title', 'Adicionar item')
+    expect(add).toHaveAttribute('aria-label', 'Adicionar item')
+    expect(add).not.toHaveTextContent('Adicionar item') // sem texto visível — só o ícone "+"
+    expect(add).not.toHaveAttribute('aria-label', expect.stringMatching(/remover/i))
+    // está no cabeçalho da seção (mesmo bloco do título)
+    expect(section.firstElementChild).toContainElement(add)
+
+    // clique adiciona
+    await user.click(add)
+    expect(within(dialog).getAllByRole('group', { name: /^Item \d+$/ })).toHaveLength(2)
+    // teclado: cada adição foca o primeiro campo da nova linha (autoFocus),
+    // então re-focamos o botão antes de cada tecla.
+    add.focus()
+    expect(add).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(within(dialog).getAllByRole('group', { name: /^Item \d+$/ })).toHaveLength(3)
+    add.focus()
+    await user.keyboard(' ')
+    expect(within(dialog).getAllByRole('group', { name: /^Item \d+$/ })).toHaveLength(4)
+  })
+
+  it('Itens (Filamento): categoria + tipo + fabricante + peso + quantidade + valor total + ação ficam no mesmo contêiner de linha compacta', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'filamentos')
+    const r = row(dialog, 1)
+    const line = within(r)
+      .getByRole('radiogroup', { name: 'Categoria — item 1' })
+      .closest('[data-line-fields]') as HTMLElement
+    expect(line).not.toBeNull()
+    expect(line.className).toMatch(/lg:flex-nowrap/)
+    expect(line).toContainElement(within(r).getByRole('combobox', { name: 'Tipo de filamento' }))
+    expect(line).toContainElement(within(r).getByLabelText('Fabricante'))
+    expect(line).toContainElement(within(r).getByRole('combobox', { name: 'Peso nominal' }))
+    expect(line).toContainElement(within(r).getByLabelText('Quantidade'))
+    expect(line).toContainElement(within(r).getByLabelText('Valor total'))
+    expect(line).toContainElement(within(r).getByRole('button', { name: 'Remover item 1' }))
+  })
+
+  it('Peso nominal: escolher "500 g" na lista suspensa envia nominal_weight_grams 500 (valor em gramas, inalterado)', async () => {
+    const user = userEvent.setup()
+    mockFilamentTypes([filamentTypeFixture({ filament_type_id: 't1', material: 'PLA', line: 'Sólida', commercial_color: 'Preto' })])
+    const dialog = await openDialog(user, 'filamentos')
+    await setChannel(user, dialog, 'Mercado Livre')
+    await fillFilamentLine(user, dialog, 1, {
+      query: 'PLA',
+      option: 'PLA - Sólida - Preto',
+      weight: '500 g',
+      manufacturer: 'Voolt',
+      quantity: '3',
+      totalDigits: '9000',
+    })
+    await user.click(within(dialog).getByRole('button', { name: 'Registrar compra' }))
+    await waitFor(() => expect(registerMixedInventoryPurchaseMock).toHaveBeenCalled())
+    expect(registerMixedInventoryPurchaseMock.mock.calls[0][0].items[0]).toEqual({
+      category: 'FILAMENT',
+      filament_type_id: 't1',
+      manufacturer: 'Voolt',
+      nominal_weight_grams: 500,
+      quantity: 3,
+      total_value: 90,
+    })
+  })
+
+  it('os rótulos das linhas não exibem numeração "- item N" (a numeração é só interna/posicional)', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'filamentos')
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar item' }))
+    const r2 = row(dialog, 2)
+    for (const label of ['Categoria', 'Tipo de filamento', 'Fabricante', 'Peso nominal', 'Quantidade', 'Valor total']) {
+      expect(within(r2).getByText(label)).toBeInTheDocument()
+    }
+    expect(within(dialog).queryByText(/[-—]\s*item\s*\d/i)).not.toBeInTheDocument()
+    // a categoria continua rotulada só "Filamento"/"Acessório"/"Embalagem"
+    expect(within(r2).getByRole('radio', { name: 'Filamento' })).toBeInTheDocument()
+  })
+
+  it('editar outros campos da linha preserva o peso nominal já selecionado', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'filamentos')
+    const r = row(dialog, 1)
+    const weight = within(r).getByRole('combobox', { name: 'Peso nominal' })
+    await pickWeight(user, dialog, 1, '1.000 g')
+    expect(weight).toHaveTextContent('1.000 g')
+    await user.type(within(r).getByLabelText('Fabricante'), 'Voolt')
+    await user.type(within(r).getByLabelText('Quantidade'), '2')
+    expect(weight).toHaveTextContent('1.000 g')
   })
 })
