@@ -310,66 +310,118 @@ exception when others then
 end $$;
 
 -- =============================================================================
--- SEÇÃO 16 — Itens inativos / inexistentes -> erro, nada persiste.
+-- SEÇÃO 16 — Itens inativos / inexistentes -> erro, e NADA PERSISTE.
+--
+-- ATOMICIDADE por comparação BASELINE ANTES/DEPOIS (nunca "count = 0"
+-- global). Outras seções ANTERIORES deste mesmo arquivo já criaram
+-- registros dentro do BEGIN externo (compras mistas bem-sucedidas com o
+-- mesmo fixture ft_a e data 2026-09-06) — contar globalmente esperando zero
+-- daria FALSO NEGATIVO. Aqui cada tentativa que deve falhar tem de deixar
+-- TODAS as contagens exatamente iguais ao estado imediatamente anterior a
+-- ela.
+--
+-- Helper: _zz_snapshot() devolve um jsonb com a contagem de todos os
+-- artefatos de compra + o contador de código de rolo do ano corrente.
 -- =============================================================================
+create or replace function pg_temp._zz_snapshot()
+returns jsonb language sql as $fn$
+  select jsonb_build_object(
+    'inventory_purchases',            (select count(*) from public.inventory_purchases),
+    'inv_purchase_filament_items',    (select count(*) from public.inventory_purchase_filament_items),
+    'inv_purchase_accessory_items',   (select count(*) from public.inventory_purchase_accessory_items),
+    'inv_purchase_packaging_items',   (select count(*) from public.inventory_purchase_packaging_items),
+    'filament_spools',                (select count(*) from public.filament_spools),
+    'filament_movements',             (select count(*) from public.filament_movements),
+    'stock_movements',                (select count(*) from public.stock_movements),
+    'spool_code_counter',             (select coalesce(max(last_number), 0) from public.filament_spool_number_counters
+                                        where year = extract(year from (now() at time zone 'America/Sao_Paulo'))::integer)
+  );
+$fn$;
+
 do $$
 declare
-  v_user uuid; v_acc uuid; v_ft_inactive uuid; v_pkg_inactive uuid; v_err text; v_headers int;
+  v_user uuid; v_acc uuid; v_ft_inactive uuid; v_pkg_inactive uuid; v_err text;
+  v_before jsonb; v_after jsonb;
+  v_acc_stock_b int; v_acc_cost_b numeric; v_acc_stock_a int; v_acc_cost_a numeric;
 begin
   select value::uuid into v_user from zz_fixtures where key = 'user';
   select value::uuid into v_ft_inactive from zz_fixtures where key = 'ft_inactive';
   select value::uuid into v_pkg_inactive from zz_fixtures where key = 'pkg_inactive';
   v_acc := (public.create_accessory('TESTE MISTA ACESSORIO S16', null, null, null, true, v_user)).id;
+  perform public.register_stock_movement('ACCESSORY', v_acc, 'INITIAL_BALANCE', 3::numeric, v_user);
+  update public.accessories set unit_cost = 1.75 where id = v_acc;
 
+  -- 16.1 embalagem inativa (3a linha) -> erro; NADA persiste (baseline == depois)
+  select pg_temp._zz_snapshot() into v_before;
+  select current_stock, unit_cost into v_acc_stock_b, v_acc_cost_b from public.accessories where id = v_acc;
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => jsonb_build_array(
+        jsonb_build_object('category','FILAMENT','filament_type_id',(select value from zz_fixtures where key='ft_a')::text,'manufacturer','X','nominal_weight_grams',1000,'quantity',2,'total_value',20.00),
         jsonb_build_object('category','ACCESSORY','accessory_id',v_acc::text,'quantity',1,'total_value',10.00),
         jsonb_build_object('category','PACKAGING','packaging_id',v_pkg_inactive::text,'quantity',1,'total_value',10.00)),
       p_freight_value => 1.00, p_purchase_channel => 'ALIEXPRESS', p_occurred_on => date '2026-09-06',
       p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
-  select count(*) into v_headers from public.inventory_purchases where category = 'MIXED' and purchase_channel = 'ALIEXPRESS';
+  select pg_temp._zz_snapshot() into v_after;
+  select current_stock, unit_cost into v_acc_stock_a, v_acc_cost_a from public.accessories where id = v_acc;
   insert into zz_test_results(section, test_name, status, details)
-  values ('16', '16.1 embalagem inativa -> INVENTORY_PURCHASE_ITEM_INACTIVE; nenhum cabeçalho MIXED criado',
-    case when v_err like 'INVENTORY_PURCHASE_ITEM_INACTIVE:%' and v_headers = 0 then 'PASS' else 'FAIL' end, v_err);
+  values ('16', '16.1 embalagem inativa (3a linha) -> INVENTORY_PURCHASE_ITEM_INACTIVE; TODAS as contagens de artefato iguais ao baseline; saldo/custo do acessório intactos',
+    case when v_err like 'INVENTORY_PURCHASE_ITEM_INACTIVE:%'
+          and v_after = v_before
+          and v_acc_stock_a = v_acc_stock_b and v_acc_cost_a is not distinct from v_acc_cost_b
+         then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s | acc_stock=%s/%s acc_cost=%s/%s',
+      left(v_err, 80), v_before, v_after, v_acc_stock_b, v_acc_stock_a, v_acc_cost_b, v_acc_cost_a));
 
+  -- 16.2 tipo de filamento inativo (linha do MEIO) -> erro; baseline == depois
+  select pg_temp._zz_snapshot() into v_before;
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => jsonb_build_array(
-        jsonb_build_object('category','FILAMENT','filament_type_id',v_ft_inactive::text,'manufacturer','X','nominal_weight_grams',1000,'quantity',1,'total_value',10.00)),
+        jsonb_build_object('category','ACCESSORY','accessory_id',v_acc::text,'quantity',1,'total_value',10.00),
+        jsonb_build_object('category','FILAMENT','filament_type_id',v_ft_inactive::text,'manufacturer','X','nominal_weight_grams',1000,'quantity',1,'total_value',10.00),
+        jsonb_build_object('category','PACKAGING','packaging_id',(select value from zz_fixtures where key='pkg_a')::text,'quantity',1,'total_value',5.00)),
       p_freight_value => 0, p_purchase_channel => 'SHOPEE', p_occurred_on => date '2026-09-06',
       p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
+  select pg_temp._zz_snapshot() into v_after;
   insert into zz_test_results(section, test_name, status, details)
-  values ('16', '16.2 tipo de filamento inativo -> INVENTORY_PURCHASE_ITEM_INACTIVE',
-    case when v_err like 'INVENTORY_PURCHASE_ITEM_INACTIVE:%' then 'PASS' else 'FAIL' end, v_err);
+  values ('16', '16.2 tipo de filamento inativo (linha do meio) -> INVENTORY_PURCHASE_ITEM_INACTIVE; baseline == depois (nenhuma linha das outras categorias persiste)',
+    case when v_err like 'INVENTORY_PURCHASE_ITEM_INACTIVE:%' and v_after = v_before then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s', left(v_err, 80), v_before, v_after));
 
+  -- 16.3 acessório inexistente (1a linha) -> erro; baseline == depois
+  select pg_temp._zz_snapshot() into v_before;
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => jsonb_build_array(
-        jsonb_build_object('category','ACCESSORY','accessory_id',gen_random_uuid()::text,'quantity',1,'total_value',10.00)),
+        jsonb_build_object('category','ACCESSORY','accessory_id',gen_random_uuid()::text,'quantity',1,'total_value',10.00),
+        jsonb_build_object('category','PACKAGING','packaging_id',(select value from zz_fixtures where key='pkg_a')::text,'quantity',1,'total_value',5.00)),
       p_freight_value => 0, p_purchase_channel => 'SHOPEE', p_occurred_on => date '2026-09-06',
       p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
+  select pg_temp._zz_snapshot() into v_after;
   insert into zz_test_results(section, test_name, status, details)
-  values ('16', '16.3 acessório inexistente -> erro "não encontrado"',
-    case when v_err ilike '%não encontrado%' then 'PASS' else 'FAIL' end, v_err);
+  values ('16', '16.3 acessório inexistente (1a linha) -> erro "não encontrado"; baseline == depois',
+    case when v_err ilike '%não encontrado%' and v_after = v_before then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s', left(v_err, 80), v_before, v_after));
 end $$;
 
 -- =============================================================================
 -- SEÇÃO 17 — Duplicidade: acessório repetido / embalagem repetida.
 -- =============================================================================
 do $$
-declare v_user uuid; v_acc uuid; v_pkg uuid; v_err text;
+declare v_user uuid; v_acc uuid; v_pkg uuid; v_err text; v_before jsonb; v_after jsonb;
 begin
   select value::uuid into v_user from zz_fixtures where key = 'user';
   v_acc := (public.create_accessory('TESTE MISTA ACESSORIO S17', null, null, null, true, v_user)).id;
   v_pkg := (public.create_packaging('TESTE MISTA EMBALAGEM S17', null, null, null, true, v_user)).id;
 
+  select pg_temp._zz_snapshot() into v_before;
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => jsonb_build_array(
@@ -379,10 +431,13 @@ begin
       p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
+  select pg_temp._zz_snapshot() into v_after;
   insert into zz_test_results(section, test_name, status, details)
-  values ('17', '17.1 acessório repetido em duas linhas -> erro "repetido"',
-    case when v_err ilike '%acessório repetido%' then 'PASS' else 'FAIL' end, v_err);
+  values ('17', '17.1 acessório repetido em duas linhas -> erro "repetido"; snapshot == baseline',
+    case when v_err ilike '%acessório repetido%' and v_after = v_before then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s', left(v_err, 80), v_before, v_after));
 
+  select pg_temp._zz_snapshot() into v_before;
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => jsonb_build_array(
@@ -392,9 +447,11 @@ begin
       p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
+  select pg_temp._zz_snapshot() into v_after;
   insert into zz_test_results(section, test_name, status, details)
-  values ('17', '17.2 embalagem repetida em duas linhas -> erro "repetida"',
-    case when v_err ilike '%embalagem repetida%' then 'PASS' else 'FAIL' end, v_err);
+  values ('17', '17.2 embalagem repetida em duas linhas -> erro "repetida"; snapshot == baseline',
+    case when v_err ilike '%embalagem repetida%' and v_after = v_before then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s', left(v_err, 80), v_before, v_after));
 
   -- tipo de filamento PODE repetir quando marca/peso diferem
   declare v_ft uuid; v_res jsonb;
@@ -418,17 +475,22 @@ end $$;
 -- SEÇÃO 18 — Limite 1–50.
 -- =============================================================================
 do $$
-declare v_user uuid; v_err text; v_items jsonb; v_acc uuid;
+declare v_user uuid; v_err text; v_items jsonb; v_before jsonb; v_after jsonb;
 begin
   select value::uuid into v_user from zz_fixtures where key = 'user';
+
+  select pg_temp._zz_snapshot() into v_before;
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => '[]'::jsonb, p_freight_value => 0, p_purchase_channel => 'SHOPEE',
       p_occurred_on => date '2026-09-06', p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
+  select pg_temp._zz_snapshot() into v_after;
   insert into zz_test_results(section, test_name, status, details)
-  values ('18', '18.1 lista vazia -> erro (mínimo 1)', case when v_err ilike '%1 a 50%' or v_err ilike '%não vazia%' then 'PASS' else 'FAIL' end, v_err);
+  values ('18', '18.1 lista vazia -> erro (mínimo 1); snapshot == baseline',
+    case when (v_err ilike '%1 a 50%' or v_err ilike '%não vazia%') and v_after = v_before then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s', left(v_err, 80), v_before, v_after));
 
   -- 51 acessórios distintos -> erro
   select jsonb_agg(jsonb_build_object(
@@ -437,14 +499,18 @@ begin
            'quantity',1,'total_value',1.00))
     into v_items
   from generate_series(1, 51) g;
+  select pg_temp._zz_snapshot() into v_before;
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => v_items, p_freight_value => 0, p_purchase_channel => 'SHOPEE',
       p_occurred_on => date '2026-09-06', p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
+  select pg_temp._zz_snapshot() into v_after;
   insert into zz_test_results(section, test_name, status, details)
-  values ('18', '18.2 51 itens -> erro (máximo 50)', case when v_err ilike '%máximo 50%' then 'PASS' else 'FAIL' end, v_err);
+  values ('18', '18.2 51 itens -> erro (máximo 50); snapshot == baseline',
+    case when v_err ilike '%máximo 50%' and v_after = v_before then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s', left(v_err, 80), v_before, v_after));
 end $$;
 
 -- =============================================================================
@@ -658,49 +724,103 @@ exception when others then
 end $$;
 
 -- =============================================================================
--- SEÇÃO 22 — Rollback integral: falha no MEIO da chamada (3a linha inativa)
---   não deixa cabeçalho, itens, rolos, movimentos, saldo nem custo.
+-- SEÇÃO 22 — Rollback / atomicidade INTEGRAL: uma falha em qualquer linha
+--   deixa TODOS os artefatos exatamente como estavam ANTES da chamada.
+--
+-- Estratégia: BASELINE ANTES/DEPOIS (pg_temp._zz_snapshot(), definido na
+--   Seção 16) — NUNCA "count global = 0". Como o BEGIN externo é único e
+--   várias seções anteriores já criaram compras mistas bem-sucedidas com o
+--   mesmo fixture ft_a e a mesma data (por isso, contar
+--   inventory_purchase_filament_items / filament_spools "filtrando por
+--   filament_type_id/received_at" e esperando 0 dava FALSO NEGATIVO — foi a
+--   causa da falha do teste remoto nesta seção), a única asserção correta é
+--   "snapshot depois == snapshot antes". Também compara saldo/custo do
+--   ACESSÓRIO e da EMBALAGEM envolvidos, e o contador de código de rolo.
 -- =============================================================================
 do $$
 declare
-  v_user uuid; v_ft uuid; v_acc uuid; v_pkg_inactive uuid;
-  v_acc_stock_before int; v_acc_cost_before numeric;
-  v_acc_stock_after int; v_acc_cost_after numeric;
-  v_headers int; v_fil_items int; v_spools int; v_movs int; v_err text;
+  v_user uuid; v_ft uuid; v_acc uuid; v_pkg_ok uuid; v_pkg_inactive uuid; v_ft_inactive uuid;
+  v_before jsonb; v_after jsonb; v_err text;
+  v_acc_s_b int; v_acc_c_b numeric; v_acc_s_a int; v_acc_c_a numeric;
+  v_pkg_s_b int; v_pkg_c_b numeric; v_pkg_s_a int; v_pkg_c_a numeric;
 begin
   select value::uuid into v_user from zz_fixtures where key = 'user';
   select value::uuid into v_ft from zz_fixtures where key = 'ft_a';
+  select value::uuid into v_ft_inactive from zz_fixtures where key = 'ft_inactive';
   select value::uuid into v_pkg_inactive from zz_fixtures where key = 'pkg_inactive';
   v_acc := (public.create_accessory('TESTE MISTA ACESSORIO ROLLBACK', null, null, null, true, v_user)).id;
   perform public.register_stock_movement('ACCESSORY', v_acc, 'INITIAL_BALANCE', 4::numeric, v_user);
   update public.accessories set unit_cost = 2.50 where id = v_acc;
-  select current_stock, unit_cost into v_acc_stock_before, v_acc_cost_before from public.accessories where id = v_acc;
+  v_pkg_ok := (public.create_packaging('TESTE MISTA EMBALAGEM ROLLBACK', null, null, null, true, v_user)).id;
+  perform public.register_stock_movement('PACKAGING', v_pkg_ok, 'INITIAL_BALANCE', 7::numeric, v_user);
+  update public.packaging set unit_cost = 1.20 where id = v_pkg_ok;
 
+  -- 22.1 falha na ÚLTIMA linha (embalagem inativa), com filamento + acessório
+  --      + embalagem VÁLIDA antes dela. Snapshot antes/depois.
+  select pg_temp._zz_snapshot() into v_before;
+  select current_stock, unit_cost into v_acc_s_b, v_acc_c_b from public.accessories where id = v_acc;
+  select current_stock, unit_cost into v_pkg_s_b, v_pkg_c_b from public.packaging where id = v_pkg_ok;
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => jsonb_build_array(
         jsonb_build_object('category','FILAMENT','filament_type_id',v_ft::text,'manufacturer','X','nominal_weight_grams',1000,'quantity',2,'total_value',40.00),
         jsonb_build_object('category','ACCESSORY','accessory_id',v_acc::text,'quantity',5,'total_value',30.00),
+        jsonb_build_object('category','PACKAGING','packaging_id',v_pkg_ok::text,'quantity',3,'total_value',12.00),
         jsonb_build_object('category','PACKAGING','packaging_id',v_pkg_inactive::text,'quantity',1,'total_value',10.00)),
       p_freight_value => 5.00, p_purchase_channel => 'OUTRO_SITE', p_occurred_on => date '2026-09-06',
       p_changed_by => v_user, p_supplier_name => 'sitequalquer.com', p_idempotency_key => null);
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
-
-  select current_stock, unit_cost into v_acc_stock_after, v_acc_cost_after from public.accessories where id = v_acc;
-  select count(*) into v_headers from public.inventory_purchases where category = 'MIXED' and purchase_channel = 'OUTRO_SITE' and supplier_name = 'sitequalquer.com';
-  select count(*) into v_fil_items from public.inventory_purchase_filament_items where filament_type_id = v_ft and line_number is not null;
-  select count(*) into v_spools from public.filament_spools where filament_type_id = v_ft and received_at = date '2026-09-06';
-  select count(*) into v_movs from public.stock_movements where item_type='ACCESSORY' and item_id=v_acc and movement_type='PURCHASE';
+  select pg_temp._zz_snapshot() into v_after;
+  select current_stock, unit_cost into v_acc_s_a, v_acc_c_a from public.accessories where id = v_acc;
+  select current_stock, unit_cost into v_pkg_s_a, v_pkg_c_a from public.packaging where id = v_pkg_ok;
 
   insert into zz_test_results(section, test_name, status, details)
-  values ('22', '22.1 3a linha (embalagem inativa) falha -> erro; ZERO cabeçalho/itens de filamento/rolos/movimentos; saldo e custo do acessório intactos',
+  values ('22', '22.1 4a linha (embalagem inativa) falha -> INVENTORY_PURCHASE_ITEM_INACTIVE; snapshot de TODOS os artefatos == baseline; saldo/custo do acessório E da embalagem válida intactos',
     case when v_err like 'INVENTORY_PURCHASE_ITEM_INACTIVE:%'
-          and v_headers = 0 and v_fil_items = 0 and v_spools = 0 and v_movs = 0
-          and v_acc_stock_after = v_acc_stock_before and v_acc_cost_after = v_acc_cost_before
+          and v_after = v_before
+          and v_acc_s_a = v_acc_s_b and v_acc_c_a is not distinct from v_acc_c_b
+          and v_pkg_s_a = v_pkg_s_b and v_pkg_c_a is not distinct from v_pkg_c_b
          then 'PASS' else 'FAIL' end,
-    format('err=%s header=%s fil=%s spools=%s mov=%s stock=%s/%s cost=%s/%s',
-      v_err, v_headers, v_fil_items, v_spools, v_movs, v_acc_stock_before, v_acc_stock_after, v_acc_cost_before, v_acc_cost_after));
+    format('err=%s | before=%s | after=%s | acc=%s/%s (custo %s/%s) | pkg=%s/%s (custo %s/%s)',
+      left(v_err, 80), v_before, v_after,
+      v_acc_s_b, v_acc_s_a, v_acc_c_b, v_acc_c_a, v_pkg_s_b, v_pkg_s_a, v_pkg_c_b, v_pkg_c_a));
+
+  -- 22.2 falha na PRIMEIRA linha (tipo de filamento inativo) -> snapshot intacto
+  select pg_temp._zz_snapshot() into v_before;
+  begin
+    perform public.register_mixed_inventory_purchase(
+      p_items => jsonb_build_array(
+        jsonb_build_object('category','FILAMENT','filament_type_id',v_ft_inactive::text,'manufacturer','X','nominal_weight_grams',1000,'quantity',1,'total_value',10.00),
+        jsonb_build_object('category','ACCESSORY','accessory_id',v_acc::text,'quantity',2,'total_value',8.00),
+        jsonb_build_object('category','PACKAGING','packaging_id',v_pkg_ok::text,'quantity',1,'total_value',4.00)),
+      p_freight_value => 2.00, p_purchase_channel => 'SHOPEE', p_occurred_on => date '2026-09-06',
+      p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
+    v_err := 'sem erro';
+  exception when others then v_err := sqlerrm; end;
+  select pg_temp._zz_snapshot() into v_after;
+  insert into zz_test_results(section, test_name, status, details)
+  values ('22', '22.2 1a linha (tipo de filamento inativo) falha -> snapshot == baseline (a falha antes das linhas seguintes também não persiste nada)',
+    case when v_err like 'INVENTORY_PURCHASE_ITEM_INACTIVE:%' and v_after = v_before then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s', left(v_err, 80), v_before, v_after));
+
+  -- 22.3 falha no MEIO (embalagem inexistente) -> snapshot intacto
+  select pg_temp._zz_snapshot() into v_before;
+  begin
+    perform public.register_mixed_inventory_purchase(
+      p_items => jsonb_build_array(
+        jsonb_build_object('category','ACCESSORY','accessory_id',v_acc::text,'quantity',2,'total_value',8.00),
+        jsonb_build_object('category','PACKAGING','packaging_id',gen_random_uuid()::text,'quantity',1,'total_value',4.00),
+        jsonb_build_object('category','FILAMENT','filament_type_id',v_ft::text,'manufacturer','Y','nominal_weight_grams',500,'quantity',1,'total_value',20.00)),
+      p_freight_value => 0, p_purchase_channel => 'MERCADO_LIVRE', p_occurred_on => date '2026-09-06',
+      p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
+    v_err := 'sem erro';
+  exception when others then v_err := sqlerrm; end;
+  select pg_temp._zz_snapshot() into v_after;
+  insert into zz_test_results(section, test_name, status, details)
+  values ('22', '22.3 linha do meio (embalagem inexistente) falha -> erro "não encontrada"; snapshot == baseline',
+    case when v_err ilike '%não encontrada%' and v_after = v_before then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s', left(v_err, 80), v_before, v_after));
 end $$;
 
 -- =============================================================================
@@ -823,12 +943,13 @@ end $$;
 -- =============================================================================
 do $$
 declare
-  v_user uuid; v_acc uuid; v_err text; v_res jsonb;
+  v_user uuid; v_acc uuid; v_err text; v_res jsonb; v_before jsonb; v_after jsonb;
 begin
   select value::uuid into v_user from zz_fixtures where key = 'user';
   v_acc := (public.create_accessory('TESTE MISTA ACESSORIO S27', null, null, null, true, v_user)).id;
 
-  -- canal inválido
+  -- canal inválido -> erro; nada persiste
+  select pg_temp._zz_snapshot() into v_before;
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => jsonb_build_array(jsonb_build_object('category','ACCESSORY','accessory_id',v_acc::text,'quantity',1,'total_value',10.00)),
@@ -836,10 +957,14 @@ begin
       p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
+  select pg_temp._zz_snapshot() into v_after;
   insert into zz_test_results(section, test_name, status, details)
-  values ('27', '27.1 purchase_channel fora do enum MIXED -> erro', case when v_err ilike '%purchase_channel inválido%' then 'PASS' else 'FAIL' end, v_err);
+  values ('27', '27.1 purchase_channel fora do enum MIXED -> erro; snapshot == baseline',
+    case when v_err ilike '%purchase_channel inválido%' and v_after = v_before then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s', left(v_err, 80), v_before, v_after));
 
-  -- OUTRO_SITE sem complemento -> erro
+  -- OUTRO_SITE sem complemento -> erro; nada persiste
+  select pg_temp._zz_snapshot() into v_before;
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => jsonb_build_array(jsonb_build_object('category','ACCESSORY','accessory_id',v_acc::text,'quantity',1,'total_value',10.00)),
@@ -847,8 +972,11 @@ begin
       p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
+  select pg_temp._zz_snapshot() into v_after;
   insert into zz_test_results(section, test_name, status, details)
-  values ('27', '27.2 OUTRO_SITE sem complemento -> erro (nome do site obrigatório)', case when v_err ilike '%exige o complemento%' then 'PASS' else 'FAIL' end, v_err);
+  values ('27', '27.2 OUTRO_SITE sem complemento -> erro (nome do site obrigatório); snapshot == baseline',
+    case when v_err ilike '%exige o complemento%' and v_after = v_before then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s', left(v_err, 80), v_before, v_after));
 
   -- PRESENCIAL com complemento -> supplier_name gravado; canal gravado
   v_res := public.register_mixed_inventory_purchase(
@@ -874,14 +1002,15 @@ begin
 end $$;
 
 -- =============================================================================
--- SEÇÃO EXTRA — quantidade / dinheiro inválidos.
+-- SEÇÃO EXTRA — quantidade / dinheiro inválidos -> erro E snapshot intacto.
 -- =============================================================================
 do $$
-declare v_user uuid; v_acc uuid; v_err text;
+declare v_user uuid; v_acc uuid; v_err text; v_before jsonb; v_after jsonb;
 begin
   select value::uuid into v_user from zz_fixtures where key = 'user';
   v_acc := (public.create_accessory('TESTE MISTA ACESSORIO SX', null, null, null, true, v_user)).id;
 
+  select pg_temp._zz_snapshot() into v_before;
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => jsonb_build_array(jsonb_build_object('category','ACCESSORY','accessory_id',v_acc::text,'quantity',0,'total_value',10.00)),
@@ -889,9 +1018,13 @@ begin
       p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
+  select pg_temp._zz_snapshot() into v_after;
   insert into zz_test_results(section, test_name, status, details)
-  values ('X', 'X.1 quantity 0 -> erro', case when v_err ilike '%quantity deve ser um inteiro positivo%' then 'PASS' else 'FAIL' end, v_err);
+  values ('X', 'X.1 quantity 0 -> erro; snapshot == baseline',
+    case when v_err ilike '%quantity deve ser um inteiro positivo%' and v_after = v_before then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s', left(v_err, 80), v_before, v_after));
 
+  select pg_temp._zz_snapshot() into v_before;
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => jsonb_build_array(jsonb_build_object('category','ACCESSORY','accessory_id',v_acc::text,'quantity',1,'total_value',0)),
@@ -899,9 +1032,13 @@ begin
       p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
+  select pg_temp._zz_snapshot() into v_after;
   insert into zz_test_results(section, test_name, status, details)
-  values ('X', 'X.2 total_value 0 -> erro (recusado)', case when v_err ilike '%total_value deve ser um número maior que zero%' then 'PASS' else 'FAIL' end, v_err);
+  values ('X', 'X.2 total_value 0 -> erro (recusado); snapshot == baseline',
+    case when v_err ilike '%total_value deve ser um número maior que zero%' and v_after = v_before then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s', left(v_err, 80), v_before, v_after));
 
+  select pg_temp._zz_snapshot() into v_before;
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => jsonb_build_array(jsonb_build_object('category','ACCESSORY','accessory_id',v_acc::text,'quantity',1,'total_value',10.999)),
@@ -909,9 +1046,13 @@ begin
       p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
+  select pg_temp._zz_snapshot() into v_after;
   insert into zz_test_results(section, test_name, status, details)
-  values ('X', 'X.3 total_value com 3 casas -> erro', case when v_err ilike '%no máximo 2 casas%' then 'PASS' else 'FAIL' end, v_err);
+  values ('X', 'X.3 total_value com 3 casas -> erro; snapshot == baseline',
+    case when v_err ilike '%no máximo 2 casas%' and v_after = v_before then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s', left(v_err, 80), v_before, v_after));
 
+  select pg_temp._zz_snapshot() into v_before;
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => jsonb_build_array(jsonb_build_object('category','ACCESSORY','accessory_id',v_acc::text,'quantity',1,'total_value',10.00)),
@@ -919,8 +1060,11 @@ begin
       p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
+  select pg_temp._zz_snapshot() into v_after;
   insert into zz_test_results(section, test_name, status, details)
-  values ('X', 'X.4 frete negativo -> erro', case when v_err ilike '%não pode ser negativo%' then 'PASS' else 'FAIL' end, v_err);
+  values ('X', 'X.4 frete negativo -> erro; snapshot == baseline',
+    case when v_err ilike '%não pode ser negativo%' and v_after = v_before then 'PASS' else 'FAIL' end,
+    format('err=%s | before=%s | after=%s', left(v_err, 80), v_before, v_after));
 end $$;
 
 -- =============================================================================
