@@ -394,7 +394,7 @@ describe('PurchaseDialog — compra mista', () => {
     expect(within(row(dialog, 2)).queryByRole('option', { name: /Ímã 6x2/ })).not.toBeInTheDocument()
   })
 
-  it('o Resumo mostra Subtotal / Frete / Total e, por linha, frete atribuído + "Custo desta compra/un."; Acessório/Embalagem também "Novo custo médio/un." e Filamento não', async () => {
+  it('os totais Subtotal / Frete / Total vivem na barra fixa; o Resumo rolável guarda só os detalhes por linha (frete atribuído + "Custo desta compra/un."; Acessório/Embalagem também "Novo custo médio/un." e Filamento não)', async () => {
     const user = userEvent.setup()
     mockAccessories([accessoryFixture({ id: 'a1', name: 'Ímã 6x2', variant: 'azul', current_stock: 0, unit_cost: null })])
     mockFilamentTypes([filamentTypeFixture({ filament_type_id: 't1', material: 'PLA', line: 'Sólida', commercial_color: 'Preto' })])
@@ -412,12 +412,19 @@ describe('PurchaseDialog — compra mista', () => {
     })
     await user.type(within(dialog).getByLabelText('Valor do frete'), '1000')
 
-    const summary = within(dialog).getByRole('heading', { name: 'Resumo' }).closest('section') as HTMLElement
-    expect(within(summary).getByText('Subtotal')).toBeInTheDocument()
-    expect(within(summary).getByText('Total da compra')).toBeInTheDocument()
+    // Subtotal / Frete / Total da compra: só na barra fixa
+    const totals = within(dialog).getByRole('group', { name: 'Totais da compra' })
+    expect(within(totals).getByText('Subtotal')).toBeInTheDocument()
+    expect(within(totals).getByText('Frete')).toBeInTheDocument()
+    expect(within(totals).getByText('Total da compra')).toBeInTheDocument()
     // Subtotal 20,00 + 80,00 = 100,00; Total 110,00
-    expect(within(summary).getByText('R$ 100,00')).toBeInTheDocument()
-    expect(within(summary).getByText('R$ 110,00')).toBeInTheDocument()
+    expect(within(totals).getByText('R$ 100,00')).toBeInTheDocument()
+    expect(within(totals).getByText('R$ 110,00')).toBeInTheDocument()
+
+    const summary = within(dialog).getByRole('heading', { name: 'Resumo' }).closest('section') as HTMLElement
+    // nada de Subtotal / Total duplicados na seção rolável
+    expect(within(summary).queryByText('Subtotal')).not.toBeInTheDocument()
+    expect(within(summary).queryByText('Total da compra')).not.toBeInTheDocument()
 
     const summaryItems = within(summary).getAllByText(/Frete atribuído:/)
     expect(summaryItems).toHaveLength(2)
@@ -694,8 +701,9 @@ describe('PurchaseDialog — compra mista', () => {
     await setChannel(user, dialog, 'Shopee')
     await fillAccessoryLine(user, dialog, 1, { search: 'Ímã', option: /Ímã 6x2/, quantity: '3', totalDigits: '10000' })
 
-    const summary = within(dialog).getByRole('heading', { name: 'Resumo' }).closest('section') as HTMLElement
-    expect(within(summary).getAllByText('R$ 100,00').length).toBeGreaterThan(0)
+    // subtotal (e total, com frete zero) = R$ 100,00 na barra fixa
+    const totals = within(dialog).getByRole('group', { name: 'Totais da compra' })
+    expect(within(totals).getAllByText('R$ 100,00').length).toBeGreaterThanOrEqual(1)
 
     await user.click(within(dialog).getByRole('button', { name: 'Registrar compra' }))
     await waitFor(() => expect(registerMixedInventoryPurchaseMock).toHaveBeenCalled())
@@ -711,21 +719,21 @@ describe('PurchaseDialog — compra mista', () => {
     const dialog = await openDialog(user, 'acessorios')
     await fillAccessoryLine(user, dialog, 1, { search: 'Ímã', option: /Ímã 6x2/, quantity: '1', totalDigits: '3000' })
     await user.type(within(dialog).getByLabelText('Valor do frete'), '1000')
-    const summary = within(dialog).getByRole('heading', { name: 'Resumo' }).closest('section') as HTMLElement
-    expect(within(summary).getByText('R$ 40,00')).toBeInTheDocument() // 30 + 10 frete
+    const totals = within(dialog).getByRole('group', { name: 'Totais da compra' })
+    expect(within(totals).getByText('R$ 40,00')).toBeInTheDocument() // 30 + 10 frete
 
     await user.click(within(dialog).getByRole('button', { name: 'Adicionar item' }))
     await fillAccessoryLine(user, dialog, 2, { search: 'Parafuso', option: /Parafuso/, quantity: '1', totalDigits: '2000' })
     // subtotal 50, frete ainda 10 (somado uma vez) -> total 60
-    expect(within(summary).getByText('R$ 60,00')).toBeInTheDocument()
+    expect(within(totals).getByText('R$ 60,00')).toBeInTheDocument()
   })
 
-  it('quantidade/valores em branco não produzem NaN nem Infinity — o Resumo mostra R$ 0,00', async () => {
+  it('quantidade/valores em branco não produzem NaN nem Infinity — a barra de totais mostra R$ 0,00', async () => {
     const user = userEvent.setup()
     const dialog = await openDialog(user, 'acessorios')
-    const summary = within(dialog).getByRole('heading', { name: 'Resumo' }).closest('section') as HTMLElement
-    expect(within(summary).getAllByText('R$ 0,00').length).toBeGreaterThanOrEqual(3) // subtotal, frete, total
-    expect(within(summary).queryByText(/NaN|Infinity/)).not.toBeInTheDocument()
+    const totals = within(dialog).getByRole('group', { name: 'Totais da compra' })
+    expect(within(totals).getAllByText('R$ 0,00')).toHaveLength(3) // subtotal, frete, total
+    expect(within(dialog).queryByText(/NaN|Infinity/)).not.toBeInTheDocument()
   })
 
   it('layout da linha: empilha no mobile (flex-col), quebra organizada a partir de sm e vira uma única linha a partir de lg (lg:flex-nowrap), sem rolagem horizontal', async () => {
@@ -815,16 +823,23 @@ describe('PurchaseDialog — compra mista', () => {
     }
   })
 
-  it('Dados Gerais: Data da compra e Local da compra ficam no mesmo grid de 2 colunas em telas largas e empilham no estreito', async () => {
+  it('Dados Gerais: Data da compra e os cinco botões de Local da compra ficam no MESMO contêiner horizontal em telas largas e empilham no estreito', async () => {
     const user = userEvent.setup()
     const dialog = await openDialog(user)
     const section = within(dialog).getByRole('heading', { name: 'Dados Gerais' }).closest('section') as HTMLElement
-    const grid = within(section).getByLabelText('Data da compra').closest('.grid') as HTMLElement
-    expect(grid).not.toBeNull()
-    expect(grid.className).toMatch(/grid-cols-1/)
-    expect(grid.className).toMatch(/sm:grid-cols-2/)
-    // o Local da compra vive no MESMO grid (lado a lado, não abaixo)
-    expect(grid).toContainElement(within(section).getByRole('radiogroup', { name: 'Local da compra' }))
+    const container = within(section)
+      .getByLabelText('Data da compra')
+      .closest('[data-general-fields]') as HTMLElement
+    expect(container).not.toBeNull()
+    // empilha no estreito, vira uma única linha de controles a partir de sm
+    expect(container.className).toMatch(/(^|\s)flex-col(\s|$)/)
+    expect(container.className).toMatch(/sm:flex-row/)
+    // Data + radiogroup de Local + os cinco botões vivem no MESMO contêiner
+    const localGroup = within(section).getByRole('radiogroup', { name: 'Local da compra' })
+    expect(container).toContainElement(localGroup)
+    for (const label of ['Mercado Livre', 'Shopee', 'AliExpress', 'Outro Site', 'Presencial']) {
+      expect(container).toContainElement(within(localGroup).getByRole('radio', { name: label }))
+    }
   })
 
   it('Dados Gerais: "Outro Site"/"Presencial" mostram o campo complementar ocupando a largura da coluna, sem desalinhar', async () => {
@@ -929,5 +944,173 @@ describe('PurchaseDialog — compra mista', () => {
     await user.type(within(r).getByLabelText('Fabricante'), 'Voolt')
     await user.type(within(r).getByLabelText('Quantidade'), '2')
     expect(weight).toHaveTextContent('1.000 g')
+  })
+
+  // =========================================================================
+  // SEGUNDO REFINAMENTO VISUAL (2026-09-07) — "Dados Gerais" numa única linha
+  // de controles em telas largas (Data + cinco botões de Local alinhados),
+  // "Tipo de filamento" com prioridade de largura, janela mais larga porém
+  // limitada ao viewport, e barra fixa de totais (Subtotal / Frete / Total)
+  // fora da área rolável. Payload / cálculos / idempotência / endpoint
+  // /inventory-purchases/mixed: inalterados.
+  // =========================================================================
+
+  it('a janela é mais larga (≈max-w-6xl) mas limitada ao viewport, mantendo margens laterais no celular', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    expect(dialog.className).toContain('sm:max-w-[min(72rem,calc(100vw-2rem))]')
+    expect(dialog.className).toContain('max-w-[calc(100vw-2rem)]')
+    expect(dialog.querySelector('.overflow-x-auto, .overflow-x-scroll')).toBeNull()
+  })
+
+  it('Dados Gerais: os controles compartilham o alinhamento vertical (sm:items-start) e, no estreito, empilham (flex-col)', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    const container = within(dialog)
+      .getByLabelText('Data da compra')
+      .closest('[data-general-fields]') as HTMLElement
+    expect(container).not.toBeNull()
+    expect(container.className).toMatch(/(^|\s)flex-col(\s|$)/)
+    expect(container.className).toMatch(/sm:flex-row/)
+    expect(container.className).toMatch(/sm:items-start/)
+  })
+
+  it('Dados Gerais: "Outro Site"/"Presencial" complementam numa linha ABAIXO do grupo, dentro da coluna de Local da compra', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await setChannel(user, dialog, 'Presencial')
+    const localGroup = within(dialog).getByRole('radiogroup', { name: 'Local da compra' })
+    const localColumn = localGroup.parentElement as HTMLElement
+    const complement = within(dialog).getByLabelText('Nome da loja')
+    expect(localColumn).toContainElement(localGroup)
+    expect(localColumn).toContainElement(complement)
+    // vem DEPOIS do grupo no DOM (linha complementar abaixo)
+    expect(
+      localGroup.compareDocumentPosition(complement) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('Itens: "Tipo de filamento" tem prioridade de largura (flex-1 + min-width que cresce); os campos menores seguem com largura fixa', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'filamentos')
+    const r = row(dialog, 1)
+    const typeWrapper = within(r)
+      .getByRole('combobox', { name: 'Tipo de filamento' })
+      .closest('.flex-1') as HTMLElement
+    expect(typeWrapper).not.toBeNull()
+    expect(typeWrapper.className).toMatch(/lg:min-w-64/)
+    expect(within(r).getByLabelText('Fabricante').closest('div')?.className).toMatch(/sm:w-/)
+    expect(within(r).getByLabelText('Quantidade').closest('div')?.className).toMatch(/sm:w-/)
+  })
+
+  it('Itens: o rótulo selecionado de "Tipo de filamento" continua acessível por completo (valor no campo + tooltip title)', async () => {
+    const user = userEvent.setup()
+    mockFilamentTypes([filamentTypeFixture({ filament_type_id: 't1', material: 'PLA', line: 'Sólida', commercial_color: 'Preto' })])
+    const dialog = await openDialog(user, 'filamentos')
+    const r = row(dialog, 1)
+    const combo = within(r).getByRole('combobox', { name: 'Tipo de filamento' }) as HTMLInputElement
+    await user.type(combo, 'PLA')
+    await user.click(await within(r).findByRole('option', { name: 'PLA - Sólida - Preto' }))
+    expect(combo.value).toBe('PLA - Sólida - Preto')
+    expect(combo).toHaveAttribute('title', 'PLA - Sólida - Preto')
+  })
+
+  it('a área central rolável é a ÚNICA região com rolagem vertical; a barra de totais e o rodapé ficam fora dela', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    const scrollRegions = dialog.querySelectorAll('.overflow-y-auto')
+    expect(scrollRegions).toHaveLength(1)
+    const scroll = scrollRegions[0]
+    const totals = within(dialog).getByRole('group', { name: 'Totais da compra' })
+    const footer = within(dialog)
+      .getByRole('button', { name: 'Registrar compra' })
+      .closest('[data-slot="dialog-footer"]') as HTMLElement
+    expect(scroll.contains(totals)).toBe(false)
+    expect(scroll.contains(footer)).toBe(false)
+    // a barra de totais vem logo antes do rodapé de ações
+    expect(totals.nextElementSibling).toBe(footer)
+  })
+
+  it('a barra fixa mostra Subtotal / Frete / Total fora da área rolável, com fundo sólido + borda superior, sem duplicar os valores no Resumo', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'acessorios')
+    const totals = within(dialog).getByRole('group', { name: 'Totais da compra' })
+    expect(totals.className).toMatch(/bg-popover/)
+    expect(totals.className).toMatch(/border-t/)
+    for (const label of ['Subtotal', 'Frete', 'Total da compra']) {
+      expect(within(totals).getByText(label)).toBeInTheDocument()
+    }
+    const summary = within(dialog).getByRole('heading', { name: 'Resumo' }).closest('section') as HTMLElement
+    expect(within(summary).queryByText('Subtotal')).not.toBeInTheDocument()
+    expect(within(summary).queryByText('Total da compra')).not.toBeInTheDocument()
+    // "Total da compra" aparece uma única vez em toda a janela
+    expect(within(dialog).getAllByText('Total da compra')).toHaveLength(1)
+  })
+
+  it('a barra fixa de totais reage na hora às mudanças dos itens e do frete', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'acessorios')
+    const totals = within(dialog).getByRole('group', { name: 'Totais da compra' })
+    expect(within(totals).getAllByText('R$ 0,00')).toHaveLength(3)
+
+    await setChannel(user, dialog, 'Shopee')
+    await fillAccessoryLine(user, dialog, 1, { search: 'Ímã', option: /Ímã 6x2/, quantity: '2', totalDigits: '3000' })
+    // subtotal e total = R$ 30,00 (frete ainda zero)
+    expect(within(totals).getAllByText('R$ 30,00')).toHaveLength(2)
+
+    await user.type(within(dialog).getByLabelText('Valor do frete'), '1000')
+    expect(within(totals).getByText('R$ 10,00')).toBeInTheDocument() // frete
+    expect(within(totals).getByText('R$ 40,00')).toBeInTheDocument() // total
+  })
+
+  it('o rodapé Cancelar / Registrar compra permanece visível, fora da área rolável', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    const footer = within(dialog)
+      .getByRole('button', { name: 'Registrar compra' })
+      .closest('[data-slot="dialog-footer"]') as HTMLElement
+    expect(footer).not.toBeNull()
+    expect(within(footer).getByRole('button', { name: 'Cancelar' })).toBeInTheDocument()
+    expect(within(footer).getByRole('button', { name: 'Registrar compra' })).toBeInTheDocument()
+    expect(dialog.querySelector('.overflow-y-auto')?.contains(footer)).toBe(false)
+  })
+
+  it('regressão responsiva: no estreito "Dados Gerais" e a linha de item empilham (flex-col) e não há rolagem horizontal', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'filamentos')
+    const general = within(dialog)
+      .getByLabelText('Data da compra')
+      .closest('[data-general-fields]') as HTMLElement
+    expect(general.className).toMatch(/(^|\s)flex-col(\s|$)/)
+    const line = within(row(dialog, 1))
+      .getByRole('combobox', { name: 'Tipo de filamento' })
+      .closest('[data-line-fields]') as HTMLElement
+    expect(line.className).toMatch(/(^|\s)flex-col(\s|$)/)
+    expect(line.className).toMatch(/sm:flex-row/)
+    expect(dialog.querySelector('.overflow-x-auto, .overflow-x-scroll')).toBeNull()
+  })
+
+  it('payload, cálculos e submissão seguem inalterados após o refinamento visual (rota /mixed uma vez, total_value inteiro, frete uma vez)', async () => {
+    const user = userEvent.setup()
+    mockFilamentTypes([filamentTypeFixture({ filament_type_id: 't1', material: 'PLA', line: 'Sólida', commercial_color: 'Preto' })])
+    const dialog = await openDialog(user, 'filamentos')
+    await setChannel(user, dialog, 'Mercado Livre')
+    await fillFilamentLine(user, dialog, 1, {
+      query: 'PLA',
+      option: 'PLA - Sólida - Preto',
+      weight: '1.000 g',
+      manufacturer: 'Voolt',
+      quantity: '3',
+      totalDigits: '10000',
+    })
+    await user.type(within(dialog).getByLabelText('Valor do frete'), '1500')
+    await user.click(within(dialog).getByRole('button', { name: 'Registrar compra' }))
+    await waitFor(() => expect(registerMixedInventoryPurchaseMock).toHaveBeenCalledTimes(1))
+    const payload = registerMixedInventoryPurchaseMock.mock.calls[0][0]
+    expect(payload.freight_value).toBe(15)
+    expect(payload.purchase_channel).toBe('MERCADO_LIVRE')
+    expect(payload.items).toEqual([
+      { category: 'FILAMENT', filament_type_id: 't1', manufacturer: 'Voolt', nominal_weight_grams: 1000, quantity: 3, total_value: 100 },
+    ])
   })
 })

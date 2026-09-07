@@ -77,8 +77,11 @@ function formatGrams(value: number): string {
   return `${value.toLocaleString('pt-BR')} g`
 }
 
+// h-8 casa exatamente com a altura do <Input> (Data da compra) — assim, na
+// linha única de "Dados Gerais" em telas largas, o campo de data e os cinco
+// botões de "Local da compra" compartilham o mesmo alinhamento vertical.
 const ACTION_BUTTON_CLASSNAME =
-  'focus-visible:ring-brand-accent inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50'
+  'focus-visible:ring-brand-accent inline-flex h-8 items-center gap-2 rounded-md border px-3 text-sm font-medium transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50'
 const ACTION_BUTTON_SELECTED_CLASSNAME = 'border-brand-primary bg-brand-primary-soft text-brand-primary-dark'
 const ACTION_BUTTON_UNSELECTED_CLASSNAME =
   'border-input text-muted-foreground hover:bg-muted hover:text-foreground'
@@ -327,6 +330,7 @@ function FilamentTypeItemPicker({
           suggestions={suggestions}
           onSelect={handleSelect}
           ariaLabel={fieldLabel}
+          title={searchTerm || undefined}
           placeholder="Buscar por material, linha ou cor"
           clearLabel={`Limpar seleção de tipo de filamento — item ${index}`}
           listboxId={`purchase-filament-type-listbox-${index}`}
@@ -805,7 +809,12 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
       </Button>
 
       <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-        <DialogContent className="flex max-h-[90vh] flex-col gap-0 overflow-hidden sm:max-w-4xl">
+        {/* Janela larga o suficiente para a linha de item caber "Tipo de
+            filamento" com folga, mas nunca ultrapassa o viewport:
+            max-w-[calc(100vw-2rem)] mantém margens laterais no celular e
+            sm:max-w-[min(72rem,calc(100vw-2rem))] limita a ~max-w-6xl (72rem)
+            no desktop sem estourar a tela. */}
+        <DialogContent className="flex max-h-[90vh] max-w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden sm:max-w-[min(72rem,calc(100vw-2rem))]">
           <DialogHeader>
             <DialogTitle>Registrar compra</DialogTitle>
             <DialogDescription>
@@ -821,12 +830,21 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
             }}
           >
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-1 py-2">
-              {/* 1. Dados Gerais — Data e Local lado a lado em telas largas
-                  (grade de 2 colunas); empilham sem rolagem horizontal no
-                  estreito. Máscara dd/mm/aaaa e validações preservadas. */}
+              {/* 1. Dados Gerais — em telas largas a Data da compra e os cinco
+                  botões de "Local da compra" ficam na MESMA linha de controles
+                  (flex-row + items-start = mesmo alinhamento vertical); a Data
+                  ocupa só a largura do seu conteúdo e "Local da compra" recebe
+                  o restante (flex-1) para os cinco botões caberem lado a lado.
+                  "Nome do site"/"Nome da loja" descem numa linha complementar
+                  dentro da própria coluna de Local. No estreito tudo empilha
+                  (flex-col), sem rolagem horizontal. Máscara dd/mm/aaaa e
+                  validações preservadas. */}
               <FormSection title="Dados Gerais">
-                <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2">
-                  <div className="flex flex-col gap-2">
+                <div
+                  data-general-fields="true"
+                  className="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-6"
+                >
+                  <div className="flex flex-col gap-2 sm:shrink-0">
                     <Label htmlFor="purchase-date">Data da compra</Label>
                     <Input
                       id="purchase-date"
@@ -847,7 +865,7 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
                     )}
                   </div>
 
-                  <div className="flex flex-col gap-2">
+                  <div className="flex min-w-0 flex-1 flex-col gap-2">
                     <Label>Local da compra</Label>
                     <div role="radiogroup" aria-label="Local da compra" className="flex flex-wrap gap-2">
                       {CHANNEL_OPTIONS.map((option) => (
@@ -888,7 +906,7 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
                           }}
                           disabled={isSubmitting}
                           aria-invalid={fieldErrors.complement ? true : undefined}
-                          className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-full"
+                          className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 w-full sm:max-w-sm"
                         />
                         {fieldErrors.complement && (
                           <p className="text-destructive text-sm">{fieldErrors.complement}</p>
@@ -980,7 +998,14 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
 
                           {item.category === 'FILAMENT' ? (
                             <>
-                              <div className="min-w-0 flex-1 sm:min-w-48 lg:min-w-0">
+                              {/* "Tipo de filamento" tem prioridade de largura:
+                                  flex-1 consome toda a folga da linha (os demais
+                                  campos têm largura fixa) e o min-width cresce
+                                  com o breakpoint (lg:min-w-64) para o rótulo
+                                  "Material - Linha - Cor" nunca ficar espremido.
+                                  Nomes fora do comum continuam legíveis via
+                                  tooltip (title) no próprio campo. */}
+                              <div className="min-w-0 flex-1 sm:min-w-56 lg:min-w-64">
                                 <FilamentTypeItemPicker
                                   index={lineNo}
                                   types={activeFilamentTypes}
@@ -1077,7 +1102,7 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
                             </>
                           ) : (
                             <>
-                              <div className="min-w-0 flex-1 sm:min-w-48 lg:min-w-0">
+                              <div className="min-w-0 flex-1 sm:min-w-56 lg:min-w-64">
                                 <ActiveItemPicker
                                   index={lineNo}
                                   fieldLabel={item.category === 'ACCESSORY' ? 'Acessório' : 'Embalagem'}
@@ -1159,22 +1184,12 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
                 </p>
               </FormSection>
 
-              {/* 4. Resumo */}
+              {/* 4. Resumo — SÓ os detalhes por linha (frete rateado, "Custo
+                  desta compra/un." e, p/ Acessório/Embalagem, "Novo custo
+                  médio/un."). Subtotal / Frete / Total da compra saíram daqui:
+                  vivem agora na barra fixa inferior, fora da área rolável, e
+                  nunca são duplicados. */}
               <FormSection title="Resumo">
-                <div className="border-brand-primary/20 bg-brand-primary-soft/40 grid grid-cols-3 gap-2 rounded-lg border px-3 py-2">
-                  <div>
-                    <p className="text-muted-foreground text-xs">Subtotal</p>
-                    <p className="text-sm font-medium tabular-nums">{formatBRL(centsToAmount(subtotalCents))}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground text-xs">Frete</p>
-                    <p className="text-sm font-medium tabular-nums">{formatBRL(centsToAmount(freightField.cents))}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground text-xs">Total da compra</p>
-                    <p className="text-sm font-semibold tabular-nums">{formatBRL(centsToAmount(totalCents))}</p>
-                  </div>
-                </div>
                 <p className="text-muted-foreground text-xs">
                   {items.length} {items.length === 1 ? 'linha' : 'linhas'} · {totalQuantity}{' '}
                   {totalQuantity === 1 ? 'unidade' : 'unidades'}
@@ -1218,6 +1233,39 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
               </FormSection>
 
               {submitError && <p className="text-destructive text-sm">{submitError}</p>}
+            </div>
+
+            {/* Barra fixa de totais — FORA da área rolável, logo acima do
+                rodapé de ações. Fundo sólido (bg-popover) + borda superior
+                para o conteúdo rolável nunca aparecer por baixo; compacta
+                (uma linha de três colunas), com o Total da compra em maior
+                destaque. Reage na hora a qualquer mudança de item ou frete
+                (deriva do mesmo estado do Resumo) e é anunciada por leitores
+                de tela (role="group" + aria-live="polite"). */}
+            <div
+              role="group"
+              aria-label="Totais da compra"
+              aria-live="polite"
+              className="bg-popover border-input mt-3 grid grid-cols-3 items-baseline gap-2 border-t px-1 pt-3"
+            >
+              <div className="min-w-0">
+                <p className="text-muted-foreground text-xs">Subtotal</p>
+                <p className="text-sm font-medium break-words tabular-nums">
+                  {formatBRL(centsToAmount(subtotalCents))}
+                </p>
+              </div>
+              <div className="min-w-0">
+                <p className="text-muted-foreground text-xs">Frete</p>
+                <p className="text-sm font-medium break-words tabular-nums">
+                  {formatBRL(centsToAmount(freightField.cents))}
+                </p>
+              </div>
+              <div className="min-w-0">
+                <p className="text-muted-foreground text-xs">Total da compra</p>
+                <p className="text-brand-primary-dark text-base font-bold break-words tabular-nums">
+                  {formatBRL(centsToAmount(totalCents))}
+                </p>
+              </div>
             </div>
 
             <DialogFooter className="mt-3 border-t pt-3">

@@ -37,6 +37,12 @@ export interface SearchAutocompleteProps {
   listboxAriaLabel: string
   noResultsText: string
   className?: string
+  // Opcional: `title` nativo repassado ao <input> — mostra o texto completo
+  // num tooltip quando o valor selecionado é mais longo que a largura do
+  // campo (usado pelo seletor de "Tipo de filamento" em PurchaseDialog.tsx,
+  // cujos rótulos "Material - Linha - Cor" podem ser extensos). Nenhum
+  // chamador anterior passa este prop, então nada muda para eles.
+  title?: string
   // Opcional (2026-09-04, "Compra de filamentos" compacta): foca o campo ao
   // montar — usado só quando uma nova linha é adicionada dinamicamente a uma
   // lista (ex.: PurchaseDialog.tsx, "Adicionar filamento"), nunca no
@@ -93,6 +99,7 @@ export function SearchAutocomplete({
   noResultsText,
   className,
   autoFocus,
+  title,
 }: SearchAutocompleteProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
@@ -227,6 +234,7 @@ export function SearchAutocomplete({
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
         aria-label={ariaLabel}
+        title={title}
         autoComplete="off"
         autoFocus={autoFocus}
         className="focus-visible:border-brand-primary focus-visible:ring-brand-accent/50 pr-8 pl-8"
