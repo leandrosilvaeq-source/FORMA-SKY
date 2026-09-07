@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatDateToBrDate, formatIsoToBrShort, maskBrDate, parseBrDate } from './brDate'
+import { formatDateToBrDate, formatIsoDateToBrShort, formatMovementDateTime, maskBrDate, parseBrDate } from './brDate'
 
 describe('maskBrDate', () => {
   it('insere as barras automaticamente ao digitar só números (06092026 -> 06/09/2026)', () => {
@@ -85,17 +85,45 @@ describe('formatDateToBrDate', () => {
   })
 })
 
-describe('formatIsoToBrShort', () => {
-  it('exibe o histórico como dd/mm/aa a partir do YYYY-MM-DD armazenado', () => {
-    expect(formatIsoToBrShort('2026-09-06')).toBe('06/09/26')
-    expect(formatIsoToBrShort('2026-09-06T15:00:00Z')).toBe('06/09/26')
+describe('formatIsoDateToBrShort (data pura, textual, sem fuso)', () => {
+  it('exibe dd/mm/aa a partir do YYYY-MM-DD (ou do prefixo de um timestamp)', () => {
+    expect(formatIsoDateToBrShort('2026-09-06')).toBe('06/09/26')
+    expect(formatIsoDateToBrShort('2026-09-06T15:00:00Z')).toBe('06/09/26')
   })
 
   it('não desloca o dia por fuso — só separa os componentes do ISO', () => {
-    expect(formatIsoToBrShort('2026-01-01')).toBe('01/01/26')
+    expect(formatIsoDateToBrShort('2026-01-01')).toBe('01/01/26')
   })
 
   it('devolve a entrada malformada como está, sem lançar', () => {
-    expect(formatIsoToBrShort('não é data')).toBe('não é data')
+    expect(formatIsoDateToBrShort('não é data')).toBe('não é data')
+  })
+})
+
+describe('formatMovementDateTime (timestamp de movimento -> dd/mm/aa HH:mm em America/Sao_Paulo)', () => {
+  it('06/09/2026 (compra mista, occurred_at ancorado ao meio-dia SP = 15:00 UTC) -> 06/09/26 12:00', () => {
+    expect(formatMovementDateTime('2026-09-06T15:00:00Z')).toBe('06/09/26 12:00')
+    expect(formatMovementDateTime('2026-09-06T15:00:00+00:00')).toBe('06/09/26 12:00')
+  })
+
+  it('nenhuma mudança de dia em America/Sao_Paulo: o meio-dia SP fica sempre no mesmo dia', () => {
+    // 2026-09-06 12:00 America/Sao_Paulo, expresso em UTC
+    expect(formatMovementDateTime('2026-09-06T15:00:00Z')).toMatch(/^06\/09\/26 /)
+    // início do dia de negócio seguinte também não vaza para o dia anterior
+    expect(formatMovementDateTime('2026-09-07T15:00:00Z')).toMatch(/^07\/09\/26 /)
+  })
+
+  it('movimentos ANTIGOS (timestamp real de um ajuste) continuam legíveis no mesmo formato', () => {
+    // 2025-01-15 09:30 America/Sao_Paulo = 12:30 UTC
+    expect(formatMovementDateTime('2025-01-15T12:30:00Z')).toBe('15/01/25 09:30')
+  })
+
+  it('converte explicitamente para o fuso de Sao_Paulo, não o do navegador', () => {
+    // 23:30 UTC do dia 06 => 20:30 do dia 06 em Sao_Paulo (UTC-3)
+    expect(formatMovementDateTime('2026-09-06T23:30:00Z')).toBe('06/09/26 20:30')
+  })
+
+  it('entrada inválida volta como está, sem lançar', () => {
+    expect(formatMovementDateTime('sem data')).toBe('sem data')
   })
 })

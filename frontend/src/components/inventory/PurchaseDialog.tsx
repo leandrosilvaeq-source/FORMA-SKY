@@ -1141,6 +1141,10 @@ export function PurchaseDialog({ area, onPurchaseCompleted }: PurchaseDialogProp
                     )
                   })}
                 </ul>
+                <p className="text-muted-foreground text-xs">
+                  Os custos abaixo são uma <strong>previsão</strong> — o valor final por unidade é
+                  calculado pelo servidor ao registrar a compra.
+                </p>
               </section>
 
               {submitError && <p className="text-destructive text-sm">{submitError}</p>}

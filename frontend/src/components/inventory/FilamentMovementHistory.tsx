@@ -3,6 +3,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ApiError } from '@/lib/api/errors'
+import { formatMovementDateTime } from '@/lib/forms/brDate'
 import { cn } from '@/lib/utils'
 import type { FilamentMovement, FilamentMovementType } from '@/types/domain'
 
@@ -26,8 +27,12 @@ function movementTypeLabel(type: string): string {
   return MOVEMENT_TYPE_LABELS[type as FilamentMovementType] ?? type
 }
 
+// dd/mm/aa HH:mm no fuso America/Sao_Paulo (helper compartilhado) — só
+// apresentação, o valor gravado nunca muda. Movimento PURCHASE de uma
+// compra (incl. compra mista) tem occurred_at ancorado ao meio-dia de
+// Sao_Paulo: a data exibida é sempre a data de negócio informada.
 function formatDateTime(value: string): string {
-  return new Date(value).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+  return formatMovementDateTime(value)
 }
 
 function formatGrams(value: number): string {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { StockMovementHistory } from './StockMovementHistory'
 import { ApiError } from '@/lib/api/errors'
@@ -29,6 +29,40 @@ describe('StockMovementHistory', () => {
   it('estado de carregamento', () => {
     render(<StockMovementHistory movements={[]} isLoading error={null} onRetry={vi.fn()} />)
     expect(screen.getByRole('status')).toBeInTheDocument()
+  })
+
+  // Data no histórico (2026-09-06): dd/mm/aa HH:mm em America/Sao_Paulo,
+  // valor gravado inalterado. Um movimento PURCHASE (compra mista) grava
+  // occurred_at ancorado ao meio-dia SP -> 06/09/2026 permanece 06/09/26.
+  it('exibe occurred_at de uma compra como dd/mm/aa HH:mm (America/Sao_Paulo), sem mudar o dia', () => {
+    render(
+      <StockMovementHistory
+        movements={[
+          movementFixture({ movement_type: 'PURCHASE', occurred_at: '2026-09-06T15:00:00Z' }),
+        ]}
+        isLoading={false}
+        error={null}
+        onRetry={vi.fn()}
+      />,
+    )
+    const table = screen.getByRole('table')
+    expect(within(table).getAllByText('06/09/26 12:00').length).toBeGreaterThan(0)
+    expect(within(table).queryByText(/06\/09\/2026/)).not.toBeInTheDocument()
+    expect(within(table).queryByText(/05\/09\/26/)).not.toBeInTheDocument()
+  })
+
+  it('ajuste com timestamp real continua legível no mesmo formato dd/mm/aa HH:mm', () => {
+    render(
+      <StockMovementHistory
+        movements={[
+          movementFixture({ movement_type: 'NEGATIVE_ADJUSTMENT', occurred_at: '2025-01-15T12:30:00Z' }),
+        ]}
+        isLoading={false}
+        error={null}
+        onRetry={vi.fn()}
+      />,
+    )
+    expect(within(screen.getByRole('table')).getAllByText('15/01/25 09:30').length).toBeGreaterThan(0)
   })
 
   it('estado vazio', () => {

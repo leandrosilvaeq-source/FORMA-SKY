@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ApiError } from '@/lib/api/errors'
 import type { Accessory, FilamentTypeSummary, Packaging } from '@/types/domain'
@@ -473,5 +473,306 @@ describe('PurchaseDialog — compra mista', () => {
     expect(scroll).not.toBeNull()
     // nenhum contêiner de conteúdo com overflow-x explícito
     expect(dialog.querySelector('.overflow-x-auto, .overflow-x-scroll')).toBeNull()
+  })
+
+  // =========================================================================
+  // REGRESSÕES RESTAURADAS (auditoria 2026-09-06) — coberturas do
+  // PurchaseDialog.test.tsx anterior que continuam relevantes na janela
+  // única de compra mista. Ver o relatório da auditoria para o mapeamento
+  // 1:1 (obsoleto vs. adaptado vs. movido para brDate.test.ts).
+  // =========================================================================
+
+  it('abre e FECHA a janela (Cancelar) sem registrar nada', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Cancelar' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Registrar compra' })).not.toBeInTheDocument())
+    expect(registerMixedInventoryPurchaseMock).not.toHaveBeenCalled()
+  })
+
+  it('abrir a janela SEMPRE refaz a busca dos três catálogos (nunca depende de F5)', async () => {
+    const refetchAcc = vi.fn()
+    const refetchPkg = vi.fn()
+    const refetchFil = vi.fn()
+    useAccessoriesMock.mockReturnValue({ ...useAccessoriesMock(), refetch: refetchAcc })
+    usePackagingMock.mockReturnValue({ ...usePackagingMock(), refetch: refetchPkg })
+    useFilamentTypesMock.mockReturnValue({ ...useFilamentTypesMock(), refetch: refetchFil })
+    const user = userEvent.setup()
+    render(<PurchaseDialog area="acessorios" onPurchaseCompleted={onPurchaseCompleted} />)
+    await user.click(screen.getByRole('button', { name: 'Compras' }))
+    expect(refetchAcc).toHaveBeenCalled()
+    expect(refetchPkg).toHaveBeenCalled()
+    expect(refetchFil).toHaveBeenCalled()
+  })
+
+  it('o seletor de Categoria por linha tem os 3 valores na ordem Filamento, Acessório, Embalagem, num radiogroup', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'acessorios')
+    const group = within(row(dialog, 1)).getByRole('radiogroup', { name: 'Categoria — item 1' })
+    const radios = within(group).getAllByRole('radio').map((r) => r.getAttribute('aria-label') ?? r.textContent?.trim())
+    expect(radios).toEqual(['Filamento', 'Acessório', 'Embalagem'])
+  })
+
+  it('idempotência: reenvios consecutivos do MESMO formulário reusam a mesma idempotency_key; alterar um campo gera uma nova; alterar a ORDEM dos itens gera uma nova', async () => {
+    const user = userEvent.setup()
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Ímã 6x2', variant: 'azul' }),
+      accessoryFixture({ id: 'a2', name: 'Parafuso', variant: null }),
+    ])
+    const dialog = await openDialog(user, 'acessorios')
+    await setChannel(user, dialog, 'Shopee')
+    await fillAccessoryLine(user, dialog, 1, { search: 'Ímã', option: /Ímã 6x2/, quantity: '2', totalDigits: '1000' })
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar item' }))
+    await fillAccessoryLine(user, dialog, 2, { search: 'Parafuso', option: /Parafuso/, quantity: '3', totalDigits: '1500' })
+
+    registerMixedInventoryPurchaseMock.mockRejectedValue(new ApiError('validation', 400, 'x'))
+    await user.click(within(dialog).getByRole('button', { name: 'Registrar compra' }))
+    await waitFor(() => expect(registerMixedInventoryPurchaseMock).toHaveBeenCalledTimes(1))
+    const call1 = registerMixedInventoryPurchaseMock.mock.calls[0][0]
+    const key1 = call1.idempotency_key
+    // a ordem dos itens no payload segue a ordem das linhas
+    expect(call1.items.map((i: { accessory_id: string }) => i.accessory_id)).toEqual(['a1', 'a2'])
+
+    // reenvio idêntico -> mesma chave
+    await user.click(within(dialog).getByRole('button', { name: 'Registrar compra' }))
+    await waitFor(() => expect(registerMixedInventoryPurchaseMock).toHaveBeenCalledTimes(2))
+    expect(registerMixedInventoryPurchaseMock.mock.calls[1][0].idempotency_key).toBe(key1)
+
+    // muda a quantidade da linha 1 -> chave nova (payload diferente)
+    await user.clear(within(row(dialog, 1)).getByLabelText('Quantidade — item 1'))
+    await user.type(within(row(dialog, 1)).getByLabelText('Quantidade — item 1'), '9')
+    await user.click(within(dialog).getByRole('button', { name: 'Registrar compra' }))
+    await waitFor(() => expect(registerMixedInventoryPurchaseMock).toHaveBeenCalledTimes(3))
+    expect(registerMixedInventoryPurchaseMock.mock.calls[2][0].idempotency_key).not.toBe(key1)
+
+    // reordena: remove a linha 1 (Ímã) e a recria DEPOIS da linha do Parafuso
+    await user.click(within(dialog).getByRole('button', { name: 'Remover item 1' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar item' }))
+    await fillAccessoryLine(user, dialog, 2, { search: 'Ímã', option: /Ímã 6x2/, quantity: '9', totalDigits: '1000' })
+    await user.click(within(dialog).getByRole('button', { name: 'Registrar compra' }))
+    await waitFor(() => expect(registerMixedInventoryPurchaseMock).toHaveBeenCalledTimes(4))
+    const call4 = registerMixedInventoryPurchaseMock.mock.calls[3][0]
+    // agora a ordem é [Parafuso, Ímã] -> payload diferente -> chave nova
+    expect(call4.items.map((i: { accessory_id: string }) => i.accessory_id)).toEqual(['a2', 'a1'])
+    expect(call4.idempotency_key).not.toBe(key1)
+  })
+
+  it('a data digitada é convertida EXATAMENTE para YYYY-MM-DD no payload (sem deslocamento de fuso)', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'acessorios')
+    const date = within(dialog).getByLabelText('Data da compra')
+    await user.clear(date)
+    await user.type(date, '06092026')
+    await setChannel(user, dialog, 'Shopee')
+    await fillAccessoryLine(user, dialog, 1, { search: 'Ímã', option: /Ímã 6x2/, quantity: '1', totalDigits: '500' })
+    await user.click(within(dialog).getByRole('button', { name: 'Registrar compra' }))
+    await waitFor(() => expect(registerMixedInventoryPurchaseMock).toHaveBeenCalled())
+    expect(registerMixedInventoryPurchaseMock.mock.calls[0][0].occurred_on).toBe('2026-09-06')
+  })
+
+  it('a máscara da data funciona na janela: dígitos inserem barras, Backspace corrige, colar sem barras funciona; data incompleta bloqueia com mensagem clara', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'acessorios')
+    const date = within(dialog).getByLabelText('Data da compra') as HTMLInputElement
+
+    await user.clear(date)
+    await user.type(date, '0609')
+    expect(date.value).toBe('06/09')
+    await user.type(date, '2026')
+    expect(date.value).toBe('06/09/2026')
+    await user.type(date, '{Backspace}{Backspace}')
+    expect(date.value).toBe('06/09/20')
+
+    await user.clear(date)
+    date.focus()
+    await user.paste('06092026')
+    expect(date.value).toBe('06/09/2026')
+
+    await user.clear(date)
+    await user.type(date, '0609')
+    await setChannel(user, dialog, 'Shopee')
+    await fillAccessoryLine(user, dialog, 1, { search: 'Ímã', option: /Ímã 6x2/, quantity: '1', totalDigits: '500' })
+    await user.click(within(dialog).getByRole('button', { name: 'Registrar compra' }))
+    expect(registerMixedInventoryPurchaseMock).not.toHaveBeenCalled()
+    expect(within(dialog).getByText(/dd\/mm\/aaaa/i)).toBeInTheDocument()
+  })
+
+  it('o seletor de Tipo de filamento é selecionável por mouse E por teclado, inclusive na 2ª linha', async () => {
+    const user = userEvent.setup()
+    mockFilamentTypes([
+      filamentTypeFixture({ filament_type_id: 't1', material: 'PLA', line: 'Sólida', commercial_color: 'Preto' }),
+      filamentTypeFixture({ filament_type_id: 't2', material: 'PETG', line: 'Matte', commercial_color: 'Azul' }),
+    ])
+    const dialog = await openDialog(user, 'filamentos')
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar item' }))
+    await setCategory(user, dialog, 2, 'Filamento')
+
+    // linha 2, por teclado
+    const combo2 = within(row(dialog, 2)).getByRole('combobox', { name: 'Tipo de filamento — item 2' })
+    await user.type(combo2, 'PETG')
+    await user.keyboard('{ArrowDown}{Enter}')
+    expect((combo2 as HTMLInputElement).value).toContain('PETG - Matte - Azul')
+
+    // linha 1, por mouse
+    const combo1 = within(row(dialog, 1)).getByRole('combobox', { name: 'Tipo de filamento — item 1' })
+    await user.type(combo1, 'PLA')
+    await user.click(await within(row(dialog, 1)).findByRole('option', { name: 'PLA - Sólida - Preto' }))
+    expect((combo1 as HTMLInputElement).value).toContain('PLA - Sólida - Preto')
+  })
+
+  it('adicionar um item preserva a linha já preenchida e foca o primeiro campo da nova linha', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'acessorios')
+    await fillAccessoryLine(user, dialog, 1, { search: 'Ímã', option: /Ímã 6x2/, quantity: '4', totalDigits: '2000' })
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar item' }))
+
+    // linha 1 intacta
+    expect((within(row(dialog, 1)).getByLabelText('Quantidade — item 1') as HTMLInputElement).value).toBe('4')
+    // a nova linha 2 recebeu foco no seu primeiro campo (autoFocus)
+    await waitFor(() =>
+      expect(within(row(dialog, 2)).getByRole('combobox', { name: 'Acessório — item 2' })).toHaveFocus(),
+    )
+  })
+
+  it('remover um item preserva os demais; a última linha nunca é removível (botão desabilitado)', async () => {
+    const user = userEvent.setup()
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Ímã 6x2', variant: 'azul' }),
+      accessoryFixture({ id: 'a2', name: 'Parafuso', variant: null }),
+    ])
+    const dialog = await openDialog(user, 'acessorios')
+    await fillAccessoryLine(user, dialog, 1, { search: 'Ímã', option: /Ímã 6x2/, quantity: '2', totalDigits: '1000' })
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar item' }))
+    await fillAccessoryLine(user, dialog, 2, { search: 'Parafuso', option: /Parafuso/, quantity: '5', totalDigits: '2500' })
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar item' }))
+
+    await user.click(within(dialog).getByRole('button', { name: 'Remover item 2' }))
+    expect(within(dialog).getAllByRole('group', { name: /^Item \d+$/ })).toHaveLength(2)
+    // a linha 1 (Ímã, qtd 2) continua intacta
+    expect((within(row(dialog, 1)).getByLabelText('Quantidade — item 1') as HTMLInputElement).value).toBe('2')
+
+    await user.click(within(dialog).getByRole('button', { name: 'Remover item 2' }))
+    expect(within(dialog).getAllByRole('group', { name: /^Item \d+$/ })).toHaveLength(1)
+    expect(within(dialog).getByRole('button', { name: 'Remover item 1' })).toBeDisabled()
+  })
+
+  it('Filamento: Peso nominal exibe "1.000 g" com ponto de milhar; a janela nunca mostra "Código da cor" nem "Peso bruto"', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'filamentos')
+    const r = row(dialog, 1)
+    expect(within(r).getByRole('radio', { name: '1.000 g' })).toBeInTheDocument()
+    expect(within(r).getByRole('radio', { name: '250 g' })).toBeInTheDocument()
+    expect(within(dialog).queryByText(/código da cor/i)).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText(/código da cor/i)).not.toBeInTheDocument()
+    expect(within(dialog).queryByText(/peso bruto/i)).not.toBeInTheDocument()
+  })
+
+  it('o Frete aparece UMA única vez, na sua própria seção — nunca um campo de frete por item', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'acessorios')
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar item' }))
+    expect(within(dialog).getAllByLabelText('Valor do frete')).toHaveLength(1)
+    const freightSection = within(dialog).getByRole('heading', { name: 'Frete' }).closest('section') as HTMLElement
+    expect(within(freightSection).getByLabelText('Valor do frete')).toBeInTheDocument()
+  })
+
+  it('subtotal é exato mesmo com valor que não divide pela quantidade (qtd 3 + R$ 100,00 -> subtotal R$ 100,00, sem erro de ponto flutuante) e o payload envia total_value INTEIRO, nunca dividido', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'acessorios')
+    await setChannel(user, dialog, 'Shopee')
+    await fillAccessoryLine(user, dialog, 1, { search: 'Ímã', option: /Ímã 6x2/, quantity: '3', totalDigits: '10000' })
+
+    const summary = within(dialog).getByRole('heading', { name: 'Resumo' }).closest('section') as HTMLElement
+    expect(within(summary).getAllByText('R$ 100,00').length).toBeGreaterThan(0)
+
+    await user.click(within(dialog).getByRole('button', { name: 'Registrar compra' }))
+    await waitFor(() => expect(registerMixedInventoryPurchaseMock).toHaveBeenCalled())
+    expect(registerMixedInventoryPurchaseMock.mock.calls[0][0].items[0].total_value).toBe(100)
+  })
+
+  it('frete é somado UMA única vez ao Total (adicionar/remover linhas não duplica o frete)', async () => {
+    const user = userEvent.setup()
+    mockAccessories([
+      accessoryFixture({ id: 'a1', name: 'Ímã 6x2', variant: 'azul' }),
+      accessoryFixture({ id: 'a2', name: 'Parafuso', variant: null }),
+    ])
+    const dialog = await openDialog(user, 'acessorios')
+    await fillAccessoryLine(user, dialog, 1, { search: 'Ímã', option: /Ímã 6x2/, quantity: '1', totalDigits: '3000' })
+    await user.type(within(dialog).getByLabelText('Valor do frete'), '1000')
+    const summary = within(dialog).getByRole('heading', { name: 'Resumo' }).closest('section') as HTMLElement
+    expect(within(summary).getByText('R$ 40,00')).toBeInTheDocument() // 30 + 10 frete
+
+    await user.click(within(dialog).getByRole('button', { name: 'Adicionar item' }))
+    await fillAccessoryLine(user, dialog, 2, { search: 'Parafuso', option: /Parafuso/, quantity: '1', totalDigits: '2000' })
+    // subtotal 50, frete ainda 10 (somado uma vez) -> total 60
+    expect(within(summary).getByText('R$ 60,00')).toBeInTheDocument()
+  })
+
+  it('quantidade/valores em branco não produzem NaN nem Infinity — o Resumo mostra R$ 0,00', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'acessorios')
+    const summary = within(dialog).getByRole('heading', { name: 'Resumo' }).closest('section') as HTMLElement
+    expect(within(summary).getAllByText('R$ 0,00').length).toBeGreaterThanOrEqual(3) // subtotal, frete, total
+    expect(within(summary).queryByText(/NaN|Infinity/)).not.toBeInTheDocument()
+  })
+
+  it('layout da linha: grade de 1 coluna no mobile (grid-cols-1) e multi-coluna a partir de sm', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'acessorios')
+    const r = row(dialog, 1)
+    // o contêiner da grade dos campos da linha
+    const grid = within(r).getByRole('combobox', { name: 'Acessório — item 1' }).closest('.grid') as HTMLElement
+    expect(grid.className).toContain('grid-cols-1')
+    expect(grid.className).toMatch(/sm:grid-cols-\[/)
+  })
+
+  it('erro de NEGÓCIO do backend (business_rule) vira toast e mantém a janela aberta com os dados', async () => {
+    const user = userEvent.setup()
+    registerMixedInventoryPurchaseMock.mockRejectedValue(
+      new ApiError('business_rule', 409, 'Esta embalagem está inativa.'),
+    )
+    const dialog = await openDialog(user, 'acessorios')
+    await setChannel(user, dialog, 'Shopee')
+    await fillAccessoryLine(user, dialog, 1, { search: 'Ímã', option: /Ímã 6x2/, quantity: '2', totalDigits: '1000' })
+    await user.click(within(dialog).getByRole('button', { name: 'Registrar compra' }))
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Esta embalagem está inativa.'))
+    expect(screen.getByRole('dialog', { name: 'Registrar compra' })).toBeInTheDocument()
+    expect((within(row(dialog, 1)).getByLabelText('Quantidade — item 1') as HTMLInputElement).value).toBe('2')
+  })
+
+  it('o Resumo deixa claro que os custos são uma PREVISÃO (valor final vem do servidor)', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'acessorios')
+    const summary = within(dialog).getByRole('heading', { name: 'Resumo' }).closest('section') as HTMLElement
+    expect(within(summary).getByText(/previsão/i)).toBeInTheDocument()
+    expect(within(summary).getByText(/calculado pelo servidor/i)).toBeInTheDocument()
+  })
+
+  it('máximo 50 itens: "Adicionar item" desabilita ao atingir o teto', async () => {
+    const user = userEvent.setup()
+    const dialog = await openDialog(user, 'acessorios')
+    const addButton = within(dialog).getByRole('button', { name: 'Adicionar item' })
+    // já começa com 1; mais 49 -> 50 (fireEvent para não estourar o timeout)
+    for (let i = 0; i < 49; i++) fireEvent.click(addButton)
+    expect(within(dialog).getAllByRole('group', { name: /^Item \d+$/ })).toHaveLength(50)
+    expect(addButton).toBeDisabled()
+    fireEvent.click(addButton)
+    expect(within(dialog).getAllByRole('group', { name: /^Item \d+$/ })).toHaveLength(50)
+  })
+
+  it('Embalagem: envia payload correto e aciona onPurchaseCompleted("PACKAGING")', async () => {
+    const user = userEvent.setup()
+    mockPackaging([packagingFixture({ id: 'k1', name: 'Caixa M', variant: 'kraft' })])
+    const dialog = await openDialog(user, 'embalagens')
+    await setChannel(user, dialog, 'AliExpress')
+    await fillPackagingLine(user, dialog, 1, { search: 'Caixa', option: /Caixa M/, quantity: '8', totalDigits: '4000' })
+    await user.click(within(dialog).getByRole('button', { name: 'Registrar compra' }))
+    await waitFor(() => expect(registerMixedInventoryPurchaseMock).toHaveBeenCalled())
+    expect(registerMixedInventoryPurchaseMock.mock.calls[0][0].items).toEqual([
+      { category: 'PACKAGING', packaging_id: 'k1', quantity: 8, total_value: 40 },
+    ])
+    expect(onPurchaseCompleted).toHaveBeenCalledWith('PACKAGING')
+    expect(onPurchaseCompleted).toHaveBeenCalledTimes(1)
   })
 })

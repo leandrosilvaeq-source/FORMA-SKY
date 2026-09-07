@@ -12,7 +12,9 @@
 -- transação, terminada sempre com ROLLBACK — nada persiste. Só usa registros
 -- "TESTE MISTA %", nunca dados oficiais.
 --
--- Execução (após a migration 20260906150000 ser aplicada):
+-- Execução (após a migration 20260906150000 ser aplicada) — a partir da RAIZ
+-- do repositório (C:\Users\Pichau\Desktop\FORMA-SKY), NUNCA de dentro de
+-- frontend/ (o supabase/config.toml e o pacote `supabase` ficam na raiz):
 --   npx supabase db query --linked --file supabase/tests/mixed_inventory_purchase_test.sql
 --
 -- LIMITAÇÃO DE AMBIENTE: a migration 20260906150000 ainda NÃO foi aplicada
@@ -446,14 +448,16 @@ begin
 end $$;
 
 -- =============================================================================
--- SEÇÃO 19+20 — Idempotência: mesma chave + mesmo payload (mesma ordem) e
---   mesma data OU data diferente -> mesma compra; qualquer alteração -> conflito.
+-- SEÇÃO 19+20 — Idempotência (regra APROVADA — ORDEM E DATA SÃO SIGNIFICATIVAS):
+--   mesma chave + MESMO payload NA MESMA ORDEM + MESMA data -> retorno
+--   idempotente; qualquer alteração (ordem, data, frete, canal, complemento,
+--   itens) -> IDEMPOTENCY_KEY_CONFLICT.
 -- =============================================================================
 do $$
 declare
   v_user uuid; v_acc uuid; v_pkg uuid; v_ft uuid;
   v_key text := 'mixed-idem-' || gen_random_uuid()::text;
-  v_res1 jsonb; v_res2 jsonb; v_res3 jsonb; v_err text;
+  v_res1 jsonb; v_res2 jsonb; v_err text;
   v_acc_stock_1 int; v_acc_stock_2 int; v_mov int;
   v_payload jsonb;
 begin
@@ -472,22 +476,35 @@ begin
     p_occurred_on => date '2026-09-06', p_changed_by => v_user, p_supplier_name => 'Loja Central', p_idempotency_key => v_key);
   select current_stock into v_acc_stock_1 from public.accessories where id = v_acc;
 
-  -- 19. mesma chave + mesmo payload/ordem + DATA DIFERENTE -> mesma compra
+  -- 19.1 mesma chave + payload/ordem/data IDÊNTICOS -> devolve a MESMA compra,
+  --      sem repetir saldo/movimentos.
   v_res2 := public.register_mixed_inventory_purchase(
     p_items => v_payload, p_freight_value => 5.00, p_purchase_channel => 'PRESENCIAL',
-    p_occurred_on => date '2026-09-20', p_changed_by => v_user, p_supplier_name => 'Loja Central', p_idempotency_key => v_key);
+    p_occurred_on => date '2026-09-06', p_changed_by => v_user, p_supplier_name => 'Loja Central', p_idempotency_key => v_key);
   select current_stock into v_acc_stock_2 from public.accessories where id = v_acc;
   select count(*) into v_mov from public.stock_movements
     where item_type='ACCESSORY' and item_id=v_acc and reference_id=(v_res1 ->> 'purchase_id')::uuid;
 
   insert into zz_test_results(section, test_name, status, details)
-  values ('19', '19.1 mesma chave + mesmo payload/ordem + DATA DIFERENTE -> devolve a MESMA compra; saldo/movimentos NÃO se repetem (occurred_on fica de fora)',
+  values ('19', '19.1 mesma chave + MESMO payload/ordem/data -> devolve a MESMA compra; saldo e movimentos NÃO se repetem',
     case when (v_res1 ->> 'purchase_id') = (v_res2 ->> 'purchase_id')
           and v_acc_stock_1 = v_acc_stock_2 and v_mov = 1
          then 'PASS' else 'FAIL' end, format('pid=%s/%s stock=%s/%s mov=%s',
       v_res1->>'purchase_id', v_res2->>'purchase_id', v_acc_stock_1, v_acc_stock_2, v_mov));
 
-  -- 20a. ORDEM GLOBAL diferente (mesmos itens, ordem trocada) -> conflito
+  -- 19.2 mesma chave + DATA DIFERENTE -> IDEMPOTENCY_KEY_CONFLICT (data é
+  --      campo de negócio digitado e ESTÁVEL — parte da identidade da compra).
+  begin
+    perform public.register_mixed_inventory_purchase(
+      p_items => v_payload, p_freight_value => 5.00, p_purchase_channel => 'PRESENCIAL',
+      p_occurred_on => date '2026-09-20', p_changed_by => v_user, p_supplier_name => 'Loja Central', p_idempotency_key => v_key);
+    v_err := 'sem erro';
+  exception when others then v_err := sqlerrm; end;
+  insert into zz_test_results(section, test_name, status, details)
+  values ('19', '19.2 mesma chave + DATA (occurred_on) diferente -> IDEMPOTENCY_KEY_CONFLICT (esperado: erro; obtido abaixo)',
+    case when v_err like 'IDEMPOTENCY_KEY_CONFLICT:%' then 'PASS' else 'FAIL' end, v_err);
+
+  -- 20.1 mesma chave + itens iguais mas ORDEM GLOBAL diferente -> conflito
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => jsonb_build_array(v_payload -> 1, v_payload -> 0, v_payload -> 2),
@@ -496,10 +513,10 @@ begin
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
   insert into zz_test_results(section, test_name, status, details)
-  values ('20', '20.1 mesma chave + itens iguais mas ORDEM GLOBAL diferente -> IDEMPOTENCY_KEY_CONFLICT',
+  values ('20', '20.1 mesma chave + itens iguais mas ORDEM GLOBAL diferente -> IDEMPOTENCY_KEY_CONFLICT (esperado: erro)',
     case when v_err like 'IDEMPOTENCY_KEY_CONFLICT:%' then 'PASS' else 'FAIL' end, v_err);
 
-  -- 20b. frete diferente -> conflito
+  -- 20.2 frete diferente -> conflito
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => v_payload, p_freight_value => 6.00, p_purchase_channel => 'PRESENCIAL',
@@ -507,10 +524,10 @@ begin
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
   insert into zz_test_results(section, test_name, status, details)
-  values ('20', '20.2 mesma chave + frete diferente -> IDEMPOTENCY_KEY_CONFLICT',
+  values ('20', '20.2 mesma chave + frete diferente -> IDEMPOTENCY_KEY_CONFLICT (esperado: erro)',
     case when v_err like 'IDEMPOTENCY_KEY_CONFLICT:%' then 'PASS' else 'FAIL' end, v_err);
 
-  -- 20c. canal/complemento diferente -> conflito
+  -- 20.3 canal/complemento diferente -> conflito
   begin
     perform public.register_mixed_inventory_purchase(
       p_items => v_payload, p_freight_value => 5.00, p_purchase_channel => 'PRESENCIAL',
@@ -518,10 +535,92 @@ begin
     v_err := 'sem erro';
   exception when others then v_err := sqlerrm; end;
   insert into zz_test_results(section, test_name, status, details)
-  values ('20', '20.3 mesma chave + complemento (nome da loja) diferente -> IDEMPOTENCY_KEY_CONFLICT',
+  values ('20', '20.3 mesma chave + complemento (nome da loja) diferente -> IDEMPOTENCY_KEY_CONFLICT (esperado: erro)',
+    case when v_err like 'IDEMPOTENCY_KEY_CONFLICT:%' then 'PASS' else 'FAIL' end, v_err);
+
+  -- 20.4 mesma chave + um item removido -> conflito
+  begin
+    perform public.register_mixed_inventory_purchase(
+      p_items => jsonb_build_array(v_payload -> 0, v_payload -> 1),
+      p_freight_value => 5.00, p_purchase_channel => 'PRESENCIAL',
+      p_occurred_on => date '2026-09-06', p_changed_by => v_user, p_supplier_name => 'Loja Central', p_idempotency_key => v_key);
+    v_err := 'sem erro';
+  exception when others then v_err := sqlerrm; end;
+  insert into zz_test_results(section, test_name, status, details)
+  values ('20', '20.4 mesma chave + itens diferentes (um removido) -> IDEMPOTENCY_KEY_CONFLICT (esperado: erro)',
     case when v_err like 'IDEMPOTENCY_KEY_CONFLICT:%' then 'PASS' else 'FAIL' end, v_err);
 exception when others then
   insert into zz_test_results(section, test_name, status, details) values ('19', '19/20 idempotência', 'FAIL', sqlerrm);
+end $$;
+
+-- =============================================================================
+-- SEÇÃO 20b — ORDEM GLOBAL é significativa no RESULTADO: o desempate do
+--   centavo do frete segue a POSIÇÃO GLOBAL da linha; reordenar troca qual
+--   linha recebe o centavo extra; e items[] volta na ORDEM ORIGINAL.
+-- =============================================================================
+do $$
+declare
+  v_user uuid; v_a uuid; v_b uuid; v_c uuid;
+  v_res_abc jsonb; v_res_bac jsonb;
+  v_alloc_a_first numeric; v_alloc_b_first numeric;
+  v_alloc_a_second numeric; v_alloc_b_second numeric;
+  v_cats text[];
+begin
+  select value::uuid into v_user from zz_fixtures where key = 'user';
+  v_a := (public.create_accessory('TESTE MISTA TIE A', null, null, null, true, v_user)).id;
+  v_b := (public.create_accessory('TESTE MISTA TIE B', null, null, null, true, v_user)).id;
+  v_c := (public.create_accessory('TESTE MISTA TIE C', null, null, null, true, v_user)).id;
+
+  -- 3 linhas de total IDÊNTICO (10,00) + frete 1,00: piso 0,33 cada, sobra 1
+  -- centavo -> vai para a linha de MENOR posição global.
+  v_res_abc := public.register_mixed_inventory_purchase(
+    p_items => jsonb_build_array(
+      jsonb_build_object('category','ACCESSORY','accessory_id',v_a::text,'quantity',1,'total_value',10.00),
+      jsonb_build_object('category','ACCESSORY','accessory_id',v_b::text,'quantity',1,'total_value',10.00),
+      jsonb_build_object('category','ACCESSORY','accessory_id',v_c::text,'quantity',1,'total_value',10.00)),
+    p_freight_value => 1.00, p_purchase_channel => 'SHOPEE', p_occurred_on => date '2026-09-06',
+    p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
+
+  select (it ->> 'freight_allocated')::numeric into v_alloc_a_first
+    from jsonb_array_elements(v_res_abc -> 'items') it where (it ->> 'accessory_id') = v_a::text;
+  select (it ->> 'freight_allocated')::numeric into v_alloc_b_first
+    from jsonb_array_elements(v_res_abc -> 'items') it where (it ->> 'accessory_id') = v_b::text;
+
+  -- mesma coisa com A e B trocados de posição (B na 1a, A na 2a)
+  v_res_bac := public.register_mixed_inventory_purchase(
+    p_items => jsonb_build_array(
+      jsonb_build_object('category','ACCESSORY','accessory_id',v_b::text,'quantity',1,'total_value',10.00),
+      jsonb_build_object('category','ACCESSORY','accessory_id',v_a::text,'quantity',1,'total_value',10.00),
+      jsonb_build_object('category','ACCESSORY','accessory_id',v_c::text,'quantity',1,'total_value',10.00)),
+    p_freight_value => 1.00, p_purchase_channel => 'SHOPEE', p_occurred_on => date '2026-09-06',
+    p_changed_by => v_user, p_supplier_name => null, p_idempotency_key => null);
+  select (it ->> 'freight_allocated')::numeric into v_alloc_a_second
+    from jsonb_array_elements(v_res_bac -> 'items') it where (it ->> 'accessory_id') = v_a::text;
+  select (it ->> 'freight_allocated')::numeric into v_alloc_b_second
+    from jsonb_array_elements(v_res_bac -> 'items') it where (it ->> 'accessory_id') = v_b::text;
+
+  insert into zz_test_results(section, test_name, status, details)
+  values ('20', '20.5 empate de centavo respeita line_number GLOBAL: na 1a compra A(pos 1)=0,34 e B(pos 2)=0,33; reordenado, B(pos 1)=0,34 e A(pos 2)=0,33; Σ=1,00 nas duas',
+    case when v_alloc_a_first = 0.34 and v_alloc_b_first = 0.33
+          and v_alloc_b_second = 0.34 and v_alloc_a_second = 0.33
+          and (select sum((it->>'freight_allocated')::numeric) from jsonb_array_elements(v_res_abc -> 'items') it) = 1.00
+          and (select sum((it->>'freight_allocated')::numeric) from jsonb_array_elements(v_res_bac -> 'items') it) = 1.00
+         then 'PASS' else 'FAIL' end,
+    format('abc: A=%s B=%s | bac: A=%s B=%s', v_alloc_a_first, v_alloc_b_first, v_alloc_a_second, v_alloc_b_second));
+
+  -- items[] volta na ORDEM ORIGINAL (a 2a compra foi B, A, C)
+  select array_agg(it ->> 'category' order by (it ->> 'line_number')::int) into v_cats
+    from jsonb_array_elements(v_res_bac -> 'items') it;
+  insert into zz_test_results(section, test_name, status, details)
+  values ('20', '20.6 items[] do resumo volta na ORDEM ORIGINAL das linhas (line_number 1,2,3 = B,A,C nesta compra)',
+    case when (v_res_bac -> 'items' -> 0 ->> 'accessory_id') = v_b::text
+          and (v_res_bac -> 'items' -> 1 ->> 'accessory_id') = v_a::text
+          and (v_res_bac -> 'items' -> 2 ->> 'accessory_id') = v_c::text
+          and (v_res_bac -> 'items' -> 0 ->> 'line_number')::int = 1
+          and (v_res_bac -> 'items' -> 2 ->> 'line_number')::int = 3
+         then 'PASS' else 'FAIL' end, (v_res_bac -> 'items')::text);
+exception when others then
+  insert into zz_test_results(section, test_name, status, details) values ('20', '20.5/20.6 ordem global significativa', 'FAIL', sqlerrm);
 end $$;
 
 -- =============================================================================
@@ -826,23 +925,35 @@ end $$;
 
 -- =============================================================================
 -- RESULTADO
+--
+-- O `select` abaixo lista TODOS os testes; mas o Supabase CLI suprime as
+-- linhas de resultado quando a transação termina com uma exceção. Por isso a
+-- MENSAGEM da própria exceção final carrega, para cada teste que falhou:
+-- seção · nome · detalhes (esperado/obtido) — nunca dependemos só do SELECT
+-- nem de RAISE NOTICE (também suprimidos quando há exceção + rollback).
 -- =============================================================================
 select section, test_name, status, details from zz_test_results order by seq;
 
 do $$
 declare
   v_fail int;
+  v_msg text := '';
   r record;
 begin
   select count(*) into v_fail from zz_test_results where status <> 'PASS';
   if v_fail > 0 then
-    raise notice '=== TESTES QUE FALHARAM ===';
-    for r in select section, test_name, details from zz_test_results where status <> 'PASS' order by seq loop
-      raise notice 'FALHOU [%] % — %', r.section, r.test_name, left(coalesce(r.details, ''), 300);
+    for r in select section, test_name, coalesce(details, '') as details
+             from zz_test_results where status <> 'PASS' order by seq
+    loop
+      v_msg := v_msg || format(E'\n  - [secao %s] %s :: %s',
+        r.section, r.test_name, left(r.details, 400));
     end loop;
-    raise exception 'mixed_inventory_purchase_test: % teste(s) falharam', v_fail;
+    -- A exceção final ENUMERA os testes que falharam (seção, nome, detalhes)
+    -- — legível mesmo com as linhas de SELECT/NOTICE suprimidas pelo CLI.
+    raise exception E'mixed_inventory_purchase_test: % teste(s) falharam:%', v_fail, v_msg;
   end if;
-  raise notice 'mixed_inventory_purchase_test: todos os testes passaram';
+  raise notice 'mixed_inventory_purchase_test: todos os testes passaram (% verificacoes)',
+    (select count(*) from zz_test_results);
 end $$;
 
 rollback;

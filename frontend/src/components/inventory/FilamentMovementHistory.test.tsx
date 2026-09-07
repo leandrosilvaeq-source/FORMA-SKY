@@ -43,6 +43,27 @@ describe('FilamentMovementHistory', () => {
     expect(screen.getByText('falhou')).toBeInTheDocument()
   })
 
+  // Data no histórico (2026-09-06): dd/mm/aa HH:mm no fuso America/Sao_Paulo,
+  // sem alterar o valor gravado. Um movimento PURCHASE de compra (incl.
+  // compra mista) grava occurred_at ancorado ao meio-dia SP.
+  it('exibe occurred_at como dd/mm/aa HH:mm (America/Sao_Paulo), sem deslocar o dia', () => {
+    render(
+      <FilamentMovementHistory
+        movements={[
+          movementFixture({ movement_type: 'PURCHASE', occurred_at: '2026-09-06T15:00:00Z' }),
+        ]}
+        isLoading={false}
+        error={null}
+        onRetry={vi.fn()}
+      />,
+    )
+    // 2026-09-06 12:00 America/Sao_Paulo -> "06/09/26 12:00", nunca "06/09/2026" nem 05/09
+    const table = screen.getByRole('table')
+    expect(within(table).getAllByText('06/09/26 12:00').length).toBeGreaterThan(0)
+    expect(within(table).queryByText(/06\/09\/2026/)).not.toBeInTheDocument()
+    expect(within(table).queryByText(/05\/09\/26/)).not.toBeInTheDocument()
+  })
+
   // Achado real da validação manual (2026-08-28, primeira rodada): a coluna
   // Data invadia visualmente a coluna Tipo — causa raiz confirmada em
   // ui/table.tsx: TableCell herda `whitespace-nowrap` por padrão, e sem
@@ -56,7 +77,7 @@ describe('FilamentMovementHistory', () => {
     // card mobile equivalente, sempre presente no DOM junto com a tabela
     // (a alternância é só por CSS/breakpoint, não por montagem condicional).
     const table = screen.getByRole('table')
-    const dateCell = within(table).getByText(/27\/08\/2026/).closest('td')
+    const dateCell = within(table).getByText(/27\/08\/26/).closest('td')
     expect(dateCell).not.toBeNull()
     expect(dateCell?.className).toContain('truncate')
   })
@@ -181,7 +202,7 @@ describe('FilamentMovementHistory', () => {
     const cards = document.querySelectorAll('[data-slot="card"]')
     expect(cards).toHaveLength(1)
     const card = within(cards[0] as HTMLElement)
-    expect(card.getByText(/27\/08\/2026/)).toBeInTheDocument()
+    expect(card.getByText(/27\/08\/26/)).toBeInTheDocument()
     expect(card.getByText('Tipo: Consumo manual')).toBeInTheDocument()
     expect(card.getByText('Quantidade: -50g')).toBeInTheDocument()
     expect(card.getByText('Saldo: 600g → 550g')).toBeInTheDocument()

@@ -1347,13 +1347,18 @@ rotas `/`, `/filament`, `/accessory` ficam **intactas**; nenhum registro/valor l
   `accessories.unit_cost` **e** `packaging.unit_cost` por média ponderada móvel (saldo 0 ou custo
   `NULL` → a compra define o custo sem diluir). `total_value`/`freight_allocated`/
   `landed_total_value` ficam **exatos** no ledger; `unit_cost` é derivado e arredondado a 2
-  casas. Atômica por construção. **Idempotente** por `p_idempotency_key`: canônico = `category` +
-  `freight` + `canal` + `complemento` + itens na **ordem global**; `p_occurred_on` fica **de
-  fora** da comparação — mesma convenção das três RPCs existentes (uma repetição legítima após o
-  relógio virar não vira conflito); qualquer outra diferença → `IDEMPOTENCY_KEY_CONFLICT:`.
-  Captura a corrida de `unique_violation` em `ux_inventory_purchases_idempotency_key`. Devolve o
-  `jsonb` de `_build_mixed_purchase_summary` (cabeçalho + `items[]` em ordem global; linhas de
-  Filamento trazem `spool_ids`).
+  casas. Atômica por construção. **Idempotente** por `p_idempotency_key` — **ORDEM E DATA SÃO
+  SIGNIFICATIVAS**: o canônico = `category` + `freight` + `canal` + `complemento` +
+  **`p_occurred_on` (data de negócio)** + itens na **ordem global** (cada elemento carrega
+  `line` = posição 1-based e o array é comparado NA ORDEM). Consequências: mesma chave + mesmo
+  payload na **mesma ordem** + **mesma data** → retorno idempotente; **itens reordenados** →
+  `IDEMPOTENCY_KEY_CONFLICT:` (o desempate do rateio de centavos depende da ordem global);
+  **data diferente** → `IDEMPOTENCY_KEY_CONFLICT:` — na compra mista a data é um campo digitado e
+  **estável**, parte da identidade da compra (**diferente** das três RPCs antigas, onde
+  `occurred_at` tem `default now()` e fica de fora; essas RPCs **não** são alteradas). Captura a
+  corrida de `unique_violation` em `ux_inventory_purchases_idempotency_key`. Devolve o `jsonb` de
+  `_build_mixed_purchase_summary` (cabeçalho + `items[]` **na ordem original das linhas**, por
+  `line_number`; linhas de Filamento trazem `spool_ids`).
 - Helpers internos (zero grants): `_mixed_allocate_freight_cents(numeric[], numeric)`,
   `_mixed_purchase_items_canonical(uuid)`, `_build_mixed_purchase_summary(uuid)`. As três RPCs
   antigas **não** são refatoradas para reusar esses helpers.

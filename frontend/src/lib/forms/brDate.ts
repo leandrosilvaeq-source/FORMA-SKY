@@ -59,11 +59,37 @@ export function parseBrDate(raw: string): { value: string | null; error: string 
   return { value: iso, error: null }
 }
 
-// Exibição no histórico/resumo: YYYY-MM-DD -> dd/mm/aa (ano com 2 dígitos).
-// Não faz parse de string localizada — separa os componentes do ISO. Uma
-// entrada malformada volta como está (nunca lança).
-export function formatIsoToBrShort(iso: string): string {
+// Exibição de uma DATA pura no histórico: YYYY-MM-DD -> dd/mm/aa (ano com 2
+// dígitos). Puramente textual — separa os componentes do prefixo ISO, nunca
+// instancia Date a partir de uma string, então NUNCA há conversão de fuso.
+// Serve tanto para uma coluna DATE quanto para o prefixo de um TIMESTAMP.
+// Entrada malformada volta como está (nunca lança).
+export function formatIsoDateToBrShort(iso: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso.trim())
   if (!match) return iso
   return `${match[3]}/${match[2]}/${match[1].slice(2)}`
+}
+
+// Exibição de um TIMESTAMP (occurred_at de um movimento) no histórico:
+// "dd/mm/aa HH:mm", SEMPRE no fuso America/Sao_Paulo (o app é operado no
+// Brasil) — a data e a hora saem do MESMO instante, então nunca discordam,
+// e o `timeZone` explícito torna o resultado determinístico
+// independentemente do fuso do navegador/CI. Uma compra mista grava
+// occurred_at ancorado ao MEIO-DIA de Sao_Paulo, então a data-calendário
+// exibida é sempre a data de negócio informada (06/09/2026 -> 06/09/26),
+// sem "andar" um dia. Movimentos antigos (ajustes com timestamp real)
+// continuam legíveis no mesmo formato. Entrada inválida volta como está.
+export function formatMovementDateTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d
+    .toLocaleString('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit',
+      month: '2-digit',
+      year: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+    .replace(', ', ' ')
 }

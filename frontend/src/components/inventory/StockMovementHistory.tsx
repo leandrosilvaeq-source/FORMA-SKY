@@ -3,6 +3,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ApiError } from '@/lib/api/errors'
+import { formatMovementDateTime } from '@/lib/forms/brDate'
 import { cn } from '@/lib/utils'
 import type { StockMovement, StockMovementType } from '@/types/domain'
 
@@ -36,8 +37,12 @@ function purchaseShortRef(movement: StockMovement): string | null {
   return `Ref. ${movement.reference_id.slice(0, 8)}`
 }
 
+// dd/mm/aa HH:mm no fuso America/Sao_Paulo (helper compartilhado) — o valor
+// gravado nunca é alterado; só a apresentação. Uma compra (movimento
+// PURCHASE, incl. compra mista) grava occurred_at ancorado ao meio-dia de
+// Sao_Paulo, então a data exibida é sempre a data de negócio informada.
 function formatDateTime(value: string): string {
-  return new Date(value).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+  return formatMovementDateTime(value)
 }
 
 // quantity_delta já carrega o sinal correto (entrada: positivo; saída:

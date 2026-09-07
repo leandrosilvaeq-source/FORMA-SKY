@@ -58,8 +58,8 @@
 --      e todos os movimentos PURCHASE; atualiza accessories.unit_cost e
 --      packaging.unit_cost por média ponderada móvel. Qualquer exceção
 --      desfaz TUDO — atomicidade por construção. Idempotente por
---      p_idempotency_key (canônico inclui a ORDEM GLOBAL dos itens; a data
---      fica de fora — mesma convenção das três RPCs existentes, ver nota).
+--      p_idempotency_key: o canônico inclui a ORDEM GLOBAL dos itens E a
+--      data de negócio p_occurred_on (ver nota "ORDEM É SIGNIFICATIVA" abaixo).
 --
 -- DATA / FUSO: p_occurred_on é uma DATA de negócio (date, sem hora, sem
 -- fuso). A RPC converte explicitamente para occurred_at ancorando o MEIO-DIA
@@ -68,15 +68,22 @@
 -- para qualquer TZ de exibição). filament_spools.received_at recebe a
 -- própria p_occurred_on (coluna date, sem conversão).
 --
--- IDEMPOTÊNCIA / DATA EM RETRY: p_occurred_on fica FORA do payload canônico
--- comparado — decisão idêntica à de register_inventory_purchase /
--- register_filament_purchase / register_accessory_purchase (a data tem
--- default lógico e não é identidade da compra; um retry legítimo depois de
--- o relógio virar não deve virar conflito). Testado no arquivo
--- supabase/tests/mixed_inventory_purchase_test.sql (mesma chave + mesmos
--- itens/frete/canal/complemento + data diferente => devolve a MESMA compra,
--- sem conflito). QUALQUER outra diferença (itens, ordem global, frete,
--- canal, complemento) => IDEMPOTENCY_KEY_CONFLICT:.
+-- IDEMPOTÊNCIA / ORDEM GLOBAL / DATA: ORDEM É SIGNIFICATIVA. O canônico do
+-- payload preserva a ordem global das linhas (cada elemento carrega 'line' =
+-- posição 1-based e o array é agregado NA ORDEM; a comparação jsonb de
+-- arrays é ordenada). Portanto:
+--   * mesma chave + mesmos itens NA MESMA ORDEM + mesma data/frete/canal/
+--     complemento => retorno idempotente (a compra já gravada);
+--   * mesma chave + itens REORDENADOS => IDEMPOTENCY_KEY_CONFLICT: (o
+--     desempate do rateio de centavos depende da ordem global — reordenar
+--     muda o resultado, logo é um payload diferente);
+--   * mesma chave + data (p_occurred_on) diferente => IDEMPOTENCY_KEY_CONFLICT:.
+--     DIFERENTE das três RPCs antigas (que deixam occurred_at de fora, pois
+--     lá a data tem default now() e não é digitada): na compra MISTA a data
+--     é um campo de negócio digitado e ESTÁVEL, parte da identidade da
+--     compra — duas compras "iguais" em datas diferentes são compras
+--     diferentes. As três RPCs antigas permanecem intocadas.
+-- Testado em supabase/tests/mixed_inventory_purchase_test.sql (Seções 19 a 21).
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -409,7 +416,7 @@ as $$
         )
         from public.inventory_purchase_packaging_items pi
         where pi.purchase_id = p.id
-      ) rows
+      ) all_items
     ), '[]'::jsonb)
   )
   from public.inventory_purchases p
@@ -465,7 +472,7 @@ as $$
       'total_value', round(pi.total_value, 2))
     from public.inventory_purchase_packaging_items pi
     where pi.purchase_id = p_purchase_id
-  ) rows;
+  ) all_items;
 $$;
 
 comment on function public._mixed_purchase_items_canonical(uuid) is
@@ -708,8 +715,9 @@ begin
     from generate_series(1, v_n) g
   );
 
-  -- --- idempotência: checada antes de qualquer escrita. occurred_on FICA DE
-  --     FORA (ver nota no cabeçalho da migration). ---
+  -- --- idempotência: checada antes de qualquer escrita. O canônico inclui a
+  --     ORDEM GLOBAL dos itens E a data de negócio (p_occurred_on) — reordenar
+  --     ou trocar a data => IDEMPOTENCY_KEY_CONFLICT: (ver nota no cabeçalho). ---
   if p_idempotency_key is not null then
     select * into v_existing from public.inventory_purchases where idempotency_key = p_idempotency_key;
     if found then
@@ -717,6 +725,7 @@ begin
          and v_existing.freight_value = v_freight
          and v_existing.purchase_channel is not distinct from v_channel
          and v_existing.supplier_name is not distinct from v_supplier
+         and (v_existing.occurred_at at time zone 'America/Sao_Paulo')::date = p_occurred_on
          and public._mixed_purchase_items_canonical(v_existing.id) = v_incoming_canonical
       then
         return public._build_mixed_purchase_summary(v_existing.id);
@@ -804,6 +813,7 @@ begin
        and v_existing.freight_value = v_freight
        and v_existing.purchase_channel is not distinct from v_channel
        and v_existing.supplier_name is not distinct from v_supplier
+       and (v_existing.occurred_at at time zone 'America/Sao_Paulo')::date = p_occurred_on
        and public._mixed_purchase_items_canonical(v_existing.id) = v_incoming_canonical
     then
       return public._build_mixed_purchase_summary(v_existing.id);
@@ -902,7 +912,7 @@ end;
 $$;
 
 comment on function public.register_mixed_inventory_purchase(jsonb, numeric, text, date, uuid, text, text) is
-  'Registra uma COMPRA MISTA (Filamento + Acessório + Embalagem no mesmo pedido) numa única transação: valida 1..50 itens discriminados por category (sem acessório/embalagem repetidos; tipo de filamento pode repetir com marca/peso diferentes; quantity inteiro > 0; total_value > 0, 2 casas); converte p_occurred_on (data de negócio) em occurred_at ancorando meio-dia America/Sao_Paulo; rateia o frete único UMA vez sobre TODAS as linhas (maior resto, centavos inteiros, desempate por posição global; Σ = freight_value); trava filament_types -> accessories -> packaging ascendente por id (FOR UPDATE; bloqueia inexistente/inativo); cria UM cabeçalho (inventory_purchases, category=MIXED, item_id null, quantity/item_value = totais agregados, purchase_channel obrigatório, supplier_name só p/ OUTRO_SITE/PRESENCIAL, notes null); cria um item por linha na tabela da sua categoria com line_number = posição GLOBAL; cria N filament_spools + register_filament_movement por rolo; chama register_stock_movement (PURCHASE) por acessório/embalagem; atualiza accessories.unit_cost e packaging.unit_cost por média ponderada móvel (saldo 0 ou custo NULL -> a compra define o custo sem diluir). total_value/freight_allocated/landed_total_value ficam exatos no ledger; unit_cost é derivado e arredondado a 2 casas. Atômica por construção. Idempotente por p_idempotency_key (canônico = category/freight/canal/complemento + itens na ORDEM GLOBAL; p_occurred_on fica de fora — mesma convenção das RPCs existentes). NÃO altera register_inventory_purchase / register_filament_purchase / register_accessory_purchase nem as rotas /, /filament, /accessory.';
+  'Registra uma COMPRA MISTA (Filamento + Acessório + Embalagem no mesmo pedido) numa única transação: valida 1..50 itens discriminados por category (sem acessório/embalagem repetidos; tipo de filamento pode repetir com marca/peso diferentes; quantity inteiro > 0; total_value > 0, 2 casas); converte p_occurred_on (data de negócio) em occurred_at ancorando meio-dia America/Sao_Paulo; rateia o frete único UMA vez sobre TODAS as linhas (maior resto, centavos inteiros, desempate por posição global; Σ = freight_value); trava filament_types -> accessories -> packaging ascendente por id (FOR UPDATE; bloqueia inexistente/inativo); cria UM cabeçalho (inventory_purchases, category=MIXED, item_id null, quantity/item_value = totais agregados, purchase_channel obrigatório, supplier_name só p/ OUTRO_SITE/PRESENCIAL, notes null); cria um item por linha na tabela da sua categoria com line_number = posição GLOBAL; cria N filament_spools + register_filament_movement por rolo; chama register_stock_movement (PURCHASE) por acessório/embalagem; atualiza accessories.unit_cost e packaging.unit_cost por média ponderada móvel (saldo 0 ou custo NULL -> a compra define o custo sem diluir). total_value/freight_allocated/landed_total_value ficam exatos no ledger; unit_cost é derivado e arredondado a 2 casas. Atômica por construção. Idempotente por p_idempotency_key: o canônico = category/freight/canal/complemento + p_occurred_on (data de negócio) + itens na ORDEM GLOBAL. ORDEM É SIGNIFICATIVA (reordenar itens => IDEMPOTENCY_KEY_CONFLICT:, pois o desempate do rateio de centavos depende dela). Data diferente => IDEMPOTENCY_KEY_CONFLICT: (na compra mista a data é digitada e estável, parte da identidade — diferente das três RPCs antigas, onde occurred_at tem default now() e fica de fora). NÃO altera register_inventory_purchase / register_filament_purchase / register_accessory_purchase nem as rotas /, /filament, /accessory.';
 
 revoke execute on function public.register_mixed_inventory_purchase(jsonb, numeric, text, date, uuid, text, text)
   from public, anon, authenticated;
